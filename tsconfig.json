@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "outDir": "out/build",
+    "target": "ESNext",
+    "module": "ESNext",
+    "esModuleInterop": true,
+    "moduleResolution": "nodenext",
+    "sourceMap": true,
+    "experimentalDecorators": true,
+    "pretty": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "*.ts",
+    "src/**/*",
+    "test/**/*",
+    "infra/**/*",
+  ]
+}
