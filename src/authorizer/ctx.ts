@@ -7,6 +7,7 @@ export const AuthModuleContextSchema = z.object({
     cacheTtlSec: z.number().min(120).readonly(),
 
     clientId: z.string().min(1).readonly(),
+    userPoolId: z.string().min(1).readonly(),
     issuer: z.string().min(1).readonly(),
     tokenEndpoint: z.string().url().readonly(),
     postAuthRedirectUrl: z.string().url().readonly(),

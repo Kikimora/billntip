@@ -3,7 +3,7 @@ import {
     AdminCreateUserCommand,
     AdminLinkProviderForUserCommand,
     AdminSetUserPasswordCommand,
-    CognitoIdentityProviderClient,
+    CognitoIdentityProviderClient, DescribeUserPoolClientCommand,
     DescribeUserPoolCommand,
     ListUsersCommand
 } from "@aws-sdk/client-cognito-identity-provider";
@@ -103,6 +103,15 @@ export async function describeUserPool(userPoolId: string) {
     const r = await cognito.send(command)
     if (_.isNull(r?.UserPool)) throw new Error(`UserPool ${userPoolId} not found`)
     return r.UserPool!
+}
+export async function describeUserPoolClient(userPoolId: string, clientId: string) {
+    const command = new DescribeUserPoolClientCommand({
+        UserPoolId: userPoolId,
+        ClientId: clientId
+    })
+    const r = await cognito.send(command)
+    if (_.isNull(r?.UserPoolClient)) throw new Error(`UserPoolClient ${clientId} not found`)
+    return r.UserPoolClient!
 }
 
 export const getOrFetchUserPoolById = _.memoize(describeUserPool)

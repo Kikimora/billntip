@@ -1,9 +1,12 @@
-import IdTokenVerifier from "idtoken-verifier";
 import * as util from "util";
 import {AxiosResponse} from "axios";
 
 import http from "../http";
 import {AuthModuleContext} from "./ctx";
+import {CognitoJwtVerifier} from "aws-jwt-verify";
+import _ from "lodash";
+import {DescribeUserPoolClientCommand} from "@aws-sdk/client-cognito-identity-provider";
+import {describeUserPoolClient} from "../cognito";
 
 /**
  * Open ID Connect (OIDC) tokens.
@@ -14,12 +17,24 @@ export interface OidcTokens {
     readonly accessToken: string;
     readonly expiresAt: number;
     readonly expiresAtSec: number;
+    /**
+     * Return parsed id token, available after a call to {@link verifyIdToken}
+     */
     readonly idTokenPayload: Object | null;
+    /**
+     * Return parsed access token, available after a call to {@link verifyAccessToken}
+     */
+    readonly accessTokenPayload: Object | null;
 
     /**
      * Verify id token using keys from OIDC provider key store.
      */
     verifyIdToken(): Promise<any>;
+
+    /**
+     * Verify access token using keys from OIDC provider key store.
+     */
+    verifyAccessToken(): Promise<any>;
 }
 
 export type OidcTokensModule = {
@@ -29,14 +44,29 @@ export type OidcTokensModule = {
 
 export default function (ctx: AuthModuleContext): OidcTokensModule {
 
-    const verifier = new IdTokenVerifier({
-        issuer: ctx.issuer,
-        audience: ctx.clientId
+    // Verifier that expects valid access tokens:
+    const accessVerifier = CognitoJwtVerifier.create({
+        userPoolId: ctx.userPoolId,
+        tokenUse: "access",
+        clientId: ctx.clientId,
     });
-    const verify = util.promisify(verifier.verify.bind(verifier))
+    const idVerifier = CognitoJwtVerifier.create({
+        userPoolId: ctx.userPoolId,
+        tokenUse: "id",
+        clientId: ctx.clientId,
+    });
+
+    const secret = _.memoize(async function () : Promise<string> {
+        const {ClientSecret: clientSecret} = await describeUserPoolClient(ctx.userPoolId, ctx.clientId)
+        if (clientSecret === undefined) {
+            throw new Error('Cannot read Cognito user pool client secret, either public client or Lambda function permission issue.')
+        }
+        return clientSecret
+    })
 
     class OidcTokensImpl implements OidcTokens {
         private _idTokenPayload: Object | null = null
+        private _accessTokenPayload: Object | null = null;
 
         /**
          *
@@ -58,24 +88,27 @@ export default function (ctx: AuthModuleContext): OidcTokensModule {
             return Math.floor(this.expiresAt / 1000);
         }
 
-        /**
-         * Verify id token using keys from OIDC provider key store.
-         */
         async verifyIdToken() {
-            return this._idTokenPayload = await verify(this.idToken)
+            return this._idTokenPayload = await idVerifier.verify(this.idToken)
         }
 
-        /**
-         * Return parsed id token, available after a call to {@link verifyIdToken}
-         */
         get idTokenPayload() {
             return this._idTokenPayload
+        }
+
+        async verifyAccessToken() {
+            return this._accessTokenPayload = await accessVerifier.verify(this.idToken)
+        }
+
+        get accessTokenPayload() {
+            return this._accessTokenPayload
         }
 
         public static async refresh(refreshToken: string): Promise<OidcTokens | null> {
             const params = {
                 'grant_type': 'refresh_token',
                 'client_id': ctx.clientId,
+                'client_secret': await secret(),
                 'refresh_token': refreshToken
             }
             const config = {

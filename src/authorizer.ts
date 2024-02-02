@@ -4,7 +4,7 @@ import {
     APIGatewaySimpleAuthorizerWithContextResult,
     APIGatewayProxyStructuredResultV2
 } from "aws-lambda";
-import {authorizationModule} from "./authorizer/module.js";
+import {authorizationModule} from "./authorizer/module";
 
 const Unauthorized = {isAuthorized: false, context: {}}
 const BadRequest = {statusCode: 400, body: JSON.stringify({'error': 'Invalid request parameters.'})}
@@ -15,6 +15,7 @@ const authOptions = {
     sessionTable: process.env.SESSION_TABLE ?? 'sessions',
     refreshTokenTtlSec: Number(process.env.REFRESH_TOKEN_TTL),
     cacheTtlSec: Number(process.env.CACHE_TTL),
+    userPoolId: process.env.USER_POOL_ID,
     clientId: process.env.OAUTH_CLIENT_ID, //user pool client id
     issuer: process.env.OAUTH_ISSUER,
     tokenEndpoint: process.env.OAUTH_TOKEN_ENDPOINT,

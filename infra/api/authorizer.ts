@@ -20,6 +20,7 @@ const env = {
     SESSION_TABLE: sessionsTable.name,
     REFRESH_TOKEN_TTL: sessionTtl.toString(),
     CACHE_TTL: cacheTtl.toString(),
+    USER_POOL_ID: userPool.id,
     OAUTH_CLIENT_ID: userPoolClient.id, //user pool client id
     OAUTH_ISSUER: issuer,
     OAUTH_TOKEN_ENDPOINT: pulumi.interpolate`${cognitoDomain}/oauth2/token`,
