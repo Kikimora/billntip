@@ -2,27 +2,15 @@ import {
     APIGatewayAuthorizerEvent,
     APIGatewayProxyEventV2,
     APIGatewaySimpleAuthorizerWithContextResult,
-    APIGatewayProxyStructuredResultV2
+    APIGatewayProxyStructuredResultV2, APIGatewayProxyEventV2WithLambdaAuthorizer, Context
 } from "aws-lambda";
-import {authorizationModule} from "./authorizer/module";
+import {accessTokenVerifier, idTokenVerifier, startAuthOperation} from "./module";
+import {AuthorizerContext} from "./ctx";
+import {Tracer} from '../diagnostics'
 
 const Unauthorized = {isAuthorized: false, context: {}}
 const BadRequest = {statusCode: 400, body: JSON.stringify({'error': 'Invalid request parameters.'})}
 type AuthResult = APIGatewaySimpleAuthorizerWithContextResult<any>
-
-const authOptions = {
-    cookieName: process.env.COOKIE_NAME ?? 'JSESSIONID',
-    sessionTable: process.env.SESSION_TABLE ?? 'sessions',
-    refreshTokenTtlSec: Number(process.env.REFRESH_TOKEN_TTL),
-    cacheTtlSec: Number(process.env.CACHE_TTL),
-    userPoolId: process.env.USER_POOL_ID,
-    clientId: process.env.OAUTH_CLIENT_ID, //user pool client id
-    issuer: process.env.OAUTH_ISSUER,
-    tokenEndpoint: process.env.OAUTH_TOKEN_ENDPOINT,
-    postAuthRedirectUrl: process.env.POST_AUTH_REDIRECT_URL,
-    region: process.env.AWS_REGION,
-}
-const {SessionData, SessionCookie, OidcTokens, ctx} = authorizationModule(authOptions)
 
 type AuthorizerHooks = {
     cookieAuthorizerStart?: () => Promise<void>,
@@ -31,6 +19,7 @@ type AuthorizerHooks = {
     cookieAuthorizerFinish?: () => Promise<void>,
 }
 export const hooks: AuthorizerHooks = {}
+const authTracer = new Tracer("auth")
 
 // noinspection JSUnusedGlobalSymbols
 /**
@@ -41,17 +30,13 @@ export const hooks: AuthorizerHooks = {}
  * 4. If refresh token changed then request API GW integration to issue a new cookie by setting `context.new_cookie` value.
  * 5. Populate `context.access_token` and `context.id_token` values. These variables can be accessed by the endpoint handler.
  *
- * Cookie format is <session_id>.<salt>. Session id is stable, salt refreshes every time refresh token changes.
- * Old cookie (with an old salt) is still valid for some time but requests made with it would return Set-Cookie header
- * with the new cookie.
- *
  * **Important!** Authorizer requires proper API GW configuration:
  * 1. API GW Integration on a route protected with authorizer MUST map `header.Set-Cookie` to `$context.authorizer.new_cookie`
  * 2. Authorizer identity source MUST be `$request.header.Cookie`.
  *
  * Session data contains access token issued by the OIDC server. This token controls access to the OIDC server API for
  * things like profile access, password change, etc. Access token refresh happens if
- * `now + authorizer cache ttl >= access token expiration - 2 min`. In other words if we expect next authorizer call to
+ * `now >= access token expiration - authorizer cache ttl - 1 min`. In other words if we expect that next authorizer call might
  * happen after access token expires. Note how this condition guarantees that `context.access_token` contains valid
  * access token at all times. This is because authorizer cache always expires before the token and authorizer called
  * before request handler (giving it a chance to populate `context.access_token` with a fresh value). If `cache ttl` is 0
@@ -59,16 +44,16 @@ export const hooks: AuthorizerHooks = {}
  *
  * If refresh token changes then authorizer issues a new cookie and immediately deletes previous cookie from the session store.
  * Next request with a new cookie which triggers authorizer call again (because of how identity source configured).
- * These two requests leave two entries in the authorizer cache:
+ * These two requests would leave two entries in the authorizer cache:
  * 1. Old Cookie -> { new_cookie:"...", access_token:"new token", id_token:"new token", refresh_token:"new token" }
  * 2. New Cookie -> { access_token:"new token", id_token:"new token", refresh_token:"new token" }
  * If client keeps using old cookie then every response will have Set-Cookie header until authorizer cache entry is not
- * expired. After if expires client with old cookie would get 410 Unauthorized.
+ * expired. After if expires client with old cookie would get 401 Unauthorized or 403 Forbidden.
  *
  */
 export async function cookie(event: APIGatewayAuthorizerEvent): Promise<AuthResult> {
-    ctx.now = Math.floor(Date.now() / 1000)
-
+    const tracer = authTracer.startSession("cookie", event)
+    const {SessionCookie, SessionData, OidcTokens} = await startAuthOperation()
     switch (event.type) {
         case "REQUEST": {
             const cookieHeader = event.headers?.cookie
@@ -77,29 +62,32 @@ export async function cookie(event: APIGatewayAuthorizerEvent): Promise<AuthResu
             if (sessionCookie == null) return Unauthorized
             const session = await SessionData.loadAndLock(sessionCookie.id)
             if (session == null) return Unauthorized
-
+            let response: AuthResult = {isAuthorized: false, context: {}}
             try {
-                let response: AuthResult = {isAuthorized: false, context: {}}
+                tracer.info("start")
                 if (hooks.cookieAuthorizerStart) {
                     await hooks.cookieAuthorizerStart()
                 }
                 if (session.isTimeToRefresh) {
+                    tracer.info("tokens expired, refreshing using refresh token")
                     if (hooks.cookieAuthorizerRefresh) {
                         await hooks.cookieAuthorizerRefresh()
                     }
                     const tokens = await OidcTokens.refresh(session.refreshToken)
                     if (tokens == null) {
+                        tracer.info("OIDC server refused to refresh tokens")
                         await session.remove();
                         return Unauthorized
                     }
 
                     const updatedSession = session.withTokens(tokens)
                     if (updatedSession.isRefreshTokenRotated) {
+                        tracer.info("OIDC server rotated refresh token")
                         if (hooks.cookieAuthorizerNewSession) {
                             await hooks.cookieAuthorizerNewSession()
                         }
                         const newCookie = updatedSession.makeCookie()
-                        await updatedSession.save()
+                        await updatedSession.create()
                         await session.remove()
 
                         response = {
@@ -110,6 +98,7 @@ export async function cookie(event: APIGatewayAuthorizerEvent): Promise<AuthResu
                             }
                         }
                     } else {
+                        tracer.info("OIDC server refreshed tokens")
                         await updatedSession.save()
                         response = {
                             isAuthorized: true,
@@ -119,6 +108,7 @@ export async function cookie(event: APIGatewayAuthorizerEvent): Promise<AuthResu
                         }
                     }
                 } else {
+                    tracer.info("tokens are valid (not expired)")
                     response = {
                         isAuthorized: true,
                         context: {
@@ -126,8 +116,13 @@ export async function cookie(event: APIGatewayAuthorizerEvent): Promise<AuthResu
                         }
                     }
                 }
+                tracer.info("done", {...response})
                 return response
+            } catch (e: any) {
+                tracer.error(e, {session, sessionCookie})
+                throw e
             } finally {
+                tracer.info("cleanup")
                 await session.release()
                 if (hooks.cookieAuthorizerFinish) {
                     await hooks.cookieAuthorizerFinish()
@@ -139,66 +134,79 @@ export async function cookie(event: APIGatewayAuthorizerEvent): Promise<AuthResu
     }
 }
 
-// noinspection JSUnusedGlobalSymbols
 /**
  * Handle authorization code grant callback. The callback is called by OIDC server after it verified user credentials.
  * The 'code' parameter contains one time code to get id, access and refresh tokens.
  */
 export async function code(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyStructuredResultV2> {
-    ctx.now = Math.floor(Date.now() / 1000)
-    //TODO support OAuth PKCE for better security
-    const code = event.queryStringParameters?.['code'] ?? ""
-    const callbackUrl = `https://${event.requestContext.domainName}${event.rawPath}`
-    const tokens = await OidcTokens.authorizationCode(code, callbackUrl)
-    if (tokens == null) return BadRequest
+    using tracer = authTracer.startSession("code", event)
 
-    const idTokenPayload = await tokens.verifyIdToken()
-    if (idTokenPayload != null) {
-    }
-
-    const session = SessionData.fromTokens(tokens)
-    const cookie = session.makeCookie()
-    await session.save()
-
-    return {
-        statusCode: 200,
-        headers: {
-            'Content-Type': 'text/html',
-            'Set-Cookie': cookie.makeHeaderValue()
-        },
-//Use HTML redirect to allow SameSite=Strict cookies.
-//Using normal HTTP 302 Redirect code would only work with SameSite=Lax cookies
-//https://stackoverflow.com/questions/42216700/how-can-i-redirect-after-oauth2-with-samesite-strict-and-still-get-my-cookies
-        body: `
-        <html lang="en">
-<head>
-<meta http-equiv="refresh" content="0;URL='${ctx.postAuthRedirectUrl}'"/>
-<title>Bill & Tip</title>
-</head>
-<body><p>Moved to <a href="${ctx.postAuthRedirectUrl}">${ctx.postAuthRedirectUrl}</a>.</p></body>
-</html>
-        `
+    try {
+        const {SessionData, OidcTokens, env} = await startAuthOperation()
+        //TODO support OAuth PKCE for better security
+        const code = event.queryStringParameters?.['code'] ?? ""
+        const callbackUrl = `https://${event.requestContext.domainName}${event.rawPath}`
+        const tokens = await OidcTokens.authorisationCode(code, callbackUrl)
+        if (tokens == null) return BadRequest
+        await Promise.all([tokens.verifyIdToken(), tokens.verifyAccessToken()])
+        const session = SessionData.fromTokens(tokens)
+        const cookie = session.makeCookie()
+        await session.create()
+        tracer.info("new session", {
+            sessionId: session.sessionId,
+            refreshBefore: session.accessExpiresAt,
+            expiresAt: session.sessionExpiresAt
+        })
+        return {
+            statusCode: 200,
+            headers: {
+                'Content-Type': 'text/html',
+                'Set-Cookie': cookie.makeHeaderValue()
+            },
+            //Use HTML redirect to allow SameSite=Strict cookies.
+            //Using normal HTTP 302 Redirect code would only work with SameSite=Lax cookies
+            //https://stackoverflow.com/questions/42216700/how-can-i-redirect-after-oauth2-with-samesite-strict-and-still-get-my-cookies
+            body: `
+    <html lang="en">
+        <head>
+        <meta http-equiv="refresh" content="0;URL='${env.postAuthRedirectUrl}'"/>
+        <title>Bill & Tip</title>
+        </head>
+        <body><p>Moved to <a href="${env.postAuthRedirectUrl}">${env.postAuthRedirectUrl}</a>.</p></body>
+    </html>`
+        }
+    } catch (e) {
+        tracer.error(e)
+        throw e
     }
 }
 
-// Sample code to load SSM parameters, keep it here just in case I need it soon.
-//
-// import {GetParameterCommand, SSMClient} from '@aws-sdk/client-ssm'
-// import {loadAsync} from "./util";
-// const OPENID_PROVIDER_CONFIG = process.env.OPENID_PROVIDER_CONFIG
-// const ssmClient = new SSMClient({region: process.env.AWS_REGION})
-//
-// const getOpenIdParameters = loadAsync(async function () {
-//     const getCommand = new GetParameterCommand({
-//         Name: OPENID_PROVIDER_CONFIG,
-//         WithDecryption: true
-//     });
-//     const config = await ssmClient.send(getCommand)
-//     const value = config?.Parameter?.Value
-//     if (value == null) throw new Error("OpenID is not configured")
-//     const params = JSON.parse(value) as { clientId: string, clientSecret: string }
-//     if (params.clientId == null || params.clientSecret == null)
-//         throw new Error("Incorrect OpenID configuration: clientId or clientSecret is missing.")
-//     return params
-// })
+export const tokens = async function (event: APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>): Promise<APIGatewayProxyStructuredResultV2> {
+    using tracer = authTracer.startSession("tokens", event)
 
+    try {
+        const authContext = event.requestContext.authorizer.lambda
+        if (authContext == null) {
+            tracer.info("request context does not have lambda authorizer data")
+            return {
+                statusCode: 401,
+                body: ""
+            }
+        }
+        await Promise.all([
+            idTokenVerifier.verify(authContext.id_token),
+            accessTokenVerifier.verify(authContext.access_token)
+        ])
+        return {
+            statusCode: 200,
+            body: JSON.stringify({
+                access_token: authContext.access_token,
+                id_token: authContext.id_token,
+                expires_at: authContext.expires_at
+            })
+        }
+    } catch (e) {
+        tracer.error(e)
+        throw e
+    }
+}

@@ -6,6 +6,7 @@ import archiver from "archiver";
 import {LambdaClient, UpdateFunctionCodeCommand} from "@aws-sdk/client-lambda";
 import {BuildOptions} from "esbuild";
 import {LambdaHandler, unpack} from "./billntip-lambdas";
+import * as upath from "upath";
 
 type BundleMap = {
     [key: string]: Promise<string>
@@ -68,24 +69,32 @@ export class LambdaBuilder {
     /**
      * Bundle and archive TypeScript entry point.
      */
-    public bundle(entryPoint: string): Promise<string> {
+    public bundle(entryPoint: string, type: "ts" | "js" = "ts",): Promise<string> {
+        const stack = new Error().stack
         let cached = this._buildTasks[entryPoint]
         if (cached == null) {
-            this._buildTasks[entryPoint] = cached = this._bundle(entryPoint)
+            this._buildTasks[entryPoint] = cached = this._bundle(entryPoint, type, stack)
         }
         return cached
     }
 
-    private async _bundle(module: string, type: "ts" | "js" = "ts") {
+    private async _bundle(module: string, type: "ts" | "js", stack: any) {
         const outfile = this.toArchiveName(module)
         const buildOptions = this.esBuildOptions
-        await esbuild.build({
-            ...buildOptions,
-            entryPoints: [`${module}.${type}`],
-            bundle: true,
-            platform: "node",
-            outfile: outfile
-        })
+
+        try {
+            await esbuild.build({
+                ...buildOptions,
+                entryPoints: [await entryPoint(this.esBuildOptions.absWorkingDir ?? "./")],
+                bundle: true,
+                platform: "node",
+                outfile: outfile
+            })
+        } catch (e) {
+            console.error(`esbuild failed building ${module}`)
+            console.error(stack)
+            throw e
+        }
         const bundleArchive = archiver("zip", {});
         const archive = `${outfile}.zip`;
         const dstZip = fs.createWriteStream(archive);
@@ -103,6 +112,24 @@ export class LambdaBuilder {
             .finalize()
         await zipTask
         return archive
+
+        async function entryPoint(workDir: string) {
+            const file = upath.resolve(workDir ?? "./", `${module}.${type}`)
+            try {
+                const stat = await fs.promises.stat(file)
+                if (stat.isFile()) {
+                    return file
+                } else if (stat.isDirectory()) {
+                    return upath.joinSafe(module, `index.${type}`)
+                }
+            } catch (e) {
+                if (e !== null && typeof e === 'object' && 'code' in e && e.code == 'ENOENT') {
+                    return upath.joinSafe(module, `index.${type}`)
+                }
+                throw e
+            }
+            throw new Error(`Unknown file system entry ${file}`)
+        }
     }
 
     /**

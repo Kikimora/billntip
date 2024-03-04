@@ -1,10 +1,11 @@
+import {TokenEndpointResponse} from "../src/authorizer/module";
+
 jest.mock('../src/http');
 
 import 'jest-extended';
 import * as fs from "fs";
 import * as upath from "upath";
-import {APIGatewayAuthorizerEvent, APIGatewayProxyEventV2} from "aws-lambda";
-import {APIGatewayProxyStructuredResultV2} from "aws-lambda/trigger/api-gateway-proxy";
+import {APIGatewayAuthorizerEvent, APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2} from "aws-lambda";
 import _ from "lodash";
 import http from "../src/http"
 import {init as cognitoInit, TestGroup, TestUser} from "./cognito"
@@ -13,10 +14,10 @@ import {init as dynamoDbInit} from './dynamodb'
 const httpMock = http as jest.Mocked<typeof http>;
 const {default: httpReal} = jest.requireActual('../src/http');
 const SessionKey = 'JSESSIONID';
-const {tokenEndpoint, userPoolId, userPoolClientId, sessionTable} = prepareAuthorizerEnvironment();
-import {code, cookie, hooks} from "../src/authorizer";
-
-
+const {tokenEndpoint, userPoolId, userPoolClientId, sessionTable, apiUrl} = prepareAuthorizerEnvironment();
+import {code, tokens, cookie, hooks} from "../src/authorizer";
+import {AxiosResponse} from "axios";
+import {useVariables} from "../src/authorizer/ctx";
 
 const ddb = dynamoDbInit(sessionTable)
 
@@ -91,28 +92,26 @@ beforeEach(() => {
     httpMock.post.mockImplementation(cognitoMock);
 })
 
-describe('OAuth callback', () => {
-    describe('validation', () => {
-        it('requires `code` parameter in the query string', async () => {
-            const samples = [
-                null,
-                {queryStringParameters: {}},
-                {queryStringParameters: {'code': ""}},
-                {queryStringParameters: {'code': "123"}}
-            ];
-            for (let sample of samples) {
-                const response = await code({...event, ...sample});
-                expect(response).toMatchObject({statusCode: 400})
-            }
-        })
-        it('verifies token signature and throws', async () => {
-            const sample = {queryStringParameters: {'code': brokenAuthorizationCode}}
-            await expect(code({...event, ...sample})).rejects.toThrow()
-        })
-        it('throws if token endpoint responds with unexpected error', async () => {
-            const sample = {queryStringParameters: {'code': triggerUnexpectedError}}
-            await expect(code({...event, ...sample})).rejects.toThrow()
-        })
+describe('OAuth callback validation', () => {
+    it('requires `code` parameter in the query string', async () => {
+        const samples = [
+            null,
+            {queryStringParameters: {}},
+            {queryStringParameters: {'code': ""}},
+            {queryStringParameters: {'code': "123"}}
+        ];
+        for (let sample of samples) {
+            const response = await code({...event, ...sample});
+            expect(response).toMatchObject({statusCode: 400})
+        }
+    })
+    it('verifies token signature and throws', async () => {
+        const sample = {queryStringParameters: {'code': brokenAuthorizationCode}}
+        await expect(code({...event, ...sample})).rejects.toThrow()
+    })
+    it('throws if token endpoint responds with unexpected error', async () => {
+        const sample = {queryStringParameters: {'code': triggerUnexpectedError}}
+        await expect(code({...event, ...sample})).rejects.toThrow()
     })
 })
 
@@ -125,7 +124,8 @@ describe('OAuth callback', () => {
     })
     it('issues session cookie', async () => {
         expect(cookie).toEqual(expect.objectContaining(sessionCookie()))
-        expect(new Date(cookie!['Expires'] as string)).toBeAfter(new Date())
+        const expires = new Date(cookie!['Expires'] as string);
+        expect(expires).toBeAfter(new Date())
     })
     it('exchanges code for tokens', async () => {
         expect(httpMock.post).toHaveBeenCalledWith(
@@ -138,6 +138,9 @@ describe('OAuth callback', () => {
         )
     })
     it('creates session in dynamodb', async () => {
+        const now = Math.floor(Date.now() / 1000)
+        const lastPostResult = _.last(httpMock.post.mock.results)?.value;
+        const tokenResponse = await lastPostResult as AxiosResponse<TokenEndpointResponse>
         const sessionId = cookie[SessionKey]
         const session = await ddb.getSession(sessionId)
         expect(session).toEqual(expect.objectContaining({
@@ -146,10 +149,15 @@ describe('OAuth callback', () => {
             'access_token': expect.toBeString(),
             'refresh_token': expect.toBeString(),
             'salt': expect.toBeString(),
-            'lock': expect.toBeNil(),
             'expires_at': expect.toBePositive(),
             'session_expires_at': expect.toBePositive(),
         }))
+        expect(session!['lock']).toBeUndefined()
+        const sessionExpiresAt = session!['session_expires_at']
+        const {refreshTokenTtl} = useVariables()
+        expect(sessionExpiresAt).toBeCloseTo(now + refreshTokenTtl, -1)
+        const expiresAt = session!['expires_at']
+        expect(expiresAt).toBeCloseTo(now + tokenResponse.data.expires_in, -1)
     })
     it('issues HTML redirect to configured return url', async () => {
         expect(response!).toEqual(expect.objectContaining({
@@ -163,26 +171,25 @@ describe('OAuth callback', () => {
     })
 })
 
-describe('Lambda authorizer', () => {
-    describe('validation', () => {
-        it('require Cookie header', async () => {
-            const response = await cookie({...authEvent, headers: {}})
-            expect(response.isAuthorized).toBeFalse()
-        })
-        it('requires session id in the Cookie header', async () => {
-            const response = await cookie({...authEvent, headers: {'Cookie': 'SomeCookie=1'}})
-            expect(response.isAuthorized).toBeFalse()
-        })
-        it('requires session to be present in dynamodb', async () => {
-            const response = await cookie({...authEvent, headers: {'Cookie': `${SessionKey}=1`}})
-            expect(response.isAuthorized).toBeFalse()
-        })
+describe('Lambda authorizer validation', () => {
+    it('require Cookie header', async () => {
+        const response = await cookie({...authEvent, headers: {}})
+        expect(response.isAuthorized).toBeFalse()
+    })
+    it('requires session id in the Cookie header', async () => {
+        const response = await cookie({...authEvent, headers: {'Cookie': 'SomeCookie=1'}})
+        expect(response.isAuthorized).toBeFalse()
+    })
+    it('requires session to be present in dynamodb', async () => {
+        const response = await cookie({...authEvent, headers: {'Cookie': `${SessionKey}=1`}})
+        expect(response.isAuthorized).toBeFalse()
     })
 })
 
 describe('Lambda authorizer', () => {
     let sessionId: string
     beforeEach(async () => {
+        const now = Math.floor(Date.now()) / 1000;
         sessionId = await startSession();
         hooks.cookieAuthorizerStart = jest.fn().mockImplementation(async function () {
             //Verify session locked before business logic starts
@@ -191,6 +198,8 @@ describe('Lambda authorizer', () => {
                 lock: expect.any(String),
                 lock_till: expect.any(Number)
             }))
+            const lockTill = session!['lock_till'] as number
+            expect(lockTill).toBeCloseTo(now + 10, -1)
         })
         hooks.cookieAuthorizerRefresh = jest.fn()
         hooks.cookieAuthorizerNewSession = jest.fn()
@@ -257,7 +266,7 @@ describe('Lambda authorizer', () => {
                         data: {
                             access_token: 'ACCESS TOKEN',
                             id_token: 'ID TOKEN',
-                            'expires_in': 3600,
+                            expires_in: 3600,
                             refresh_token: 'NEW REFRESH TOKEN'
                         }
                     }
@@ -316,6 +325,43 @@ describe('Lambda authorizer', () => {
 
 })
 
+describe('Tokens endpoint', () => {
+    it('returns tokens when called with valid session cookie', async () => {
+        const sessionId = await startSession();
+        console.log(`curl -v -H 'Cookie: ${SessionKey}=${sessionId}' 'https://nyly887aja.execute-api.eu-south-1.amazonaws.com/dev/auth/tokens' | jq`)
+        // const response = await handler({
+        //     ...event,
+        //     ...{
+        //         pathParameters: {'resource': 'tokens'},
+        //         cookies: [`${SessionKey}=${sessionId}`],
+        //         requestContext: {
+        //             'authorizer': {'access_token': 'some token'}
+        //         }
+        //     }
+        // });
+        // expect(response).toEqual(expect.objectContaining({
+        //     statusCode: 200,
+        //     body: expect.toBeString()
+        // }))
+        // const body = JSON.parse(response.body!)
+        // expect(body).toEqual(expect.objectContaining({
+        //     access_token: expect.toBeString(),
+        //     id_token: expect.toBeString(),
+        //     expires_at: expect.toBeNumber()
+        // }))
+        // expect(body.expires_at).toBeGreaterThan(Date.now() / 1000)
+    })
+
+    it('returns 401 when called without session cookie', async () => {
+        const response = await http.get(`${apiUrl}/auth/tokens`)
+        expect(response.status).toBe(401)
+    })
+
+    it('returns 401 when called with invalid session cookie', async () => {
+        const response = await http.get(`${apiUrl}/auth/tokens`, {headers: {[SessionKey]: "Invalid cookie"}})
+        expect(response.status).toBe(401)
+    })
+})
 
 /**
  * Populate process.env with values required by authorizer Lambda function
@@ -323,14 +369,12 @@ describe('Lambda authorizer', () => {
 function prepareAuthorizerEnvironment() {
     const o = upath.join(__dirname, "..", "out", "outputs.json")
     const outputs = JSON.parse(fs.readFileSync(o).toString("utf-8"))
-    const {sessionTable, userPoolId, userPoolClientId, userPoolDomain} = outputs as any
+    const {sessionTable, userPoolId, userPoolClientId, userPoolDomain, apiUrl} = outputs as any
     const tokenEndpoint = `https://${userPoolDomain}.auth.eu-south-1.amazoncognito.com/oauth2/token`;
     const oathIssuer = `https://cognito-idp.eu-south-1.amazonaws.com/${userPoolId}`;
     Object.assign(process.env, {
         COOKIE_NAME: SessionKey,
         SESSION_TABLE: sessionTable,
-        REFRESH_TOKEN_TTL: 300,
-        CACHE_TTL: 120,
         USER_POOL_ID: userPoolId,
         OAUTH_CLIENT_ID: userPoolClientId, //user pool client id
         OAUTH_ISSUER: oathIssuer,
@@ -338,7 +382,7 @@ function prepareAuthorizerEnvironment() {
         POST_AUTH_REDIRECT_URL: "https://localhost",
         AWS_REGION: "eu-south-1"
     })
-    return {tokenEndpoint, userPoolId, userPoolClientId, oathIssuer, sessionTable};
+    return {tokenEndpoint, userPoolId, userPoolClientId, oathIssuer, sessionTable, apiUrl};
 }
 
 /**

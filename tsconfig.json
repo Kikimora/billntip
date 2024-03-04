@@ -3,7 +3,7 @@
     "strict": true,
     "outDir": "out/build",
     "target": "ESNext",
-    "module": "ESNext",
+    "module": "commonjs",
     "esModuleInterop": true,
     "moduleResolution": "node",
     "sourceMap": true,

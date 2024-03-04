@@ -4,6 +4,7 @@ export enum LambdaHandler {
     ApiHandler = "api.handler",
     AuthCookieHandler = "authorizer.cookie",
     AuthCodeHandler = "authorizer.code",
+    AuthTokensHandler = "authorizer.tokens",
     UsersPreSignupHandler = "users.preSignup"
 }
 

@@ -1,27 +1,18 @@
-export function loadAsync<T>(loader: () => Promise<T>) {
-    let val: T
-    const load = loader()
-    return async function (): Promise<T> {
-        if (val == null) {
-            val = await load
-        }
-        return val
-    }
-}
+import {Tracer, withErrorContext} from "./diagnostics";
+import http from "./http";
 
-export function requireEnv<T extends string>(props: readonly T[]): { [p in typeof props[number]]: string } {
-    const missing = []
-    for (const prop of props) {
-        const value = process.env[prop]
-        if (value == null) {
-            missing.push(prop)
+export function refresh<T>(ttl: number, fn: () => Promise<T>) {
+    ttl = ttl * 1000
+    let start = performance.now()
+    let value: T
+    return async function () {
+        const now = performance.now()
+        if (value === undefined || now - start < ttl) {
+            value = await fn()
+            start = now
         }
+        return value
     }
-    if (missing.length > 0) {
-        const message = `Some required parameters are missing: ${missing.join(', ')}`
-        throw new Error(message)
-    }
-    return process.env as { [p in typeof props[number]]: string }
 }
 
 export function delay(timeout: number) {
@@ -30,24 +21,32 @@ export function delay(timeout: number) {
     });
 }
 
+/**
+ * Poller options
+ */
 export interface PollerOptions {
+    /**
+     * Maximum number of iterations this poller allowed to perform.
+     */
     maxIterations?: number,
+    /**
+     * Maximum time the poller allowed to run.
+     */
     timeout?: number,
-    delay?: number
+    /**
+     * Delay between poller operations in milliseconds.
+     */
+    delay?: number | (() => number)
 }
 
-
-interface Just<T> {
-    type: "Just"
-    value: T
+export interface Just<V, Type extends string> {
+    type: Type
+    value: V
 }
 
-interface Error {
-    type: "Error"
-    value: any
-}
+type Maybe<T> = Just<T, "Just"> | Just<any, "Error">
 
-type Maybe<T> = Just<T> | Error
+export type Either<X, Y> = Just<X, "X"> | Just<Y, "Y">
 
 export async function runOnce<T>(operation: () => Promise<T>): Promise<Maybe<T>> {
     try {
@@ -57,80 +56,142 @@ export async function runOnce<T>(operation: () => Promise<T>): Promise<Maybe<T>>
     }
 }
 
+/**
+ * Retry operation several times until it either succeed, timeout or reaches maximum number of allowed attempts.
+ * @param action - operation to perform
+ * @param options - operation options.
+ */
 export async function retry<T>(action: () => Promise<T>, options: PollerOptions): Promise<T> {
+    const result = await repeat<T>(async function (done) {
+        done(await action())
+    }, options)
+
+    switch (result.type) {
+        case "error":
+            throw result.value
+        case "done":
+            return result.value
+        case "timeout":
+            const e = new Error("Unexpected error: retry operation finished without producing any result.")
+            throw withErrorContext(e, "retry", {result, options})
+    }
+}
+
+type PollerResult<T> = Just<T, "done"> | Just<null, "timeout"> | Just<any, "error">
+type PollerFunction<T> = (done: (val: T) => void) => Promise<any>
+
+/**
+ * Run operation in a loop until it signal completion, time out or reaches maximum number of allowed attempts.
+ * @param action - operation to perform
+ * @param options - operation options.
+ */
+export async function repeat<T>(action: PollerFunction<T>, options: PollerOptions): Promise<PollerResult<T>> {
     const maxIteration = options.maxIterations ?? -1
     const timeout = options.timeout ?? -1
-    const delaySec = options.delay ?? 0
-    const deadline = options.timeout != null ? Date.now() + timeout : null
+    const delayMs = options.delay ?? 0
+    const deadline = options.timeout != null ? performance.now() + timeout : null
     let iterations = 0;
+    let done = false;
+    let result: T | undefined
     do {
         try {
-            return await action()
-        } catch (e) {
-            if (maxIteration > 0 && maxIteration >= iterations++)
-                throw e
-            if (deadline != null && deadline > Date.now())
-                throw e
+            await action(function (r: T) {
+                result = r
+                done = true;
+            })
+            if (done) return {type: "done", value: result!};
+        } catch (e: any) {
+            const now = performance.now();
+            e = withErrorContext(e, "repeat", {options, iterations, now, deadline})
+
+            if (maxIteration >= 0 && iterations >= maxIteration) {
+                return {type: "error", value: e}
+            }
+            if (deadline != null && deadline > now) {
+                return {type: "error", value: e}
+            }
         }
-        await delay(delaySec)
+
+        try {
+            if (maxIteration >= 0 && iterations >= maxIteration)
+                return {type: "timeout", value: null}
+            if (deadline != null && deadline > performance.now())
+                return {type: "timeout", value: null}
+
+            iterations++
+
+            if (typeof delayMs == "number") {
+                await delay(delayMs)
+            } else {
+                const timeout = delayMs();
+                await delay(timeout)
+            }
+        } catch (e) {
+            const now = performance.now();
+            throw withErrorContext(e, "repeat", {options, iterations, deadline, now})
+        }
     } while (true)
 }
 
+let registered = false
+const tracer = new Tracer("util")
 
-export class Poller {
-    private iterations: number;
-    private _done: boolean = false;
-    private readonly deadline?: number;
-
-    public readonly maxIteration: number
-    public readonly timeout: number
-    public readonly delay: number
-
-    constructor(options: PollerOptions) {
-        this.maxIteration = options.maxIterations ?? -1
-        this.timeout = options.timeout ?? -1
-        this.delay = options.delay ?? 0
-        if (this.timeout > 0)
-            this.deadline = Date.now() + this.timeout
-        this.iterations = 0;
-    }
-
-    get done() {
-        return this._done;
-    }
-
-    async runOnce<T>(operation: () => Promise<T>): Promise<Maybe<T>> {
-        if (!await this.startNext()) {
-            throw new Error(`Operation failed after reaching maximum attempts or timeout.`);
-        }
-
-        return await runOnce(operation)
-    }
-
-    async run<T>(operation: () => Promise<T>): Promise<T> {
-        do {
-            const {type, value} = await this.runOnce(operation)
-            switch (type) {
-                case "Just":
-                    return value
-                case "Error":
-                    console.warn(`Error on attempt ${this.iterations + 1}: ${value.message}`);
+type RuntimeEvents = 'shutdown'
+export const runtime = {
+    on(event: RuntimeEvents, listener: (...args: any[]) => void) {
+        switch (event) {
+            case 'shutdown': {
+                const registerUrl = process.env.AWS_LAMBDA_RUNTIME_API
+                if (registerUrl && !registered) {
+                    registered = true
+                    // noinspection HttpUrlsUsage
+                    const ExtensionApi = `http://${registerUrl}/2020-01-01/extension`
+                    // AWS Lambda used to be sending only SIGKILL at the end of lifetime, or after a timeout.
+                    // But if there is an internal or external extension then it sends SIGTERM and then SIGKILL.
+                    // Internal extensions has 500 ms, external have 2 seconds.
+                    // Below code registers internal extension and calls `next` to let Lambda kow extension is alive.
+                    http.post(`${ExtensionApi}/register`, {events: []}, {
+                        headers: {
+                            "Lambda-Extension-Name": "NodeJSEnableSIGTERM"
+                        }
+                    }).then(function (res) {
+                        const id = res.headers['Lambda-Extension-Identifier']
+                        if (!id) {
+                            console.error("Cannot register extension to enable SIGTERM handler.")
+                            return
+                        }
+                        //Let Lambda know extension is alive.
+                        return http.post(`${ExtensionApi}/next`, {}, {
+                            headers: {
+                                'Lambda-Extension-Identifier': id
+                            }
+                        })
+                    }).catch(e => {
+                        tracer.error(e)
+                    })
+                }
+                //Register SIGTERM handler.
+                process.on('SIGTERM', listener)
+                process.on('SIGINT', listener)
+                break;
             }
-        } while (true)
-    }
-
-    async startNext() {
-        if (this._done) return false;
-        const overIterations = this.maxIteration > 0 && this.maxIteration >= this.iterations++
-        const overTimeout = this.deadline != null && this.deadline > Date.now()
-        if (this.delay > 0 && this.iterations > 1) {
-            await delay(this.delay)
+            default: {
+                tracer.warn("adding listener to an unknown event", {event})
+            }
         }
-        this._done = overIterations || overTimeout
-        return this._done
-    }
 
-    cancel() {
-        this._done = true
+
+    },
+    off(event: RuntimeEvents, listener: (...args: any[]) => void) {
+        switch (event) {
+            case 'shutdown': {
+                process.off('SIGTERM', listener)
+                process.off('SIGINT', listener)
+            }
+                break;
+            default: {
+                tracer.warn("removing listener from an unknown event", {event})
+            }
+        }
     }
 }

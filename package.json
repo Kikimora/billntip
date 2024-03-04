@@ -1,13 +1,14 @@
 {
   "name": "bill_and_tip",
   "devDependencies": {
+    "@dotenvx/dotenvx": "^0.14.1",
     "@types/archiver": "^6.0.2",
     "@types/aws-lambda": "^8.10.131",
     "@types/cookie": "^0.6.0",
     "@types/jest": "^29.5.11",
+    "@types/lodash": "^4.14.202",
     "@types/node": "^18",
     "@types/uuid": "^9.0.7",
-    "@types/lodash": "^4.14.202",
     "archiver": "^6.0.1",
     "commander": "^11.1.0",
     "dotenv": "^16.3.1",
@@ -23,25 +24,32 @@
     "@aws-sdk/client-dynamodb": "^3.494.0",
     "@aws-sdk/client-lambda": "^3.490.0",
     "@aws-sdk/client-ssm": "^3.490.0",
+    "@aws-sdk/client-s3": "^3.525.0",
+    "@aws-sdk/client-secrets-manager": "^3.515.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.515.0",
     "@aws-sdk/util-dynamodb": "^3.496.0",
+    "aws-jwt-verify": "^4.0.0",
     "axios": "^1.6.5",
     "cookie": "^0.6.0",
+    "dynamodb-onetable": "^2.7.1",
     "generate-password": "^1.7.1",
-    "aws-jwt-verify": "^4.0.0",
     "jwt-decode": "^4.0.0",
     "lodash": "^4.17.21",
     "lru-cache": "^10.2.0",
     "nanoid": "^5.0.4",
+    "type-fest": "^4.10.2",
     "upath": "^2.0.1",
     "uuid": "^9.0.1",
-    "zod": "^3.22.4"
+    "zod": "^3.22.4",
+    "simple-json-match": "^1.1.0"
   },
   "scripts": {
     "out-dir": "cat tsconfig.json | npx  jsonc-cli read '[\"compilerOptions\", \"outDir\"]' | tr -d '\"'",
-    "aws-sso": "aws sso login --profile ",
+    "aws": "dotenvx run -- aws",
+    "aws-sso": "dotenvx run -- aws sso login",
     "compile": "npx tsc && cp .env $(npm run --silent out-dir)/.env",
-    "test": "cd $(npm run --silent out-dir) && npx jest",
-    "infra": "pulumi --cwd ./$(npm run --silent out-dir)/infra up",
-    "build": "cd $(npm run --silent out-dir) && npx node build -- -b -u -p -s dev "
+    "test": "npx jest",
+    "infra": "pulumi --cwd ./infra up",
+    "build": "npx ts-node build.ts -- -b -u -p -s dev "
   }
 }

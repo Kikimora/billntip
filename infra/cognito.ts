@@ -1,7 +1,8 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import {authCallback, apiUrl} from "./api/urls";
-import {createLambda} from "./src";
+import {apiUrl, cognitoCallback} from "./api/urls";
+import {createLambda} from "./lambda";
+import {givePermission} from "./permissions";
 import {LambdaHandler} from "../billntip-lambdas";
 
 const config = new pulumi.Config();
@@ -48,7 +49,7 @@ export const userPool = new aws.cognito.UserPool('users', {
         //    lambdaArn: "arn:of:your:lambda:function",
         //    lambdaVersion: "V1_0",
         // },
-        preSignUp: preSignup.arn
+        preSignUp: preSignup.function.arn
     },
     // Define password policy
     passwordPolicy: {
@@ -87,12 +88,7 @@ export const userPool = new aws.cognito.UserPool('users', {
     smsVerificationMessage: "Your verification code is {####}.",
 })
 
-new aws.lambda.Permission('users-pre-signup-permissions', {
-    action: "lambda:invokeFunction",
-    function: preSignup.arn,
-    principal: "cognito-idp.amazonaws.com",
-    sourceArn: userPool.arn,
-})
+givePermission(preSignup, userPool)
 
 // Note - providerName and providerType must match - https://github.com/aws/aws-cli/issues/3179
 const facebookIdp = new aws.cognito.IdentityProvider("users-facebook-idp", {
@@ -190,7 +186,7 @@ export const userPoolClient = new aws.cognito.UserPoolClient("users-api-client",
     //Also client_credentials seem to require `generateSecret` which complicate admin login.
     //allowedOauthFlows: ["code", "client_credentials"],
     callbackUrls: [
-        pulumi.interpolate`${apiUrl}/${authCallback}`,
+        pulumi.interpolate`${apiUrl}/${cognitoCallback}`,
     ],
     allowedOauthFlowsUserPoolClient: true,
     explicitAuthFlows: ["ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"],
@@ -202,7 +198,7 @@ export const userPoolClient = new aws.cognito.UserPoolClient("users-api-client",
         appleIdp.providerName
     ],
 
-});
+}, {ignoreChanges: ['callbackUrls']});
 
 // Create an email identity for SES
 new aws.ses.EmailIdentity('users-hello-email-identity', {

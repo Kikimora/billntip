@@ -1,313 +1,261 @@
-import {AuthModuleContext} from "./ctx";
+import {Env, useVariables} from "./ctx";
 import {v4 as uuidv4} from "uuid";
-import {
-    ConditionalCheckFailedException,
-    DeleteItemCommand,
-    DynamoDBClient,
-    PutItemCommand,
-    UpdateItemCommand
-} from "@aws-sdk/client-dynamodb";
+import {ConditionalCheckFailedException, DynamoDBClient} from "@aws-sdk/client-dynamodb";
 import {retry} from "../util";
-import {OidcTokens} from "./oidc_tokens";
-import {SessionCookie} from "./cookie";
+import OidcTokens from "./oidc_tokens";
 import {z} from "zod";
 import crypto from "crypto";
+import SessionCookie from "./cookie";
+import {D, deleteCommand, putCommand, table, updateCommand} from "../dynamodb";
+import {errorContext, withErrorContext} from "../diagnostics";
 
-export type SessionModule = {
-    readonly loadAndLock: (sessionId: string) => Promise<SessionData | null>,
-    readonly fromTokens: (tokens: OidcTokens) => SessionData
-    readonly dynamoDb: DynamoDBClient
-}
+const dynamoDb = new DynamoDBClient({region: Env.region})
 
-export interface SessionData {
-    readonly sessionId: string;
-    readonly accessToken: string;
-    readonly idToken: string;
-    readonly refreshToken: string;
-    readonly accessExpiresAt: number;
-    readonly sessionExpiresAt: number;
-    readonly salt: string;
-    readonly isRefreshTokenRotated: boolean;
-    readonly lockId?: string;
-    readonly isTimeToRefresh: boolean;
+export const Sessions = table(Env.sessionTable,
+    {session_id: D.String} as const,
+    {
+        access_token: D.String,
+        id_token: D.String,
+        refresh_token: D.String,
+        expires_at: D.Number,
+        session_expires_at: D.Number,
+        salt: D.String,
+        lock: D.String,
+        lock_till: D.Number,
+    } as const)
+
+/**
+ * Session data stored in the session store.
+ */
+export default class SessionData implements SessionItem {
+    readonly sessionId: string
+    readonly accessToken: string
+    readonly idToken: string
+    readonly refreshToken: string
+    readonly accessExpiresAt: number
+    readonly sessionExpiresAt: number
+    readonly salt: string
+
+    /**
+     * @param item session item loaded from the store
+     * @param isRefreshTokenRotated True if this session was created from another session with different refresh token.
+     * @param lockId lock identifier
+     */
+    private constructor(item: SessionItem,
+                        readonly isRefreshTokenRotated: boolean,
+                        readonly lockId?: string) {
+        this.sessionId = item.sessionId
+        this.accessToken = item.accessToken
+        this.idToken = item.idToken
+        this.refreshToken = item.refreshToken
+        this.accessExpiresAt = item.accessExpiresAt
+        this.sessionExpiresAt = item.sessionExpiresAt
+        this.salt = item.salt
+    }
+
+    /**
+     * Load a session record while placing a lock on it. Use {@link SessionData#release} or
+     * {@link SessionData#remove} to release the lock.
+     */
+    public static async loadAndLock(sessionId: string) {
+        const lockId = uuidv4()
+        const {now} = useVariables()
+        const lockTill = now + 10 //lock for 10 seconds
+        const loadSessionData = async () => {
+
+            const command = updateCommand(Sessions, {
+                key: {session_id: sessionId},
+                values: {now},
+                expression: ({attr, val}) => `SET
+                        ${attr.lock_till} = ${val(lockTill)},
+                        ${attr.lock} = ${val(lockId)}
+                    `,
+                condition: ({key: {session_id}, attr: {lock, lock_till}, val: {now}}) =>
+                    `attribute_exists(${session_id}) AND (attribute_not_exists(${lock}) OR (${lock_till} <= ${now}))`,
+                returnOnConditionFailure: "ALL_OLD",
+                return: "ALL_NEW"
+            });
+            try {
+                const {Attributes: attrs} = await dynamoDb.send(command)
+                if (attrs == null) return null
+                const item = parseSessionItem({
+                    sessionId,
+                    accessToken: attrs['access_token'].S,
+                    idToken: attrs['id_token'].S,
+                    refreshToken: attrs['refresh_token'].S,
+                    accessExpiresAt: Number(attrs['expires_at'].N),
+                    sessionExpiresAt: Number(attrs['session_expires_at'].N),
+                    salt: attrs['salt'].S,
+                });
+                return new SessionData(item, false, lockId)
+            } catch (e: any) {
+                if (e instanceof ConditionalCheckFailedException && e.Item == null)
+                    return null
+                throw withErrorContext(e, "loadSessionData", {command: command.input})
+            }
+        };
+
+        return await retry(loadSessionData, {maxIterations: 5, timeout: 2500, delay: 300})
+    }
 
     /**
      * Release session data lock. This should be the last method to call on a session data instance.
      */
-    release(): Promise<void>;
+    async release() {
+        if (this.lockId == null) return
+
+        const {now} = useVariables()
+
+        const command = updateCommand(Sessions, {
+            return: "ALL_NEW",
+            returnOnConditionFailure: "ALL_OLD",
+            key: {session_id: this.sessionId},
+            values: {now, lock: this.lockId},
+            expression: ({attr}) => `REMOVE ${attr.lock}`,
+            condition: ({key, attr, val}) =>
+                `attribute_exists(${key.session_id}) AND (${attr.lock} = ${val.lock}) AND (${attr.lock_till} >= ${val.now})`,
+        });
+        try {
+            await dynamoDb.send(command)
+        } catch (e) {
+            if (e instanceof ConditionalCheckFailedException) {
+                return
+            }
+            throw withErrorContext(e, "release", {command: command.input})
+        }
+    }
+
+    /**
+     * Create new session from OIDC tokens. {@param tokens} must have {@link OidcTokens#refreshToken}.
+     */
+    public static fromTokens(tokens: OidcTokens): SessionData {
+        const salt = generateSalt(16)
+        const {now, refreshTokenTtl} = useVariables()
+        const refreshToken = tokens.refreshToken
+        if (refreshToken == null) throw new Error('Cannot create new session without a refresh token.')
+        //TODO add user sub and email to DynamoDB.
+        const item = parseSessionItem({
+            sessionId: makeSessionId(refreshToken, salt),
+            accessToken: tokens.accessToken,
+            idToken: tokens.idToken,
+            refreshToken,
+            accessExpiresAt: now + tokens.expiresIn,
+            sessionExpiresAt: now + refreshTokenTtl,
+            salt
+        });
+        return new SessionData(item, false)
+    }
 
     /**
      * Create a new version of the session data with new tokens.
      */
-    withTokens(tokens: OidcTokens): SessionData;
+    withTokens(tokens: OidcTokens): SessionData {
+        const {now, refreshTokenTtl} = useVariables()
+        const isNew = tokens.refreshToken != null && tokens.refreshToken != this.refreshToken
+        const item = parseSessionItem({
+            sessionId: isNew ? makeSessionId(tokens.refreshToken, this.salt) : this.sessionId,
+            accessToken: tokens.accessToken,
+            idToken: tokens.idToken,
+            refreshToken: isNew ? tokens.refreshToken : this.refreshToken,
+            accessExpiresAt: now + tokens.expiresIn,
+            sessionExpiresAt: isNew ? now + refreshTokenTtl : this.sessionExpiresAt,
+            salt: this.salt
+        })
+        return new SessionData(item, isNew, this.lockId)
+    }
 
     /**
-     * Save session data to the store. Typically called after making new session using {@link withTokens}.
+     * Create new session in the data store.
      */
-    save(): Promise<void>;
+    async create() {
+        const command = putCommand(Sessions, {
+            key: {session_id: this.sessionId},
+            item: {
+                refresh_token: this.refreshToken,
+                access_token: this.accessToken,
+                id_token: this.idToken,
+                expires_at: this.accessExpiresAt,
+                session_expires_at: this.sessionExpiresAt,
+                salt: this.salt
+            },
+            condition: ({key: {session_id}}) => `attribute_not_exists(${session_id})`
+        });
+        try {
+            await dynamoDb.send(command)
+        } catch (e) {
+            throw withErrorContext(e, "create", {command: command.input})
+        }
+    }
+
+    /**
+     * Save session data to the store.
+     */
+    async save() {
+        const {now} = useVariables()
+        const command = updateCommand(Sessions, {
+            key: {session_id: this.sessionId},
+            values: {now, lock: this.lockId},
+            expression: ({attr, val}) => `SET
+                ${attr.refresh_token} = ${val(this.refreshToken)},
+                ${attr.expires_at} = ${val(this.accessExpiresAt)},
+                ${attr.session_expires_at} = ${val(this.sessionExpiresAt)},
+                ${attr.access_token} = ${val(this.accessToken)},
+                ${attr.id_token} = ${val(this.idToken)},
+                ${attr.salt} = ${val(this.salt)}
+            `,
+            condition: ({key, attr, val}) =>
+                `attribute_exists(${key.session_id}) AND (${attr.lock} = ${val.lock}) AND (${attr.lock_till} >= ${val.now})`,
+        });
+        try {
+            await dynamoDb.send(command)
+        } catch (e) {
+            errorContext(e, "save", {command: command.input})
+            throw e
+        }
+    }
+
+    /**
+     * True if it is time to refresh access token.
+     */
+    get isTimeToRefresh(): boolean {
+        const {now, accessTokenTtl} = useVariables()
+        return now >= (this.accessExpiresAt - accessTokenTtl - 60)
+    }
 
     /**
      * Remove session data from the store
      */
-    remove(): Promise<void>;
+    async remove() {
+        const command = deleteCommand(Sessions, {
+            key: {session_id: this.sessionId},
+        });
+        try {
+            await dynamoDb.send(command)
+        } catch (e) {
+            errorContext(e, "remove", {command: command.input})
+            throw e
+        }
+    }
 
     /**
      * Create cookie for the session data
      */
-    makeCookie(): any;
+    makeCookie() {
+        const {now, refreshTokenTtl} = useVariables()
+        const newSessionExpiresAt = now + refreshTokenTtl
+        const expiration = new Date(newSessionExpiresAt * 1000)
+        return new SessionCookie(this.sessionId, expiration)
+    }
 
     /**
      * Make authentication context variables.
      */
-    context(): {
-        access_token: any;
-        expires_at: any;
-        id_token: any
-    };
-}
-
-export default function (createSessionCookie: (id: string, expiration?: Date) => SessionCookie,
-                         ctx: AuthModuleContext): SessionModule {
-
-    const dynamoDb = new DynamoDBClient({region: ctx.region})
-
-    /**
-     * Session data stored in the session store.
-     */
-    class SessionDataImpl implements SessionItem, SessionData {
-
-        readonly sessionId: string
-        readonly accessToken: string
-        readonly idToken: string
-        readonly refreshToken: string
-        readonly accessExpiresAt: number
-        readonly sessionExpiresAt: number
-        readonly salt: string
-
-        /**
-         * @param item session item loaded from the store
-         * @param isRefreshTokenRotated True if this session was created from another session with different refresh token.
-         * @param lockId lock identifier
-         */
-        constructor(item: SessionItem,
-                    readonly isRefreshTokenRotated: boolean,
-                    readonly lockId?: string) {
-            this.sessionId = item.sessionId
-            this.accessToken = item.accessToken
-            this.idToken = item.idToken
-            this.refreshToken = item.refreshToken
-            this.accessExpiresAt = item.accessExpiresAt
-            this.sessionExpiresAt = item.sessionExpiresAt
-            this.salt = item.salt
+    context() {
+        return {
+            'access_token': this.accessToken,
+            'id_token': this.idToken,
+            'expires_at': this.accessExpiresAt
         }
-
-        /**
-         * Load a session record while placing a lock on it. Use {@link SessionDataImpl#release} or
-         * {@link SessionDataImpl#remove} to release the lock.
-         */
-        public static async loadAndLock(sessionId: string) {
-            const lockId = uuidv4()
-            const lockTill = ctx.now + 3_000
-
-            const loadSessionData = async () => {
-                const lockAndReadCommand = new UpdateItemCommand({
-                    TableName: ctx.sessionTable,
-                    ReturnValues: "ALL_NEW",
-                    Key: {"session_id": {S: sessionId}},
-                    ConditionExpression: "(attribute_exists(#sessionId)) AND ((#lock = :null) OR (#lockTill <= :now))",
-                    UpdateExpression: "SET #lockTill = :lockTill, #lock = :lock",
-                    ExpressionAttributeNames: {
-                        "#sessionId": "session_id",
-                        "#lock": "lock",
-                        "#lockTill": "lock_till"
-                    },
-                    ReturnValuesOnConditionCheckFailure: "ALL_OLD",
-                    ExpressionAttributeValues: {
-                        ":null": {NULL: true},
-                        ":lockTill": {N: `${lockTill}`},
-                        ":lock": {S: lockId},
-                        ":now": {N: `${Math.floor(Date.now() / 1000)}`}
-                    }
-                });
-                try {
-                    const {Attributes: attrs} = await dynamoDb.send(lockAndReadCommand)
-                    if (attrs == null) return null
-                    const item = parseSessionItem({
-                        sessionId,
-                        accessToken: attrs['access_token'].S,
-                        idToken: attrs['id_token'].S,
-                        refreshToken: attrs['refresh_token'].S,
-                        accessExpiresAt: Number(attrs['expires_at'].N),
-                        sessionExpiresAt: Number(attrs['session_expires_at'].N),
-                        salt: attrs['salt'].S,
-                    });
-                    return new SessionDataImpl(item, false, lockId)
-                } catch (e) {
-                    if (e instanceof ConditionalCheckFailedException && e.Item == null)
-                        return null
-                    throw e
-                }
-            };
-
-            return await retry(loadSessionData, {maxIterations: 5, timeout: 2500, delay: 300})
-        }
-
-        /**
-         * Release session data lock. This should be the last method to call on a session data instance.
-         */
-        async release() {
-            if (this.lockId == null) return
-
-            const key = {S: this.sessionId}
-            const unlockCommand = new UpdateItemCommand({
-                TableName: ctx.sessionTable,
-                ReturnValues: "ALL_NEW",
-                Key: {"session_id": key},
-                UpdateExpression: "SET #lock = :null",
-                ConditionExpression: "attribute_exists(#sessionId) AND #lock = :lock",
-                ExpressionAttributeNames: {
-                    "#lock": "lock",
-                    "#sessionId": "session_id"
-                },
-                ExpressionAttributeValues: {
-                    ":sessionId": key,
-                    ":lock": {S: this.lockId}
-                },
-                ReturnValuesOnConditionCheckFailure: "ALL_OLD"
-            })
-
-            try {
-                await dynamoDb.send(unlockCommand)
-            } catch (e) {
-                if (e instanceof ConditionalCheckFailedException) {
-                    if (e.Item?.['session_id']?.S != null) {
-                        throw e
-                    }
-                }
-            }
-        }
-
-        /**
-         * Create new session from OIDC tokens. {@param tokens} must have {@link OidcTokens#refreshToken}.
-         */
-        public static fromTokens(tokens: OidcTokens): SessionData {
-            const salt = generateSalt(16)
-            const refreshToken = tokens.refreshToken
-            if (refreshToken == null) throw new Error('Cannot create new session without a refresh token.')
-            const idToken = tokens.idTokenPayload ?? {}
-            //TODO add user sub and email to DynamoDB.
-            const item = parseSessionItem({
-                sessionId: makeSessionId(refreshToken, salt),
-                accessToken: tokens.accessToken,
-                idToken: tokens.idToken,
-                refreshToken,
-                accessExpiresAt: ctx.now + tokens.expiresAtSec,
-                sessionExpiresAt: ctx.now + ctx.refreshTokenTtlSec - 120,
-                salt
-            });
-            return new SessionDataImpl(item, false)
-        }
-
-        /**
-         * Create a new version of the session data with new tokens.
-         */
-        withTokens(tokens: OidcTokens): SessionDataImpl {
-            const isNew = tokens.refreshToken != null && tokens.refreshToken != this.refreshToken
-            const item = parseSessionItem({
-                sessionId: isNew ? makeSessionId(tokens.refreshToken, this.salt) : this.sessionId,
-                accessToken: tokens.accessToken,
-                idToken: tokens.idToken,
-                refreshToken: isNew ? tokens.refreshToken : this.refreshToken,
-                accessExpiresAt: ctx.now + tokens.expiresAtSec,
-                sessionExpiresAt: isNew ? ctx.now + ctx.refreshTokenTtlSec - 120 : this.sessionExpiresAt,
-                salt: this.salt
-            })
-            return new SessionDataImpl(item, isNew, this.lockId)
-        }
-
-        /**
-         * Save session data to the store. Typically called after making new session using {@link withTokens}.
-         */
-        async save() {
-            const saveTokensCommand = new PutItemCommand({
-                TableName: ctx.sessionTable,
-                Item: {
-                    'session_id': {S: this.sessionId},
-                    'refresh_token': {S: this.refreshToken},
-                    'expires_at': {N: `${this.accessExpiresAt}`},
-                    'session_expires_at': {N: `${this.sessionExpiresAt}`},
-                    'access_token': {S: this.accessToken},
-                    'id_token': {S: this.idToken},
-                    'salt': {S: this.salt},
-                    'lock': {NULL: true}
-                },
-                ConditionExpression: "(" +
-                    "attribute_not_exists(#sessionId)) " + //New record
-                    "OR (#lock = :null OR #lockTill < :now) " + //No lock or expired lock
-                    "OR (#lock = :lock)", //Our lock
-                ExpressionAttributeNames: {
-                    "#sessionId": "session_id",
-                    "#lock": "lock",
-                    "#lockTill": "lock_till"
-                },
-                ExpressionAttributeValues: {
-                    ":null": {NULL: true},
-                    ":lock": this.lockId ? {S: this.lockId} : {NULL: true},
-                    ":now": {N: `${ctx.now}`},
-                }
-            })
-            try {
-                await dynamoDb.send(saveTokensCommand)
-            } catch (e) {
-                console.log(e)
-                throw e
-            }
-        }
-
-        /**
-         * True if it is time to refresh access and/or id token.
-         */
-        get isTimeToRefresh(): boolean {
-            const nextRefresh = ctx.now + ctx.cacheTtlSec
-            return nextRefresh >= this.accessExpiresAt - 120
-        }
-
-        /**
-         * Remove session data from the store
-         */
-        async remove() {
-            const command = new DeleteItemCommand({
-                TableName: ctx.sessionTable,
-                Key: {'session_id': {S: this.sessionId}}
-            })
-            await dynamoDb.send(command)
-        }
-
-        /**
-         * Create cookie for the session data
-         */
-        makeCookie() {
-            const newSessionExpiresAt = ctx.now + ctx.refreshTokenTtlSec - 120
-            const expiration = new Date(newSessionExpiresAt * 1000)
-            return createSessionCookie(this.sessionId, expiration)
-        }
-
-        /**
-         * Make authentication context variables.
-         */
-        context() {
-            return {
-                'access_token': this.accessToken,
-                'id_token': this.idToken,
-                'expires_at': this.accessExpiresAt
-            }
-        }
-    }
-
-    return {
-        loadAndLock: SessionDataImpl.loadAndLock,
-        fromTokens: SessionDataImpl.fromTokens,
-        dynamoDb
     }
 }
 
@@ -323,7 +271,11 @@ const SessionItemSchema = z.object({
 type SessionItem = z.infer<typeof SessionItemSchema>
 
 function parseSessionItem(x: Partial<SessionItem>): SessionItem {
-    return SessionItemSchema.parse(x)
+    try {
+        return SessionItemSchema.parse(x)
+    } catch (e) {
+        throw withErrorContext(e, "parseSessionItem", {sessionItem: x})
+    }
 }
 
 /**

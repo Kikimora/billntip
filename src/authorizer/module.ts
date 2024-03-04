@@ -1,7 +1,12 @@
-import {AuthModuleContextSchema, AuthModuleOptions} from "./ctx";
-import OidcTokensModule from "./oidc_tokens"
-import SessionCookieModule from "./cookie"
-import SessionModule from "./session"
+import {
+    AuthModuleEnv,
+    AuthModuleVariables,
+    Env,
+    initModuleVariables
+} from "./ctx";
+import OidcTokens, {idTokenVerifier, accessTokenVerifier} from "./oidc_tokens"
+import SessionCookie from "./cookie"
+import SessionData from "./session"
 
 export interface TokenEndpointResponse {
     access_token: string
@@ -10,43 +15,24 @@ export interface TokenEndpointResponse {
     expires_in: number
 }
 
-export default authorizationModule;
-
 /**
  * Authentication module provides primitives to build cookie based authentication solution.
  */
-export function authorizationModule(options: AuthModuleOptions) {
-    const ctx = AuthModuleContextSchema.parse({
-        now: Math.floor(Date.now() / 1000),
-        region: process.env.AWS_REGION,
-        ...options,
-    })
-
-
-    const sessionCookieModule = SessionCookieModule(ctx);
-    const sessionModule = SessionModule(sessionCookieModule.create, ctx);
-    const oidcTokensModule = OidcTokensModule(ctx);
-
-    return {
-        /**
-         * Wrapper around session cookie
-         */
-        SessionCookie: {
-            ...sessionCookieModule
-        },
-        /**
-         * Provides methods to load and create {@link SessionData}.
-         */
-        SessionData: {
-            ...sessionModule
-        },
-        /**
-         * OIDC tokens endpoint client.
-         */
-        OidcTokens: {
-            ...oidcTokensModule
-        },
-        ctx
-    }
+export type AuthModule = {
+    readonly SessionCookie: typeof SessionCookie,
+    readonly SessionData: typeof SessionData,
+    readonly OidcTokens: typeof OidcTokens,
+    readonly env: AuthModuleEnv,
+    readonly vars: AuthModuleVariables,
 }
 
+export {idTokenVerifier, accessTokenVerifier}
+
+export async function startAuthOperation(): Promise<AuthModule> {
+    const vars = await initModuleVariables()
+    return {
+        SessionCookie, OidcTokens, SessionData,
+        vars,
+        env: Env,
+    }
+}

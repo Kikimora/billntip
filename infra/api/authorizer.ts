@@ -1,32 +1,38 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 
-import {tokenValidityInSeconds, userPool, userPoolClient, userPoolDomain} from "../users"
-import {sessionsTable} from "../data";
-import {apiGateway, makeApiLambda} from "./api-gateway";
-import {apiUrl, authCallback} from "./urls";
+import {tokenValidityInSeconds, userPool, userPoolClient, userPoolDomain} from "../cognito"
+import {sessionsTable} from "../dynamodb";
+import {apiGateway} from "./api-gateway";
+import {apiUrl, authRoot, cognitoCallback} from "./urls";
 import {LambdaHandler} from "../../billntip-lambdas";
+import {createLambda} from "../lambda";
+import {givePermission, makeTableAccess, makeUserPoolAccess} from "../permissions";
 
 const config = new pulumi.Config("aws")
 const region = config.get("region")
 
-const cacheTtl = tokenValidityInSeconds("accessToken");
-const sessionTtl = tokenValidityInSeconds("refreshToken");
+const cacheTtl = tokenValidityInSeconds("accessToken") - 120;
+if (cacheTtl < 60) throw new Error("User Pool Client access token should last longer than 3 minutes")
 const issuer = pulumi.interpolate`https://cognito-idp.${region}.amazonaws.com/${userPool.id}`
 const cognitoDomain = pulumi.interpolate`https://${userPoolDomain.domain}.auth.${region}.amazoncognito.com`
 
 const env = {
     COOKIE_NAME: 'JSESSIONID',
     SESSION_TABLE: sessionsTable.name,
-    REFRESH_TOKEN_TTL: sessionTtl.toString(),
-    CACHE_TTL: cacheTtl.toString(),
     USER_POOL_ID: userPool.id,
     OAUTH_CLIENT_ID: userPoolClient.id, //user pool client id
     OAUTH_ISSUER: issuer,
     OAUTH_TOKEN_ENDPOINT: pulumi.interpolate`${cognitoDomain}/oauth2/token`,
-    POST_AUTH_REDIRECT_URL: apiUrl,
+    POST_AUTH_REDIRECT_URL: apiUrl, //TODO figure out how to redirect to original page instead of a fixed page.
 };
-export const authorizerFunction = makeApiLambda(LambdaHandler.AuthCookieHandler, env, {})
+export const cookieLambda = createLambda(
+    LambdaHandler.AuthCookieHandler,
+    env,
+    {},
+    [makeTableAccess(sessionsTable), makeUserPoolAccess(userPool)])
+givePermission(cookieLambda, apiGateway)
+
 /**
  * Authorizer to use on API routes
  */
@@ -35,24 +41,49 @@ export const authorizer = new aws.apigatewayv2.Authorizer("cookie-authorizer", {
     apiId: apiGateway.id,
     authorizerType: "REQUEST",
     enableSimpleResponses: true,
-    authorizerUri: authorizerFunction.invokeArn,
+    authorizerUri: cookieLambda.function.invokeArn,
     authorizerPayloadFormatVersion: "2.0",
     identitySources: ["$request.header.Cookie"],
     authorizerResultTtlInSeconds: cacheTtl
 });
 
-export const authorizationCodeFunction = makeApiLambda(LambdaHandler.AuthCodeHandler, env, {
-    timeout: 10
-})
-const authorizationCodeIntegration = new aws.apigatewayv2.Integration("api-auth-code-integration", {
+//GET /auth/callback
+export const codeLambda = createLambda(
+    LambdaHandler.AuthCodeHandler,
+    env,
+    {
+        timeout: 10
+    },
+    [makeTableAccess(sessionsTable), makeUserPoolAccess(userPool)])
+givePermission(codeLambda, apiGateway)
+const authCodeIntegration = new aws.apigatewayv2.Integration("api-auth-code-integration", {
     apiId: apiGateway.id,
     integrationType: "AWS_PROXY", // AWS_PROXY for Lambda function integration
-    integrationUri: authorizationCodeFunction.arn,
+    integrationUri: codeLambda.function.arn,
     payloadFormatVersion: "2.0"
 });
-export const callbackRoute = new aws.apigatewayv2.Route("api-auth-callback-route", {
+export const callbackRoute = new aws.apigatewayv2.Route("api-auth-code-route", {
     apiId: apiGateway.id,
-    routeKey: `ANY /${authCallback}`,
-    target: pulumi.interpolate`integrations/${authorizationCodeIntegration.id}`,
+    routeKey: `GET /${cognitoCallback}`,
+    target: pulumi.interpolate`integrations/${authCodeIntegration.id}`,
     authorizationType: "NONE",
+});
+
+//GET /auth/tokens
+export const tokensLambda = createLambda(LambdaHandler.AuthTokensHandler, env, {
+    timeout: 1
+})
+givePermission(tokensLambda, apiGateway)
+const authTokenIntegration = new aws.apigatewayv2.Integration("api-auth-tokens-integration", {
+    apiId: apiGateway.id,
+    integrationType: "AWS_PROXY", // AWS_PROXY for Lambda function integration
+    integrationUri: tokensLambda.function.arn,
+    payloadFormatVersion: "2.0"
+});
+export const tokensRoute = new aws.apigatewayv2.Route("api-auth-tokens-route", {
+    apiId: apiGateway.id,
+    routeKey: `GET /${authRoot}/tokens`,
+    target: pulumi.interpolate`integrations/${authTokenIntegration.id}`,
+    authorizationType: "CUSTOM",
+    authorizerId: authorizer.id
 });
