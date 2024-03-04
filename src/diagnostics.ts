@@ -1,8 +1,9 @@
-import {Context, APIGatewayProxyEvent} from "aws-lambda"
+import {clearInterval} from "node:timers";
 import {Serializable} from "node:worker_threads";
 import {AsyncLocalStorage} from "node:async_hooks";
-import {CompiledSchema, compileSchema, Schema} from "./matcher";
+import {Context, APIGatewayProxyEvent} from "aws-lambda"
 import _ from "lodash";
+import {CompiledSchema, compileSchema, Schema} from "./matcher";
 
 
 type TraceAttributes = { [k: string]: Serializable | undefined | null }
@@ -936,14 +937,6 @@ let DefaultOptions: TracingOptions
 let DefaultRecorder: EventRecorder
 const RecorderStore = new AsyncLocalStorage<EventRecorder>()
 configure({})
-const SelfTracer = new Tracer("diagnostics")
 const EMFTracer = new Tracer("EMF")
-
 //Import util after all definitions because it depends on Tracer
 import {runtime} from "./util";
-import {clearInterval} from "node:timers";
-
-runtime.on('shutdown', function () {
-    SelfTracer.error("Timeout")
-})
-

@@ -5,7 +5,12 @@ jest.mock('../src/http');
 import 'jest-extended';
 import * as fs from "fs";
 import * as upath from "upath";
-import {APIGatewayAuthorizerEvent, APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2} from "aws-lambda";
+import {
+    APIGatewayAuthorizerEvent,
+    APIGatewayProxyEventV2,
+    APIGatewayProxyStructuredResultV2,
+    Context
+} from "aws-lambda";
 import _ from "lodash";
 import http from "../src/http"
 import {init as cognitoInit, TestGroup, TestUser} from "./cognito"
@@ -18,6 +23,8 @@ const {tokenEndpoint, userPoolId, userPoolClientId, sessionTable, apiUrl} = prep
 import {code, tokens, cookie, hooks} from "../src/authorizer";
 import {AxiosResponse} from "axios";
 import {useVariables} from "../src/authorizer/ctx";
+import {makeLockStore} from "../src/dynamodb";
+import {configure} from "../src/diagnostics";
 
 const ddb = dynamoDbInit(sessionTable)
 
@@ -71,6 +78,26 @@ const authEvent: APIGatewayAuthorizerEvent = {
     stageVariables: null
 }
 
+const awsContext: Context = {
+    awsRequestId: "REQUEST ID",
+    functionVersion: "$LATEST",
+    callbackWaitsForEmptyEventLoop: false,
+    functionName: "test",
+    invokedFunctionArn: "arn:aws:test",
+    memoryLimitInMB: "1000",
+    logGroupName: "none",
+    logStreamName: "none",
+    getRemainingTimeInMillis() {
+        return 1000
+    },
+    done() {
+    },
+    fail() {
+    },
+    succeed() {
+    }
+}
+
 const testContext: {
     group?: TestGroup,
     user?: TestUser
@@ -101,17 +128,17 @@ describe('OAuth callback validation', () => {
             {queryStringParameters: {'code': "123"}}
         ];
         for (let sample of samples) {
-            const response = await code({...event, ...sample});
+            const response = await code({...event, ...sample}, awsContext);
             expect(response).toMatchObject({statusCode: 400})
         }
     })
     it('verifies token signature and throws', async () => {
         const sample = {queryStringParameters: {'code': brokenAuthorizationCode}}
-        await expect(code({...event, ...sample})).rejects.toThrow()
+        await expect(code({...event, ...sample}, awsContext)).rejects.toThrow()
     })
     it('throws if token endpoint responds with unexpected error', async () => {
         const sample = {queryStringParameters: {'code': triggerUnexpectedError}}
-        await expect(code({...event, ...sample})).rejects.toThrow()
+        await expect(code({...event, ...sample}, awsContext)).rejects.toThrow()
     })
 })
 
@@ -119,7 +146,7 @@ describe('OAuth callback', () => {
     let response, cookie: any
     beforeAll(async () => {
         const sample = {queryStringParameters: {'code': goodAuthorizationCode}}
-        response = await code({...event, ...sample});
+        response = await code({...event, ...sample}, awsContext);
         cookie = parseSetCookieHeader(response)
     })
     it('issues session cookie', async () => {
@@ -173,15 +200,15 @@ describe('OAuth callback', () => {
 
 describe('Lambda authorizer validation', () => {
     it('require Cookie header', async () => {
-        const response = await cookie({...authEvent, headers: {}})
+        const response = await cookie({...authEvent, headers: {}}, awsContext)
         expect(response.isAuthorized).toBeFalse()
     })
     it('requires session id in the Cookie header', async () => {
-        const response = await cookie({...authEvent, headers: {'Cookie': 'SomeCookie=1'}})
+        const response = await cookie({...authEvent, headers: {'Cookie': 'SomeCookie=1'}}, awsContext)
         expect(response.isAuthorized).toBeFalse()
     })
     it('requires session to be present in dynamodb', async () => {
-        const response = await cookie({...authEvent, headers: {'Cookie': `${SessionKey}=1`}})
+        const response = await cookie({...authEvent, headers: {'Cookie': `${SessionKey}=1`}}, awsContext)
         expect(response.isAuthorized).toBeFalse()
     })
 })
@@ -189,17 +216,22 @@ describe('Lambda authorizer validation', () => {
 describe('Lambda authorizer', () => {
     let sessionId: string
     beforeEach(async () => {
-        const now = Math.floor(Date.now()) / 1000;
+        configure({
+            triggers: {
+                info: true,
+                warn: true
+            }
+        })
         sessionId = await startSession();
         hooks.cookieAuthorizerStart = jest.fn().mockImplementation(async function () {
             //Verify session locked before business logic starts
-            const session = await ddb.getSession(sessionId)
-            expect(session).toEqual(expect.objectContaining({
-                lock: expect.any(String),
-                lock_till: expect.any(Number)
+            const store = makeLockStore("Locks")
+            const sessionLock = await store.load(sessionId)
+            expect(sessionLock).toEqual(expect.objectContaining({
+                pk: sessionId,
+                version: expect.any(Number),
+                owner: 'REQUEST ID'
             }))
-            const lockTill = session!['lock_till'] as number
-            expect(lockTill).toBeCloseTo(now + 10, -1)
         })
         hooks.cookieAuthorizerRefresh = jest.fn()
         hooks.cookieAuthorizerNewSession = jest.fn()
@@ -380,7 +412,8 @@ function prepareAuthorizerEnvironment() {
         OAUTH_ISSUER: oathIssuer,
         OAUTH_TOKEN_ENDPOINT: tokenEndpoint,
         POST_AUTH_REDIRECT_URL: "https://localhost",
-        AWS_REGION: "eu-south-1"
+        AWS_REGION: "eu-south-1",
+        AUTHORIZER_CACHE_TTL: 120
     })
     return {tokenEndpoint, userPoolId, userPoolClientId, oathIssuer, sessionTable, apiUrl};
 }
@@ -416,7 +449,7 @@ function parseSetCookieHeader(response: APIGatewayProxyStructuredResultV2): { [p
 
 async function startSession() {
     const sample = {queryStringParameters: {'code': goodAuthorizationCode}}
-    const response = await code({...event, ...sample});
+    const response = await code({...event, ...sample}, awsContext);
     expect(response.statusCode).toBe(200)
     expect(response.body).toMatch(/meta http-equiv="refresh"/)
     expect(response.headers).toHaveProperty('Set-Cookie')
@@ -427,7 +460,7 @@ async function startSession() {
 }
 
 const authorize = async function (sessionId: string) {
-    return await cookie({...authEvent, headers: {'cookie': `${SessionKey}=${sessionId}`}})
+    return await cookie({...authEvent, headers: {'cookie': `${SessionKey}=${sessionId}`}}, awsContext)
 }
 
 function sessionCookie() {

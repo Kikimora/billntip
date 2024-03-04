@@ -5,6 +5,6 @@ module.exports = {
     setupFiles: ['./jest.setup.ts'],
     setupFilesAfterEnv: ["./jest.extended.ts"],
     transform: {
-        '^.+\\.tsx?$': ['ts-jest', {}]
+        '^.+\\.tsx?$': ['ts-jest', { diagnostics:true }]
     },
 };

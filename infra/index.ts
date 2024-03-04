@@ -9,11 +9,12 @@ dotenv.config();
 
 import {userPool, userPoolClient, userPoolDomain as upd} from "./cognito";
 import {dataTable as dt, sessionsTable} from "./dynamodb";
-import {apiUrl, diagnosticsParameter as diagParam} from "./api";
+import {apiGateway, apiUrl, diagnosticsParameter as diagParam} from "./api";
 import {bucket} from "./s3";
 
 // Outputs
 export {apiUrl}
+export const apiId = apiGateway.id
 export const diagnosticsParameter = diagParam.arn
 export const dataTable = dt.name
 export const sessionTable = sessionsTable.name

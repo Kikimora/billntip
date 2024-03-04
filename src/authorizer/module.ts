@@ -28,8 +28,8 @@ export type AuthModule = {
 
 export {idTokenVerifier, accessTokenVerifier}
 
-export async function startAuthOperation(): Promise<AuthModule> {
-    const vars = await initModuleVariables()
+export async function startAuthOperation(requestId?: string): Promise<AuthModule> {
+    const vars = await initModuleVariables(requestId)
     return {
         SessionCookie, OidcTokens, SessionData,
         vars,

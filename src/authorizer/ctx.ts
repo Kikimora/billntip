@@ -1,8 +1,11 @@
 import {z} from "zod";
 import _ from "lodash";
-import {describeUserPoolClient} from "../cognito";
 import {LRUCache} from "lru-cache";
+import {describeUserPoolClient} from "../cognito";
 import {toSeconds} from "../../test/util";
+import {Tracer} from "../diagnostics";
+
+export const AuthTracer = new Tracer("authorizer")
 
 export const AuthModuleEnvSchema = z.object({
     cookieName: z.string().min(1).readonly(),
@@ -14,9 +17,13 @@ export const AuthModuleEnvSchema = z.object({
     tokenEndpoint: z.string().url().readonly(),
     postAuthRedirectUrl: z.string().url().readonly(),
 
+    /**
+     * Authorizer cache TTL in seconds
+     */
+    authorizerCacheTtl: z.number().min(1).readonly(),
+
     region: z.string().min(1).readonly(),
 })
-
 
 /**
  * Authentication module environment as provided to Lambda function
@@ -27,9 +34,19 @@ export type AuthModuleEnv = z.infer<typeof AuthModuleEnvSchema>
  * Authentication module operation environment, something that changes from one operation invocation to another.
  */
 export interface AuthModuleVariables {
+    /**
+     * Operation start time in milliseconds
+     */
     now: number,
+    requestId: string,
     clientSecret: string
+    /**
+     * Access token TTL in seconds
+     */
     accessTokenTtl: number
+    /**
+     * Refresh token TTL in seconds
+     */
     refreshTokenTtl: number
 }
 
@@ -42,6 +59,9 @@ export type AuthorizerContext = {
     id_token: string
 };
 
+/**
+ * Static environment variables.
+ */
 export const Env: AuthModuleEnv = AuthModuleEnvSchema.parse({
     cookieName: process.env.COOKIE_NAME ?? 'JSESSIONID',
     sessionTable: process.env.SESSION_TABLE ?? 'sessions',
@@ -51,10 +71,14 @@ export const Env: AuthModuleEnv = AuthModuleEnvSchema.parse({
     tokenEndpoint: process.env.OAUTH_TOKEN_ENDPOINT,
     postAuthRedirectUrl: process.env.POST_AUTH_REDIRECT_URL,
     region: process.env.AWS_REGION,
+    authorizerCacheTtl: Number(process.env.AUTHORIZER_CACHE_TTL),
 })
 
 let variables: AuthModuleVariables
 
+/**
+ * Return variables that change from one request to another.
+ */
 export function useVariables() {
     if (variables == null) {
         throw new Error("Cannot use auth module variables. Call `startAuthOperation()` before the call to `useVariables()`")
@@ -68,9 +92,14 @@ const readUserPoolDetails = _.memoize(async (userPoolId: string, clientId: strin
         throw new Error(`Cannot read Cognito user pool client (${userPoolId}, ${clientId}) parameters. Might be a permission issue.`)
     return userPoolClient
 })
-readUserPoolDetails.cache = new LRUCache({ttl: 300, max: 1})
+const cache = new LRUCache({ttl: 300, max: 1});
+readUserPoolDetails.cache = cache
 
-export async function initModuleVariables() {
+/**
+ * Init module variables reported by {@link useVariables}
+ * @param requestId - request id
+ */
+export async function initModuleVariables(requestId?: string) {
     const {userPoolId, clientId} = Env
     const userPoolClient = await readUserPoolDetails(userPoolId, clientId)
     const units = userPoolClient.TokenValidityUnits ?? _.throw("User pool must have tokens validity setting.")
@@ -79,7 +108,8 @@ export async function initModuleVariables() {
     const refreshTokenTtl = userPoolClient.RefreshTokenValidity ?? _.throw("User pool must have refresh token validity setting.");
     const refreshTokenUnits = units.RefreshToken ?? _.throw("User pool must have refresh token validity setting.")
     variables = {
-        now: Math.floor(Date.now() / 1000),
+        now: Date.now(),
+        requestId: requestId ?? "",
         clientSecret: userPoolClient.ClientSecret ?? _.throw("User pool must have a client secret configured."),
         accessTokenTtl: toSeconds(accessTokenTtl, accessTokenUnits),
         refreshTokenTtl: toSeconds(refreshTokenTtl, refreshTokenUnits)

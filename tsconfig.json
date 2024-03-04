@@ -2,7 +2,8 @@
   "compilerOptions": {
     "strict": true,
     "outDir": "out/build",
-    "target": "ESNext",
+    "target": "es2022",
+    "lib": ["es2022", "esnext.disposable", "dom"],
     "module": "commonjs",
     "esModuleInterop": true,
     "moduleResolution": "node",

@@ -5,6 +5,7 @@ import {updateCommand} from "./update";
 import {Just, repeat, retry} from "../util";
 import {deleteCommand} from "./delete";
 import {Tracer, withErrorContext} from "../diagnostics";
+import {getCommand} from "./get";
 
 const tracer = new Tracer("dynamodb_locks")
 
@@ -27,6 +28,12 @@ export interface LockStore {
      * @param options - lock options such as lease duration and heartbeat interval.
      */
     tryLock(id: string, owner: string, options?: TryLockOptions): Promise<LockHandle>
+
+    /**
+     * Loads lock from store
+     * @param id - lock id
+     */
+    load(id: string): Promise<Lock | undefined>;
 }
 
 /**
@@ -61,7 +68,7 @@ export type StoreOptions = {
     /**
      * DynamoDb client to use
      */
-    dynamodb?: DynamoDB
+    dynamoDb?: DynamoDB
 }
 
 /**
@@ -114,7 +121,7 @@ export const LockAttributes = {
  * @param storeOptions - store options
  */
 export async function createLockStore(tableName: string, storeOptions?: StoreOptions) {
-    const dynamoDb = storeOptions?.dynamodb ?? new DynamoDB()
+    const dynamoDb = storeOptions?.dynamoDb ?? new DynamoDB()
     await dynamoDb.send(new CreateTableCommand({
         TableName: tableName,
         KeySchema: [{KeyType: "HASH", AttributeName: "pk"}],
@@ -138,7 +145,7 @@ class LockError extends Error {
  */
 export function makeLockStore(tableName: string, storeOptions?: StoreOptions): LockStore {
 
-    const dynamoDb = storeOptions?.dynamodb ?? new DynamoDB()
+    const dynamoDb = storeOptions?.dynamoDb ?? new DynamoDB()
 
     const Locks = table(tableName, LockKey, LockAttributes)
     const locker = new Locker(dynamoDb, Locks)
@@ -163,6 +170,15 @@ export function makeLockStore(tableName: string, storeOptions?: StoreOptions): L
             await lockImpl.acquireLock(retries)
             lockImpl.runHeartbeat()
             return lockImpl
+        },
+
+        async load(id: string): Promise<Lock | undefined> {
+            try {
+                return await locker.load(id)
+            } catch (e: any) {
+                tracer.info("Cannot find lock", {id, error: e})
+                return undefined
+            }
         }
     }
 }
@@ -173,13 +189,13 @@ export function makeLockStore(tableName: string, storeOptions?: StoreOptions): L
 class LockImpl implements LockHandle {
     private _otherLock?: Lock
     private _heartbeat: Promise<Lock>
-    private _unlocked: boolean
+    private _ownLock: boolean
     private _lock: Lock
 
     constructor(lock: Lock, private readonly locker: Locker) {
         this._lock = lock
         this._heartbeat = Promise.resolve<Lock>(lock)
-        this._unlocked = false
+        this._ownLock = false
     }
 
     get lock() {
@@ -187,7 +203,7 @@ class LockImpl implements LockHandle {
     }
 
     get locked() {
-        return !this._unlocked
+        return this._ownLock
     }
 
     async acquireLock(maxIterations: number) {
@@ -205,6 +221,8 @@ class LockImpl implements LockHandle {
         switch (type) {
             case "Success": {
                 this._lock = value
+                this._ownLock = true
+                tracer.info("locked", this._lock)
                 return
             }
             case "Failure": {
@@ -219,17 +237,18 @@ class LockImpl implements LockHandle {
     runHeartbeat() {
         const heartbeatTracer = tracer.withScope("runHeartbeat")
         const bump = async (done: (_: void) => void) => {
-            if (this._unlocked) {
-                heartbeatTracer.info("unlocked", this.lock)
+            if (!this._ownLock) {
+                heartbeatTracer.info("done", this.lock)
                 done()
                 return
             }
+            //heartbeatTracer.info("bump", this.lock)
             const {lock, locker} = this
             try {
                 this._heartbeat = locker.bump(lock)
                 this._lock = await this._heartbeat
             } catch (e: any) {
-                heartbeatTracer.error(e, lock)
+                heartbeatTracer.info(e.message, lock)
             }
         }
         // noinspection ES6MissingAwait,JSIgnoredPromiseFromCall
@@ -237,13 +256,23 @@ class LockImpl implements LockHandle {
     }
 
     async unlock() {
-        const {locked, locker, _heartbeat} = this
-        if (!locked) return
-        this._unlocked = true
-        await _heartbeat
-        //Bump task changes lock, read it after bump task finishes
-        const {lock} = this
-        this._lock = await locker.deleteLock(lock)
+        const {locker, lock} = this
+        if (!this.locked) return
+        //Bump task changes lock and interfere with delete, read it after bump task finishes
+        //1. Signal to stop heartbeat
+        this._ownLock = false
+        //2. Wait in background until heartbeat stops
+        this._heartbeat.then(() => {
+            return locker.deleteLock(lock)
+            //3. update lock, just in case it changed
+        }).then((lock) => {
+            this._lock = lock
+        }).catch(() => {
+            //4. ignore any errors since we don't care about the lock anymore
+        }).finally(() => {
+            //5. finally, record a trace
+            tracer.info("unlocked", this._lock)
+        })
     }
 
     async [Symbol.dispose]() {
@@ -288,7 +317,14 @@ class Locker {
         throw new Error("Unexpected error while acquiring lock " + lock.pk)
     }
 
-    async bump(lock: Lock) {
+    async load(pk: string): Promise<Lock | undefined> {
+        const command = getCommand(this.table, {key: {pk}});
+        const {Item: item} = await this.dynamoDb.send(command)
+        if (item === undefined) return undefined
+        return fromDynamoDb(unmarshall(item))
+    }
+
+    async bump(lock: Lock): Promise<Lock> {
         const {pk, version} = lock
         const command = updateCommand(this.table, {
             key: {pk},
@@ -314,7 +350,7 @@ class Locker {
                 `attribute_exists(${key.pk}) AND ${attr.version} = ${val(version)}`
         }))
         if (attributes === undefined) {
-            throw new Error("Unexpected condition while bumping a lock version")
+            throw new Error("Unexpected condition while removing a lock")
         }
         const item = unmarshall(attributes)
         return fromDynamoDb(item)

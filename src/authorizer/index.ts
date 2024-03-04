@@ -51,86 +51,110 @@ const authTracer = new Tracer("auth")
  * expired. After if expires client with old cookie would get 401 Unauthorized or 403 Forbidden.
  *
  */
-export async function cookie(event: APIGatewayAuthorizerEvent): Promise<AuthResult> {
+export async function cookie(event: APIGatewayAuthorizerEvent, context: Context): Promise<AuthResult> {
     const tracer = authTracer.startSession("cookie", event)
-    const {SessionCookie, SessionData, OidcTokens} = await startAuthOperation()
-    switch (event.type) {
-        case "REQUEST": {
-            const cookieHeader = event.headers?.cookie
-            if (cookieHeader == null) return Unauthorized
-            const sessionCookie = SessionCookie.load(cookieHeader)
-            if (sessionCookie == null) return Unauthorized
-            const session = await SessionData.loadAndLock(sessionCookie.id)
-            if (session == null) return Unauthorized
-            let response: AuthResult = {isAuthorized: false, context: {}}
-            try {
-                tracer.info("start")
-                if (hooks.cookieAuthorizerStart) {
-                    await hooks.cookieAuthorizerStart()
+    try {
+        const {SessionCookie, SessionData, OidcTokens} = await startAuthOperation(context.awsRequestId)
+        switch (event.type) {
+            case "REQUEST": {
+                const cookieHeader = event.headers?.cookie
+                if (cookieHeader == null) {
+                    tracer.info("no cookie header")
+                    return Unauthorized
                 }
-                if (session.isTimeToRefresh) {
-                    tracer.info("tokens expired, refreshing using refresh token")
-                    if (hooks.cookieAuthorizerRefresh) {
-                        await hooks.cookieAuthorizerRefresh()
+                const sessionCookie = SessionCookie.load(cookieHeader)
+                if (sessionCookie == null) {
+                    tracer.info("cookie header present, but invalid", {cookieHeader})
+                    return Unauthorized
+                }
+                const session = await SessionData.loadAndLock(sessionCookie.id)
+                if (session == null) {
+                    tracer.info("cannot load session", {sessionId: sessionCookie.id})
+                    return Unauthorized
+                }
+                tracer.info("start", {session: session.info})
+                let response: AuthResult = {isAuthorized: false, context: {}}
+                try {
+                    if (hooks.cookieAuthorizerStart) {
+                        await hooks.cookieAuthorizerStart()
                     }
-                    const tokens = await OidcTokens.refresh(session.refreshToken)
-                    if (tokens == null) {
-                        tracer.info("OIDC server refused to refresh tokens")
-                        await session.remove();
-                        return Unauthorized
-                    }
-
-                    const updatedSession = session.withTokens(tokens)
-                    if (updatedSession.isRefreshTokenRotated) {
-                        tracer.info("OIDC server rotated refresh token")
-                        if (hooks.cookieAuthorizerNewSession) {
-                            await hooks.cookieAuthorizerNewSession()
+                    session.notifyCacheTtlExtension()
+                    if (session.isTimeToRefresh) {
+                        tracer.info("tokens expired, refreshing using refresh token", {session: session.info})
+                        if (hooks.cookieAuthorizerRefresh) {
+                            await hooks.cookieAuthorizerRefresh()
                         }
-                        const newCookie = updatedSession.makeCookie()
-                        await updatedSession.create()
-                        await session.remove()
+                        const tokens = await OidcTokens.refresh(session.refreshToken)
+                        if (tokens == null) {
+                            tracer.info("OIDC server refused to refresh tokens")
+                            await session.remove();
+                            return Unauthorized
+                        }
 
-                        response = {
-                            isAuthorized: true,
-                            context: {
-                                'new_cookie': newCookie.makeHeaderValue(),
-                                ...updatedSession.context()
+                        const updatedSession = session.withTokens(tokens)
+                        if (updatedSession.isTimeToRefresh) {
+                            //It is a problem if after refresh session still can expire while being cached.
+                            const error = new Error("Configuration issue: API Gateway will cache tokens for over their lifetime.")
+                            // noinspection ExceptionCaughtLocallyJS
+                            throw tracer.addContext(error, {
+                                session: session.info,
+                                updatedSession: updatedSession.info
+                            })
+                        }
+
+                        if (updatedSession.isRefreshTokenRotated) {
+                            tracer.info("OIDC server rotated refresh token", {session: updatedSession.info})
+                            if (hooks.cookieAuthorizerNewSession) {
+                                await hooks.cookieAuthorizerNewSession()
+                            }
+                            const newCookie = updatedSession.makeCookie()
+                            await updatedSession.create()
+                            await session.remove()
+
+                            response = {
+                                isAuthorized: true,
+                                context: {
+                                    'new_cookie': newCookie.makeHeaderValue(),
+                                    ...updatedSession.context()
+                                }
+                            }
+                        } else {
+                            tracer.info("OIDC server refreshed tokens")
+                            await updatedSession.save()
+                            response = {
+                                isAuthorized: true,
+                                context: {
+                                    ...updatedSession.context()
+                                }
                             }
                         }
                     } else {
-                        tracer.info("OIDC server refreshed tokens")
-                        await updatedSession.save()
+                        tracer.info("tokens are valid (not expired)")
                         response = {
                             isAuthorized: true,
                             context: {
-                                ...updatedSession.context()
+                                ...session.context()
                             }
                         }
                     }
-                } else {
-                    tracer.info("tokens are valid (not expired)")
-                    response = {
-                        isAuthorized: true,
-                        context: {
-                            ...session.context()
-                        }
+                    tracer.info("done", {...response})
+                    return response
+                } catch (e: any) {
+                    tracer.error(e, {session: session.info, sessionCookie})
+                    throw e
+                } finally {
+                    tracer.info("cleanup")
+                    await session.release()
+                    if (hooks.cookieAuthorizerFinish) {
+                        await hooks.cookieAuthorizerFinish()
                     }
                 }
-                tracer.info("done", {...response})
-                return response
-            } catch (e: any) {
-                tracer.error(e, {session, sessionCookie})
-                throw e
-            } finally {
-                tracer.info("cleanup")
-                await session.release()
-                if (hooks.cookieAuthorizerFinish) {
-                    await hooks.cookieAuthorizerFinish()
-                }
             }
+            default:
+                return Unauthorized
         }
-        default:
-            return Unauthorized
+    } finally {
+        tracer.done()
     }
 }
 
@@ -138,11 +162,11 @@ export async function cookie(event: APIGatewayAuthorizerEvent): Promise<AuthResu
  * Handle authorization code grant callback. The callback is called by OIDC server after it verified user credentials.
  * The 'code' parameter contains one time code to get id, access and refresh tokens.
  */
-export async function code(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyStructuredResultV2> {
-    using tracer = authTracer.startSession("code", event)
+export async function code(event: APIGatewayProxyEventV2, context: Context): Promise<APIGatewayProxyStructuredResultV2> {
+    const tracer = authTracer.startSession("code", event)
 
     try {
-        const {SessionData, OidcTokens, env} = await startAuthOperation()
+        const {SessionData, OidcTokens, env} = await startAuthOperation(context.awsRequestId)
         //TODO support OAuth PKCE for better security
         const code = event.queryStringParameters?.['code'] ?? ""
         const callbackUrl = `https://${event.requestContext.domainName}${event.rawPath}`
@@ -178,11 +202,13 @@ export async function code(event: APIGatewayProxyEventV2): Promise<APIGatewayPro
     } catch (e) {
         tracer.error(e)
         throw e
+    } finally {
+        tracer.done()
     }
 }
 
 export const tokens = async function (event: APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>): Promise<APIGatewayProxyStructuredResultV2> {
-    using tracer = authTracer.startSession("tokens", event)
+    const tracer = authTracer.startSession("tokens", event)
 
     try {
         const authContext = event.requestContext.authorizer.lambda
@@ -208,5 +234,7 @@ export const tokens = async function (event: APIGatewayProxyEventV2WithLambdaAut
     } catch (e) {
         tracer.error(e)
         throw e
+    } finally {
+        tracer.done()
     }
 }

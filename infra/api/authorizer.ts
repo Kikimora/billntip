@@ -12,8 +12,11 @@ import {givePermission, makeTableAccess, makeUserPoolAccess} from "../permission
 const config = new pulumi.Config("aws")
 const region = config.get("region")
 
-const cacheTtl = tokenValidityInSeconds("accessToken") - 120;
-if (cacheTtl < 60) throw new Error("User Pool Client access token should last longer than 3 minutes")
+const accessTokenTtl = tokenValidityInSeconds("accessToken");
+const idTokenTtl = tokenValidityInSeconds("idToken");
+if (accessTokenTtl < 180 || idTokenTtl < 180) throw new Error("User Pool Client tokens should last longer than 3 minutes")
+//Cache tokens for almost entire lifetime
+const cacheTtl = accessTokenTtl - 10;
 const issuer = pulumi.interpolate`https://cognito-idp.${region}.amazonaws.com/${userPool.id}`
 const cognitoDomain = pulumi.interpolate`https://${userPoolDomain.domain}.auth.${region}.amazoncognito.com`
 
@@ -24,7 +27,8 @@ const env = {
     OAUTH_CLIENT_ID: userPoolClient.id, //user pool client id
     OAUTH_ISSUER: issuer,
     OAUTH_TOKEN_ENDPOINT: pulumi.interpolate`${cognitoDomain}/oauth2/token`,
-    POST_AUTH_REDIRECT_URL: apiUrl, //TODO figure out how to redirect to original page instead of a fixed page.
+    POST_AUTH_REDIRECT_URL: apiUrl,
+    AUTHORIZER_CACHE_TTL: String(cacheTtl)
 };
 export const cookieLambda = createLambda(
     LambdaHandler.AuthCookieHandler,
@@ -32,7 +36,6 @@ export const cookieLambda = createLambda(
     {},
     [makeTableAccess(sessionsTable), makeUserPoolAccess(userPool)])
 givePermission(cookieLambda, apiGateway)
-
 /**
  * Authorizer to use on API routes
  */
@@ -44,7 +47,7 @@ export const authorizer = new aws.apigatewayv2.Authorizer("cookie-authorizer", {
     authorizerUri: cookieLambda.function.invokeArn,
     authorizerPayloadFormatVersion: "2.0",
     identitySources: ["$request.header.Cookie"],
-    authorizerResultTtlInSeconds: cacheTtl
+    authorizerResultTtlInSeconds: cacheTtl,
 });
 
 //GET /auth/callback

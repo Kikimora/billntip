@@ -1,7 +1,7 @@
 {
   "name": "bill_and_tip",
   "devDependencies": {
-    "@dotenvx/dotenvx": "^0.14.1",
+    "@dotenvx/dotenvx": "^0.24.0",
     "@types/archiver": "^6.0.2",
     "@types/aws-lambda": "^8.10.131",
     "@types/cookie": "^0.6.0",
@@ -25,6 +25,7 @@
     "@aws-sdk/client-lambda": "^3.490.0",
     "@aws-sdk/client-ssm": "^3.490.0",
     "@aws-sdk/client-s3": "^3.525.0",
+    "@aws-sdk/client-api-gateway": "^3.525.0",
     "@aws-sdk/client-secrets-manager": "^3.515.0",
     "@aws-sdk/client-cloudwatch-logs": "^3.515.0",
     "@aws-sdk/util-dynamodb": "^3.496.0",
