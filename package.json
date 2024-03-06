@@ -50,7 +50,7 @@
     "aws-sso": "dotenvx run -- aws sso login",
     "compile": "npx tsc && cp .env $(npm run --silent out-dir)/.env",
     "test": "npx jest",
-    "infra": "pulumi --cwd ./infra up",
-    "build": "npx ts-node build.ts -- -b -u -p -s dev "
+    "deploy": "pulumi --cwd ./aws up",
+    "update": "npx ts-node build.ts -- -b -u -p -s dev "
   }
 }
