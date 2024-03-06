@@ -88,7 +88,7 @@ export class LambdaBuilder {
                 entryPoints: [await entryPoint(this.esBuildOptions.absWorkingDir ?? "./")],
                 bundle: true,
                 platform: "node",
-                outfile: outfile
+                outfile: outfile,
             })
         } catch (e) {
             console.error(`esbuild failed building ${module}`)
@@ -107,8 +107,11 @@ export class LambdaBuilder {
             });
         })
         bundleArchive.pipe(dstZip)
+
         await bundleArchive
-            .file(outfile, {name: `index.js`})
+            .file(outfile, {name: `function.js`})
+            .file(upath.joinSafe(__dirname, "init.mjs"), {name: `index.mjs`})
+            .file(`${outfile}.map`, {name: upath.basename(`${outfile}.map`)})
             .finalize()
         await zipTask
         return archive

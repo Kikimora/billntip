@@ -2,7 +2,6 @@ import * as aws from "@pulumi/aws";
 import {makeResourceId} from "../billntip-lambdas";
 import * as pulumi from "@pulumi/pulumi";
 import {Lambda} from "./lambda";
-import {diagnosticsParameterArn} from "./api/urls";
 
 export function givePermission(lambda: Lambda,
                                caller: aws.apigatewayv2.Api | aws.cognito.UserPool) {
@@ -25,10 +24,9 @@ export function givePermission(lambda: Lambda,
     }
 }
 
-export function makeTableAccess(table: aws.dynamodb.Table) {
-    return table.arn.apply(arn => (
-        {
-            name: 'DynamoDbAccess',
+export function makeDynamoDbAccess(...tables: aws.dynamodb.Table[]) {
+    return pulumi.all(tables.map(x => x.arn)).apply(resources => ({
+            name: `DynamoDbAccess`,
             policy: JSON.stringify({
                 Version: "2012-10-17",
                 Statement: [{
@@ -42,7 +40,7 @@ export function makeTableAccess(table: aws.dynamodb.Table) {
                         "dynamodb:UpdateItem",
                         "dynamodb:DescribeTable",
                     ],
-                    Resource: arn,
+                    Resource: resources,
                 }],
             })
         }
@@ -67,18 +65,3 @@ export function makeUserPoolAccess(userPool: aws.cognito.UserPool) {
     ))
 }
 
-export function makeDiagnosticsConfigAccess() {
-    return pulumi.Output.create(diagnosticsParameterArn.then(arn => ({
-        name: 'DiagnosticsConfigAccess',
-        policy: JSON.stringify({
-            Version: "2012-10-17",
-            Statement: [{
-                Effect: "Allow",
-                Action: [
-                    "ssm:GetParameter",
-                ],
-                Resource: arn
-            }],
-        })
-    })))
-}

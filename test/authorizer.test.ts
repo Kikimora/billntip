@@ -19,8 +19,8 @@ import {init as dynamoDbInit} from './dynamodb'
 const httpMock = http as jest.Mocked<typeof http>;
 const {default: httpReal} = jest.requireActual('../src/http');
 const SessionKey = 'JSESSIONID';
-const {tokenEndpoint, userPoolId, userPoolClientId, sessionTable, apiUrl} = prepareAuthorizerEnvironment();
-import {code, tokens, cookie, hooks} from "../src/authorizer";
+const {tokenEndpoint, userPoolId, userPoolClientId, sessionTable, locksTable, apiUrl} = prepareAuthorizerEnvironment();
+import {code, cookie, hooks} from "../src/authorizer";
 import {AxiosResponse} from "axios";
 import {useVariables} from "../src/authorizer/ctx";
 import {makeLockStore} from "../src/dynamodb";
@@ -225,7 +225,7 @@ describe('Lambda authorizer', () => {
         sessionId = await startSession();
         hooks.cookieAuthorizerStart = jest.fn().mockImplementation(async function () {
             //Verify session locked before business logic starts
-            const store = makeLockStore("Locks")
+            const store = makeLockStore(locksTable)
             const sessionLock = await store.load(sessionId)
             expect(sessionLock).toEqual(expect.objectContaining({
                 pk: sessionId,
@@ -360,39 +360,24 @@ describe('Lambda authorizer', () => {
 describe('Tokens endpoint', () => {
     it('returns tokens when called with valid session cookie', async () => {
         const sessionId = await startSession();
-        console.log(`curl -v -H 'Cookie: ${SessionKey}=${sessionId}' 'https://nyly887aja.execute-api.eu-south-1.amazonaws.com/dev/auth/tokens' | jq`)
-        // const response = await handler({
-        //     ...event,
-        //     ...{
-        //         pathParameters: {'resource': 'tokens'},
-        //         cookies: [`${SessionKey}=${sessionId}`],
-        //         requestContext: {
-        //             'authorizer': {'access_token': 'some token'}
-        //         }
-        //     }
-        // });
-        // expect(response).toEqual(expect.objectContaining({
-        //     statusCode: 200,
-        //     body: expect.toBeString()
-        // }))
-        // const body = JSON.parse(response.body!)
-        // expect(body).toEqual(expect.objectContaining({
-        //     access_token: expect.toBeString(),
-        //     id_token: expect.toBeString(),
-        //     expires_at: expect.toBeNumber()
-        // }))
-        // expect(body.expires_at).toBeGreaterThan(Date.now() / 1000)
-    })
+        const response = await httpReal.get(`${apiUrl}/auth/tokens`, {
+            headers: {'Cookie': `${SessionKey}=${sessionId}`},
+        })
+        console.log(response.data, response.headers)
+        expect(response.status).toBe(200)
+    }, 10000)
 
     it('returns 401 when called without session cookie', async () => {
-        const response = await http.get(`${apiUrl}/auth/tokens`)
+        const response = await httpReal.get(`${apiUrl}/auth/tokens`)
         expect(response.status).toBe(401)
-    })
+    }, 10000)
 
-    it('returns 401 when called with invalid session cookie', async () => {
-        const response = await http.get(`${apiUrl}/auth/tokens`, {headers: {[SessionKey]: "Invalid cookie"}})
-        expect(response.status).toBe(401)
-    })
+    it('returns 403 when called with invalid session cookie', async () => {
+        const response = await httpReal.get(`${apiUrl}/auth/tokens`, {
+            headers: {'Cookie': `${SessionKey}="Invalid session id"`},
+        })
+        expect(response.status).toBe(403)
+    }, 10000)
 })
 
 /**
@@ -401,12 +386,13 @@ describe('Tokens endpoint', () => {
 function prepareAuthorizerEnvironment() {
     const o = upath.join(__dirname, "..", "out", "outputs.json")
     const outputs = JSON.parse(fs.readFileSync(o).toString("utf-8"))
-    const {sessionTable, userPoolId, userPoolClientId, userPoolDomain, apiUrl} = outputs as any
+    const {sessionTable, locksTable, userPoolId, userPoolClientId, userPoolDomain, apiUrl} = outputs as any
     const tokenEndpoint = `https://${userPoolDomain}.auth.eu-south-1.amazoncognito.com/oauth2/token`;
     const oathIssuer = `https://cognito-idp.eu-south-1.amazonaws.com/${userPoolId}`;
     Object.assign(process.env, {
         COOKIE_NAME: SessionKey,
         SESSION_TABLE: sessionTable,
+        LOCKS_TABLE: locksTable,
         USER_POOL_ID: userPoolId,
         OAUTH_CLIENT_ID: userPoolClientId, //user pool client id
         OAUTH_ISSUER: oathIssuer,
@@ -415,7 +401,7 @@ function prepareAuthorizerEnvironment() {
         AWS_REGION: "eu-south-1",
         AUTHORIZER_CACHE_TTL: 120
     })
-    return {tokenEndpoint, userPoolId, userPoolClientId, oathIssuer, sessionTable, apiUrl};
+    return {tokenEndpoint, userPoolId, userPoolClientId, oathIssuer, sessionTable, locksTable, apiUrl};
 }
 
 /**

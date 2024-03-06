@@ -1,14 +1,9 @@
 import {apiGateway} from "./api-gateway";
 import * as aws from "@pulumi/aws";
-import {apiUrl, diagnosticsParameterPath} from "./urls";
+import {apiUrl} from "./urls";
 import {apiRoute} from "./api-impl";
 import {callbackRoute} from "./authorizer";
 import * as pulumi from "@pulumi/pulumi";
-
-export const diagnosticsParameter = new aws.ssm.Parameter("api-diagnostics", {
-    type: "StringList",
-    name: diagnosticsParameterPath
-})
 
 const deployment = new aws.apigatewayv2.Deployment(
     "api-deployment",

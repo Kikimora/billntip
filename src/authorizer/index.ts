@@ -5,8 +5,8 @@ import {
     APIGatewayProxyStructuredResultV2, APIGatewayProxyEventV2WithLambdaAuthorizer, Context
 } from "aws-lambda";
 import {accessTokenVerifier, idTokenVerifier, startAuthOperation} from "./module";
-import {AuthorizerContext} from "./ctx";
-import {Tracer} from '../diagnostics'
+import {AuthorizerContext, Metrics} from "./ctx";
+import {configure, Tracer} from '../diagnostics'
 
 const Unauthorized = {isAuthorized: false, context: {}}
 const BadRequest = {statusCode: 400, body: JSON.stringify({'error': 'Invalid request parameters.'})}
@@ -19,6 +19,11 @@ type AuthorizerHooks = {
     cookieAuthorizerFinish?: () => Promise<void>,
 }
 export const hooks: AuthorizerHooks = {}
+configure({
+    triggers: {
+        info: true, error: true, warn: true, request: true
+    }
+})
 const authTracer = new Tracer("auth")
 
 // noinspection JSUnusedGlobalSymbols
@@ -137,11 +142,10 @@ export async function cookie(event: APIGatewayAuthorizerEvent, context: Context)
                             }
                         }
                     }
-                    tracer.info("done", {...response})
+                    tracer.info("done", {session: session.info, sessionCookie})
                     return response
                 } catch (e: any) {
-                    tracer.error(e, {session: session.info, sessionCookie})
-                    throw e
+                    throw tracer.addContext(e, {session: session.info, sessionCookie})
                 } finally {
                     tracer.info("cleanup")
                     await session.release()
@@ -153,6 +157,9 @@ export async function cookie(event: APIGatewayAuthorizerEvent, context: Context)
             default:
                 return Unauthorized
         }
+    } catch (e: any) {
+        tracer.error(e)
+        throw e
     } finally {
         tracer.done()
     }
@@ -207,9 +214,9 @@ export async function code(event: APIGatewayProxyEventV2, context: Context): Pro
     }
 }
 
-export const tokens = async function (event: APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>): Promise<APIGatewayProxyStructuredResultV2> {
+export const tokens = async function (event: APIGatewayProxyEventV2WithLambdaAuthorizer<AuthorizerContext>, context: Context): Promise<APIGatewayProxyStructuredResultV2> {
     const tracer = authTracer.startSession("tokens", event)
-
+    Metrics.setDimensions({functionVersion: context.functionVersion})
     try {
         const authContext = event.requestContext.authorizer.lambda
         if (authContext == null) {
@@ -219,10 +226,12 @@ export const tokens = async function (event: APIGatewayProxyEventV2WithLambdaAut
                 body: ""
             }
         }
+        const start = performance.now()
         await Promise.all([
             idTokenVerifier.verify(authContext.id_token),
             accessTokenVerifier.verify(authContext.access_token)
         ])
+        Metrics.tokenVerificationLatency(performance.now() - start)
         return {
             statusCode: 200,
             body: JSON.stringify({

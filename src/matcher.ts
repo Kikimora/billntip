@@ -30,6 +30,7 @@ function isPrimitiveMatcher(value: any): value is PrimitiveMatcher {
 }
 
 function isOperatorMatcher(value: any): value is Matcher {
+    if (typeof value !== "object" || value == null) return false
     const keys = Object.keys(value)
     const knownMatcher = keys.length == 1 && MatcherKeys.indexOf(keys[0]) >= 0
     if (!knownMatcher) return false

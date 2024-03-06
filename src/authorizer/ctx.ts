@@ -3,13 +3,18 @@ import _ from "lodash";
 import {LRUCache} from "lru-cache";
 import {describeUserPoolClient} from "../cognito";
 import {toSeconds} from "../../test/util";
-import {Tracer} from "../diagnostics";
+import {EMF, Tracer} from "../diagnostics";
 
 export const AuthTracer = new Tracer("authorizer")
+export const Metrics = EMF.namespace("auhtorizer")
+    .dimensions("functionVersion")
+    .metric("tokenVerificationLatency", {units: "Milliseconds"})
+    .build()
 
 export const AuthModuleEnvSchema = z.object({
     cookieName: z.string().min(1).readonly(),
     sessionTable: z.string().min(1).readonly(),
+    locksTable: z.string().min(1).readonly(),
 
     clientId: z.string().min(1).readonly(),
     userPoolId: z.string().min(1).readonly(),
@@ -65,6 +70,7 @@ export type AuthorizerContext = {
 export const Env: AuthModuleEnv = AuthModuleEnvSchema.parse({
     cookieName: process.env.COOKIE_NAME ?? 'JSESSIONID',
     sessionTable: process.env.SESSION_TABLE ?? 'sessions',
+    locksTable: process.env.LOCKS_TABLE ?? 'locks',
     userPoolId: process.env.USER_POOL_ID,
     clientId: process.env.OAUTH_CLIENT_ID, //user pool client id
     issuer: process.env.OAUTH_ISSUER,

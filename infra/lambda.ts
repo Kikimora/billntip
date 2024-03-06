@@ -7,10 +7,8 @@ import {LambdaHandler, makeLambdaNamer, makeResourceId, unpack} from "../billnti
 import {LambdaBuilder} from "../lambdas";
 import _ from "../util";
 import RoleInlinePolicy = iam.RoleInlinePolicy;
-import {makeDiagnosticsConfigAccess} from "./permissions";
-import {diagnosticsParameter} from "./api";
 
-export type LambdaEnvironment = pulumi.Input<{ [key: string]: pulumi.Input<string> }>
+export type LambdaEnvironment = Record<string, string | pulumi.Output<string>>
 
 export const makeLambdaName = makeLambdaNamer(pulumi.getStack())
 
@@ -19,6 +17,7 @@ const builder = new LambdaBuilder({
     esBuildOptions: {
         absWorkingDir: path.resolve("../src"),
         tsconfig: "../tsconfig.json",
+        sourcemap: true
     },
     lambdaName: makeLambdaName
 })
@@ -39,7 +38,7 @@ export function createLambda(lambdaHandler: LambdaHandler,
     const {module, handler} = unpack(lambdaHandler)
     const id = makeResourceId(lambdaHandler)
     permissions = permissions ?? []
-    permissions.push(makeDiagnosticsConfigAccess())
+    //permissions.push(makeDiagnosticsConfigAccess())
     const role = createLambdaRole(`${id}-role`, permissions);
     args = _.defaults(args, defaultLambdaArguments);
 
@@ -78,7 +77,8 @@ function createLambdaRole(name: string, settings: iam.RoleInlinePolicy[] | undef
 function createLambdaEnvironment(env: LambdaEnvironment) {
     return {
         variables: {
-            ...env
+            ...env,
+            NODE_OPTIONS: '--enable-source-maps'
         }
     };
 }

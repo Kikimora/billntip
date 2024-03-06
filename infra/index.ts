@@ -8,15 +8,15 @@ import * as pulumi from "@pulumi/pulumi";
 dotenv.config();
 
 import {userPool, userPoolClient, userPoolDomain as upd} from "./cognito";
-import {dataTable as dt, sessionsTable} from "./dynamodb";
-import {apiGateway, apiUrl, diagnosticsParameter as diagParam} from "./api";
+import {dataTable as dt, sessionsTable, locksTable as lt} from "./dynamodb";
+import {apiGateway, apiUrl} from "./api";
 import {bucket} from "./s3";
 
 // Outputs
 export {apiUrl}
 export const apiId = apiGateway.id
-export const diagnosticsParameter = diagParam.arn
 export const dataTable = dt.name
+export const locksTable = lt.name
 export const sessionTable = sessionsTable.name
 export const userPoolId = userPool.id
 export const userPoolDomain = upd.domain

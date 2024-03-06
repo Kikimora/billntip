@@ -87,7 +87,6 @@ export default class OidcTokens {
             headers: {'Content-Type': 'application/x-www-form-urlencoded'}
         };
         const response = await http.post(Env.tokenEndpoint, params, config)
-        console.log(params, Env.tokenEndpoint, response.status, response.data)
         switch (response.status) {
             case 200:
                 // TODO should I verify returned tokens given that they come from a trusted location?

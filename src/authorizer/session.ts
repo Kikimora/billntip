@@ -7,9 +7,9 @@ import SessionCookie from "./cookie";
 import {D, deleteCommand, getCommand, LockHandle, makeLockStore, putCommand, table, updateCommand} from "../dynamodb";
 
 const dynamoDb = new DynamoDB({region: Env.region})
-const tracer = AuthTracer.withScope("session-data")
+const tracer = AuthTracer.withScope("session")
 //TODO create table in infra and pass it name in env variable.
-const store = makeLockStore("Locks", {dynamoDb})
+const store = makeLockStore(Env.locksTable, {dynamoDb})
 
 export const Sessions = table(Env.sessionTable,
     {session_id: D.String} as const,

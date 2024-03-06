@@ -5,14 +5,17 @@ import {apiGateway} from "./api-gateway";
 import {authorizer} from "./authorizer";
 import {LambdaHandler} from "../../billntip-lambdas";
 import {createLambda} from "../lambda";
-import {givePermission, makeTableAccess} from "../permissions";
+import {givePermission, makeDynamoDbAccess} from "../permissions";
 import {dataTable} from "../dynamodb";
 
 const apiServiceLambda = createLambda(
     LambdaHandler.ApiHandler,
     {},
-    {},
-    [makeTableAccess(dataTable)]);
+    {
+        timeout: 5,
+        memorySize: 512
+    },
+    [makeDynamoDbAccess(dataTable)]);
 givePermission(apiServiceLambda, apiGateway)
 const integration = new aws.apigatewayv2.Integration("api-service-integration", {
     apiId: apiGateway.id,

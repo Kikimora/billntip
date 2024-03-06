@@ -27,3 +27,12 @@ export const sessionsTable = new aws.dynamodb.Table('sessions', {
     billingMode: 'PAY_PER_REQUEST',
     ttl: {attributeName: 'session_expires_at', enabled: true}
 });
+
+export const locksTable = new aws.dynamodb.Table('locks', {
+    attributes: [
+        {name: 'pk', type: 'S'},
+    ],
+    hashKey: 'pk',
+    billingMode: 'PAY_PER_REQUEST',
+    ttl: {attributeName: 'ttl', enabled: true}
+});

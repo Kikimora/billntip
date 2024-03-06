@@ -13,6 +13,7 @@ const getBuilder = _.memoize(function (stack: string) {
         esBuildOptions: {
             absWorkingDir: path.resolve("./src"),
             tsconfig: "../tsconfig.json",
+            sourcemap: true
         },
         lambdaName: makeLambdaNamer(stack)
     })

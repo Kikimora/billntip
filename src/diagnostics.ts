@@ -5,7 +5,6 @@ import {Context, APIGatewayProxyEvent} from "aws-lambda"
 import _ from "lodash";
 import {CompiledSchema, compileSchema, Schema} from "./matcher";
 
-
 type TraceAttributes = { [k: string]: Serializable | undefined | null }
 
 /**
@@ -208,7 +207,9 @@ export class EMF<Metrics extends string = never, Dimensions extends string = nev
         const dimensions: EMFDimensionsReporter<Dimensions> = {
             setDimensions(dimensions: DimensionValues): void {
                 if (dimensionValues !== undefined && !_.isEqual(dimensionValues, dimensions)) {
-                    EMFTracer.warn("Dimensions has changed, reporting metrics prematurely")
+                    EMFTracer.warn("Dimensions has changed, reporting metrics prematurely", {
+                        old: dimensions, new: dimensionValues
+                    })
                     reportMetrics("dimensions changed")
                 }
                 dimensionValues = dimensions
@@ -224,7 +225,7 @@ export class EMF<Metrics extends string = never, Dimensions extends string = nev
         const onShutdown = function () {
             reportMetrics("SIGTERM - Runtime shutdown")
         }
-        runtime.on('shutdown', onShutdown)
+        process.on('SIGTERM', onShutdown)
 
         const interval = setInterval(() => {
             reportMetrics("1 min timer")
@@ -232,7 +233,7 @@ export class EMF<Metrics extends string = never, Dimensions extends string = nev
 
         function stop() {
             clearInterval(interval)
-            runtime.off('shutdown', onShutdown)
+            process.off('SIGTERM', onShutdown)
         }
 
         function reportMetrics(reason: string = "manual") {
@@ -640,7 +641,8 @@ export function withErrorContext(e: any, name: string, value?: TraceAttributes):
 }
 
 /**
- * Provides methods to trace program execution. Depending on configuration traces may be ignored, logged immediately or
+ * # Tracing
+ * Tracer provides methods to trace program execution. Depending on configuration traces may be ignored, logged immediately or
  * logged only of an important event happens (such as an error or a timeout).
  *
  * Usually tracers write to CloudWatch during function init and switched to accumulating mode with a call to {@link startSession}
@@ -671,7 +673,18 @@ export function withErrorContext(e: any, name: string, value?: TraceAttributes):
  *     <li>message - JSON object produced by this diagnostics library</li>
  * </ul>
  *
- *  @example - basic tracing setup, log events on error
+ * # Troubleshooting `startSession` and function timeouts
+ *
+ * 1. Make sure function does not run out of memory. Check CloudWatch logs, if it reports timeout and also
+ * `maxMemoryUsedMB` equal to `memorySizeMB` then your function run out of memory. When this happens runtime terminates
+ * without leaving a chance to write any logs. To get logs before OOM enable immediate mode with
+ * `configure({triggers:{request:true}})`. If you still don't see logs then function didn't produced any traces.
+ * 2. Wait 5 minutes until runtime terminates. `startSession` subscribes to SIGTERM, if it happens in the session
+ * scope then it logs everything accumulated till the timeout. To receive SIGTERM on runtime termination your function
+ * should register an internal Lambda extension. Lambda writes log like `{"time":"2024-03-06T00:19:48.681Z","type":"platform.extension","record":{"name":"NodeJS_SIGTERM","state":"Ready","events":[]}}`
+ * when it registers an internal extension.
+ *
+ * @example - basic tracing setup, log events on error
  * import {Tracer} from 'diagnostics'
  *
  * //Best practice: setup trigger to dump logs on important events. `error: true` is default.
@@ -865,12 +878,12 @@ class TracingSession extends Tracer {
         this.flushEvents = function () {
             sessionRecorder.flush()
         }
-        runtime.on('shutdown', this.flushEvents)
+        process.on('SIGTERM', this.flushEvents)
     }
 
     done() {
         RecorderStore.disable()
-        runtime.off('shutdown', this.flushEvents)
+        process.off('SIGTERM', this.flushEvents)
     }
 
     [Symbol.dispose]() {
@@ -938,5 +951,3 @@ let DefaultRecorder: EventRecorder
 const RecorderStore = new AsyncLocalStorage<EventRecorder>()
 configure({})
 const EMFTracer = new Tracer("EMF")
-//Import util after all definitions because it depends on Tracer
-import {runtime} from "./util";

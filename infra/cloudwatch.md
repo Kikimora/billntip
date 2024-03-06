@@ -67,7 +67,7 @@ as 10Kb, sending 44640 such documents per month would cost $0.22. The cost is sm
 done in an extensions. If we imagine a standalone service that batches calls from multiple services then using EMF is
 less beneficial because price directly proportional to traffic rather than to the number of API calls. If each service
 publishes 5 metrics then PutMetricData can batch up-to 200 sources without cost increase from $0.44, EMF would
-pay 200*0.22 ~ $44 USD in the same situation. 
+pay 200*0.22 ~ $44 USD in the same situation.
 
 Conclusions:
 
@@ -92,3 +92,10 @@ https://github.com/aws-samples/graceful-shutdown-with-aws-lambda/blob/main/nodej
 
 This is how SIGTERM can be enabled from inside running Lambda function
 https://github.com/bmoffatt/aws-lambda-go/blob/752114b59f86409c6aa12fe64e340ab78e09084b/lambda/sigterm.go#L14
+
+# Metrics pricing
+
+Each metric is a combination of a metric name and dimensions. Each metric cost 0.3 USD per month. AWS charge 1/720 of
+the monthly costs for the custom metrics for every hour in which least one data point was pushed to the custom metric (
+counting 30 * 24 = 720 hours in a month). The pricing page say the same in a hard to understand language "All custom
+metrics charges are prorated by the hour and metered only when you send metrics to CloudWatch".

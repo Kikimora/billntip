@@ -10,12 +10,6 @@ export const apiUrl = pulumi.interpolate`${registerApiDomain()}/${apiRootPath}`
 export const authRoot = "auth"
 export const cognitoCallback = `${authRoot}/cognito/idpresponse`
 
-const awsConfig = new pulumi.Config("aws")
-const region = awsConfig.get("region")
-export const diagnosticsParameterPath = `/billntip/${pulumi.getStack()}/diagnostics`
-export const diagnosticsParameterArn = aws.getCallerIdentity({}).then(caller =>
-    `arn:aws:ssm:${region}:${caller.accountId}:parameter${diagnosticsParameterPath}`);
-
 function registerApiDomain() {
     if (domain != null && domain != '') {
         const apiDomainUrl = `api.${domain}`;

@@ -97,12 +97,14 @@ There are two ways to run a TypeScript program
 2. Using a preprocessor such as `ts-node` (based on `tsc`) or `tsx` (based on `esbuild`) to convert TypeScript into JS
    on the fly. This happens almost every time you to run a TypeScript program:
     1. Running scripts with `tsx` or `ts-node`
-    2. Running IaaS like `pulumi up` or `cdk deploy`
+    2. Running IaaC like `pulumi up` or `cdk deploy`
     3. Running tests with `mocha`, `jest` or `vitest`
 
 What happens under the hood in the in second case is this. v16 `node` got `--loaders` flag which accept a module
 that would be called to convert input program into JS. Another way to tell node how to handle TypeScript is
 using `--import` flag.
+
+Another [issue](https://github.com/aws/aws-cdk/issues/21329) with CDK. 
 
 ## State of the art
 
@@ -114,13 +116,14 @@ To get ESM working with TypeScript you need following:
 
 Here is a list of problems I had:
 
-1. `Jest` uses `ts-node` (`ts-jest`) under the hood and won't load ESM modules no matter how hard I try.
+1. `Jest` uses custom loader `ts-jest` which won't load ESM modules no matter how hard I try.
 2. Mocha works with `ts-node` and `tsx`.
     * `ts-node` in ESM mode does not report module load time errors, it returns `ERROR: null`. This dramatically
       complicates debug.
     * `tsx` report errors but messes up source code lines, errors point to wrong location in a file.
 3. `vitest` is a champ, it just works. Unfortunately with `vitest` my IDE (`WebStorm`) won't report module load problem
    and just tell me 'no tests found'. I had to run `vitest` from command line to find out root cause.
+4. pulumi uses ancient `ts-node` which does not support ESM at all.
 
 ## Is it worth it?
 
@@ -161,4 +164,33 @@ export async function handler(event) {
         body: "OK!"
     }
 }
+```
+
+# But what if I want top-level await?
+
+Workaround above for top-level await is nice, but it has two downsides.
+
+1. It does not play well with provisioned concurrency. Lambda Init phase finish as soon as top level promises created.
+   Provisioned concurrency freeze runtime right after Init phase, meaning NodeJS runtime is frozen right after starting
+   async init. First request will trigger function and async init continuation negating some of the provisioned
+   concurrency benefit.
+2. Lambda function cannot handle runtime termination events (SIGTERM and SIGINT) unless they have an internal extension.
+   They can be registered only during Init phase. Because Init finishes as soon as promise created internal extension
+   registration fails with "Extension registration closed already" error.
+
+Top level await is a solution to both problems, however it is not easy to get it working because of the many issues with
+ESM described above.
+
+1. Compile all TypeScript into JS, bundle it as-is into a zip file (including dependencies) and upload. Downsides is
+   complex build process. node_modules likely be too large for Lambda and would require special handling using Lambda
+   Layers. Test code likely use modules with top-level-await which is problematic.
+2. Add ESM index.mjs as entry point like this
+```js
+import * as fn from "./function.js" 
+export * from "./function.js"
+//Use top level await feature to register extension and run async level init in Init phase.
+await Promise.all([
+   fn.__init !== undefined ? fn.__init : Promise.resolved(),
+   registerInternalExtension()    
+])
 ```

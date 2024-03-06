@@ -2,12 +2,12 @@ import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 
 import {tokenValidityInSeconds, userPool, userPoolClient, userPoolDomain} from "../cognito"
-import {sessionsTable} from "../dynamodb";
+import {locksTable, sessionsTable} from "../dynamodb";
 import {apiGateway} from "./api-gateway";
 import {apiUrl, authRoot, cognitoCallback} from "./urls";
 import {LambdaHandler} from "../../billntip-lambdas";
 import {createLambda} from "../lambda";
-import {givePermission, makeTableAccess, makeUserPoolAccess} from "../permissions";
+import {givePermission, makeDynamoDbAccess, makeUserPoolAccess} from "../permissions";
 
 const config = new pulumi.Config("aws")
 const region = config.get("region")
@@ -23,6 +23,7 @@ const cognitoDomain = pulumi.interpolate`https://${userPoolDomain.domain}.auth.$
 const env = {
     COOKIE_NAME: 'JSESSIONID',
     SESSION_TABLE: sessionsTable.name,
+    LOCKS_TABLE: locksTable.name,
     USER_POOL_ID: userPool.id,
     OAUTH_CLIENT_ID: userPoolClient.id, //user pool client id
     OAUTH_ISSUER: issuer,
@@ -33,8 +34,11 @@ const env = {
 export const cookieLambda = createLambda(
     LambdaHandler.AuthCookieHandler,
     env,
-    {},
-    [makeTableAccess(sessionsTable), makeUserPoolAccess(userPool)])
+    {
+        memorySize: 256,
+        timeout: 5
+    },
+    [makeDynamoDbAccess(locksTable, sessionsTable), makeUserPoolAccess(userPool)])
 givePermission(cookieLambda, apiGateway)
 /**
  * Authorizer to use on API routes
@@ -57,7 +61,7 @@ export const codeLambda = createLambda(
     {
         timeout: 10
     },
-    [makeTableAccess(sessionsTable), makeUserPoolAccess(userPool)])
+    [makeDynamoDbAccess(sessionsTable), makeUserPoolAccess(userPool)])
 givePermission(codeLambda, apiGateway)
 const authCodeIntegration = new aws.apigatewayv2.Integration("api-auth-code-integration", {
     apiId: apiGateway.id,
@@ -74,7 +78,7 @@ export const callbackRoute = new aws.apigatewayv2.Route("api-auth-code-route", {
 
 //GET /auth/tokens
 export const tokensLambda = createLambda(LambdaHandler.AuthTokensHandler, env, {
-    timeout: 1
+    timeout: 5
 })
 givePermission(tokensLambda, apiGateway)
 const authTokenIntegration = new aws.apigatewayv2.Integration("api-auth-tokens-integration", {
