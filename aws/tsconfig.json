@@ -1,4 +1,5 @@
 {
-  "extends": "../tsconfig.json",
-  "include": ["**/*.ts"]
+// this is needed until https://github.com/pulumi/pulumi/issues/3061 is resolved
+// IDK why but without this empty tsconfig.json 'paths' resolution does not work even with tsconfig-paths
+  "extends": "../tsconfig.json"
 }

@@ -1,18 +1,66 @@
-import * as _ from "lodash";
+import _ from "lodash";
+import fs from "fs";
 import * as esbuild from "esbuild";
-import * as path from "upath";
-import * as fs from "fs";
 import archiver from "archiver";
-import {LambdaClient, UpdateFunctionCodeCommand} from "@aws-sdk/client-lambda";
-import {BuildOptions} from "esbuild";
-import {LambdaHandler, unpack} from "./billntip-lambdas";
 import * as upath from "upath";
+import {LambdaClient, UpdateFunctionCodeCommand} from "@aws-sdk/client-lambda";
 
-type BundleMap = {
-    [key: string]: Promise<string>
+export type LambdaModule = { name: string, handlers: readonly string[] }
+export type Type<T extends LambdaModule> = { [key in T['handlers'][number]]: (...args: any[]) => Promise<any> }
+export type Lambda = { module: string, handler: string }
+
+// https://github.com/pulumi/pulumi/issues/4876
+// In November 2020, with the release of TypeScript 4.1, template strings became type-checkable thanks to the
+// introduction of template literal types.
+// Pulumi uses ts-node 7.0.1 which uses "typescript": "^2.8.3"
+// Solution is to override pulumi's
+export type LambdaHandler<T extends LambdaModule> = `${T['name']}.${T['handlers'][number]}`
+
+export type LambdaSet<T extends `${string}.${string}`> = { [key in T]: Lambda }
+
+export function lambdaSet() {
+    return new LambdaSetBuilder()
 }
 
-const lambda = new LambdaClient();
+class LambdaSetBuilder<T extends `${string}.${string}` = never> {
+
+    private set: { [key: `${string}.${string}`]: Lambda } = {}
+
+    add<Module extends LambdaModule>(module: Module): LambdaSetBuilder<T | LambdaHandler<Module>> {
+        for (let handler of module.handlers) {
+            this.set[`${module.name}.${handler}`] = {module: module.name, handler}
+        }
+        return this as any
+    }
+
+    /**
+     * Create set of lambda functions from the given modules.
+     */
+    build(): LambdaSet<T> {
+        return this.set as any
+    }
+}
+
+/**
+ * Pick lambda functions matching provided spec from the given lambda set.
+ * @param lambdas - lambda set
+ * @param spec - lambda spec, either of "all", "module.*" or "module.handler"
+ */
+export function pickLambdas(lambdas: LambdaSet<any>, spec: string) {
+    let [module, handler, ...rest] = spec.split('.')
+    if (rest.length > 0) throw new Error(`Unexpected lambda specification ${spec}`)
+
+    if (spec in lambdas) {
+        return [lambdas[spec]]
+    } else {
+        return Object.values(lambdas).filter(function (lambda: Lambda) {
+            return (module == "*" || lambda.module == module) && (handler == "*" || lambda.handler == handler)
+        })
+    }
+
+}
+
+const lambdaClient = new LambdaClient();
 
 export interface LambdaBuilderOptions {
     /**
@@ -26,7 +74,7 @@ export interface LambdaBuilderOptions {
     /**
      * ESBuild options
      */
-    readonly esBuildOptions?: BuildOptions
+    readonly esBuildOptions?: esbuild.BuildOptions
     /**
      * ESBuild bundles code into `${outDir}/${module}.${bundleSuffix}.js`. Defaults to 'bundle'.
      */
@@ -34,24 +82,25 @@ export interface LambdaBuilderOptions {
     /**
      * Function to build AWS Lambda name from module and handler.
      */
-    readonly lambdaName: (lambdaHandler: LambdaHandler) => string
+    readonly lambdaName: (lambdaHandler: Lambda) => string
 }
 
-export class LambdaBuilder {
+export class Builder {
 
     public readonly outDir: string
     public readonly bundleSuffix: string;
 
     private readonly _buildTasks: BundleMap
-    private readonly esBuildOptions: BuildOptions
+    private readonly esBuildOptions: esbuild.BuildOptions
     private readonly _readArchive: (module: string) => Promise<Uint8Array>
-    private readonly _makeLambdaName: (lambdaHandler: LambdaHandler) => string
+
+    readonly lambdaName: (lambda: Lambda) => string
 
     constructor(opts: LambdaBuilderOptions) {
-        this.outDir = path.resolve(opts.outDir ?? "./out")
+        this.outDir = upath.resolve(opts.outDir ?? "./out")
         this.esBuildOptions = opts.esBuildOptions ?? {}
         this.bundleSuffix = opts.bundleSuffix ?? "bundle"
-        this._makeLambdaName = opts.lambdaName
+        this.lambdaName = opts.lambdaName
         this._buildTasks = {}
         this._readArchive = _.memoize(async (module: string) => {
             const archivePath = `${this.toArchiveName(module)}.zip`
@@ -138,18 +187,24 @@ export class LambdaBuilder {
     /**
      * Update AWS Lambda function.
      */
-    public async update(lambdaHandler: LambdaHandler, publish: boolean = true) {
-        const {module} = unpack(lambdaHandler)
+    public async update(lambda: Lambda, publish: boolean = true) {
+        const {module} = lambda
         const zip = await this._readArchive(module)
         const update = new UpdateFunctionCodeCommand({
-            FunctionName: this._makeLambdaName(lambdaHandler),
+            FunctionName: this.lambdaName(lambda),
             ZipFile: zip,
             Publish: publish
         })
-        return await lambda.send(update)
+        return await lambdaClient.send(update)
     }
 
     private toArchiveName(module: string) {
-        return path.join(this.outDir, `${module}.${this.bundleSuffix}.js`)
+        return upath.joinSafe(this.outDir, `${module}.${this.bundleSuffix}.js`)
     }
 }
+
+type BundleMap = {
+    [key: string]: Promise<string>
+}
+
+

@@ -1,22 +1,23 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import {createLambda, givePermission, LambdaHandler, makeDynamoDbAccess, makeUserPoolAccess} from "../../../lambda";
-import {gateway} from "../../gateway";
-import {AuthEnv, pool, sessionsTable} from "../../env";
+import * as gateway from "../../gateway";
+import {Lambdas} from "@aws/lambdas";
+import {environment, authOperation} from "../settings";
+import {newLambda} from "@aws/util";
 
-const codeLambda = createLambda(
-    LambdaHandler.AuthCodeHandler,
-    AuthEnv,
-    {
+const codeLambda = newLambda(Lambdas['authorizer.code'])
+    .args({
+        environment,
         timeout: 10
-    },
-    [makeDynamoDbAccess(sessionsTable.arn), makeUserPoolAccess(pool.arn)])
-givePermission(codeLambda, gateway)
+    })
+    .inlinePolicy(...authOperation)
+    .grantInvoke(gateway)
+    .build()
 
 const authCodeIntegration = new aws.apigatewayv2.Integration("api-auth-code-integration", {
     apiId: gateway.id,
     integrationType: "AWS_PROXY", // AWS_PROXY for Lambda function integration
-    integrationUri: codeLambda.function.arn,
+    integrationUri: codeLambda.arn,
     payloadFormatVersion: "2.0"
 });
 

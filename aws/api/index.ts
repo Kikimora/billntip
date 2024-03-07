@@ -1,12 +1,10 @@
 import * as aws from "@pulumi/aws";
-import {gateway} from "./gateway";
+import * as gateway from "./gateway";
 import {callbackRoute} from "./auth"
 import {apiRoute} from "./$default"
 
-export {gateway};
-// export * from "./auth"
-// export * from "./$default"
-// export * from "./authorizer"
+export * as authorizer from "./authorizer"
+export * as gateway from "./gateway"
 
 const deployment = new aws.apigatewayv2.Deployment(
     "api-deployment",

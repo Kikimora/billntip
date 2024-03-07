@@ -1,8 +1,9 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import {gateway} from "../api";
-import {createLambda, LambdaHandler, givePermission} from "../lambda";
+import * as gateway from "@aws/api/gateway";
 import {tokenValidity} from "./settings";
+import {Lambdas} from "@aws/lambdas";
+import {grantInvoke, newLambda} from "@aws/util";
 
 const config = new pulumi.Config();
 
@@ -38,7 +39,7 @@ const smsSenderRole = new aws.iam.Role('users-sms-sender-role', {
     ]
 })
 
-const preSignup = createLambda(LambdaHandler.UsersPreSignupHandler, {}, {})
+const preSignup = newLambda(Lambdas['users.preSignup']).build()
 
 export const userPool = new aws.cognito.UserPool('users', {
     autoVerifiedAttributes: ['email', 'phone_number'],
@@ -49,7 +50,7 @@ export const userPool = new aws.cognito.UserPool('users', {
         //    lambdaArn: "arn:of:your:lambda:function",
         //    lambdaVersion: "V1_0",
         // },
-        preSignUp: preSignup.function.arn
+        preSignUp: preSignup.arn
     },
     // Define password policy
     passwordPolicy: {
@@ -187,7 +188,6 @@ export const userPoolClient = new aws.cognito.UserPoolClient("users-api-client",
 
 }, {ignoreChanges: ['callbackUrls']});
 
-
 export const pool = {
     type: "userpool",
     id: userPool.id,
@@ -195,7 +195,7 @@ export const pool = {
     principal: "cognito-idp.amazonaws.com",
     sourceArn: userPool.arn,
 }
-givePermission(preSignup, pool)
+grantInvoke(preSignup, pool)
 
 // Create an email identity for SES
 new aws.ses.EmailIdentity('users-hello-email-identity', {

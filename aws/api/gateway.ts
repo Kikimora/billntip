@@ -8,7 +8,6 @@ const apiGw = new aws.apigatewayv2.Api('api', {
 
 const config = new pulumi.Config();
 const domain = config.get('domain');
-
 const apiRootPath = `${pulumi.getStack() == "prod" ? "" : pulumi.getStack()}`
 
 function registerApiDomain() {
@@ -41,11 +40,9 @@ function registerApiDomain() {
     }
 }
 
-export const gateway = {
-    type: "gateway",
-    id: apiGw.id,
-    url: pulumi.interpolate`${registerApiDomain()}/${apiRootPath}`,
-    authCallback: `auth/cognito/idpresponse`,
-    principal: "apigateway.amazonaws.com",
-    sourceArn: pulumi.interpolate`${apiGw.executionArn}/*/*`
-}
+export const type = "gateway"
+export const {id} = apiGw
+export const url = pulumi.interpolate`${registerApiDomain()}/${apiRootPath}`
+export const authCallback = `auth/cognito/idpresponse`
+export const principal = "apigateway.amazonaws.com"
+export const sourceArn = pulumi.interpolate`${apiGw.executionArn}/*/*`

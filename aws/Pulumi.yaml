@@ -1,7 +1,0 @@
-name: BillAndTip
-runtime: nodejs
-description: Bill & Tip API
-config:
-  aws:region: eu-south-1
-  domain: billntip.com
-  cognito-sms-external-id: 304cabc9-d2c9-4f58-9a76-be68a7570eb5

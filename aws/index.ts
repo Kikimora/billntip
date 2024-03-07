@@ -1,5 +1,4 @@
 // noinspection JSUnusedGlobalSymbols
-
 import * as dotenv from "dotenv";
 import * as upath from "upath";
 import * as fs from "fs";

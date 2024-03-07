@@ -16,8 +16,6 @@ declare module "lodash" {
         defaults<TObject>(object: TObject): NonNullable<TObject>;
 
         defaults(object: any, ...sources: any[]): any;
-
-
     }
 }
 

@@ -1,23 +1,24 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import {createLambda, LambdaHandler, givePermission, makeDynamoDbAccess} from "../../lambda";
-import {authorizer} from "../authorizer";
-import {dataTable} from "../env";
-import {gateway} from "../gateway";
+import {newLambda} from "@aws/util";
+import * as authorizer from "../authorizer";
+import * as gateway from "../gateway";
+import {allowDynamoDb, Lambdas} from "@aws/lambdas";
+import {dataTable} from "@aws/dynamodb";
 
-const apiServiceLambda = createLambda(
-    LambdaHandler.ApiHandler,
-    {},
-    {
+const apiServiceLambda = newLambda(Lambdas['api.handler'])
+    .args({
         timeout: 5,
         memorySize: 512
-    },
-    [makeDynamoDbAccess(dataTable.arn)]);
-givePermission(apiServiceLambda, gateway)
+    })
+    .inlinePolicy(allowDynamoDb.on(dataTable).build())
+    .grantInvoke(gateway)
+    .build()
+
 const integration = new aws.apigatewayv2.Integration("api-service-integration", {
     apiId: gateway.id,
     integrationType: "AWS_PROXY", // AWS_PROXY for Lambda function integration
-    integrationUri: apiServiceLambda.function.arn,
+    integrationUri: apiServiceLambda.arn,
     requestParameters: {
         "overwrite:header.Set-Cookie": "$context.authorizer.new_cookie",
         //Operations on Authorization header restricted by AWS API.
