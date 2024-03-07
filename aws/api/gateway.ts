@@ -1,14 +1,15 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import {apiGateway} from "./api-gateway";
+
+const apiGw = new aws.apigatewayv2.Api('api', {
+    protocolType: "HTTP", // HTTP APIs are quicker and cheaper than REST APIs
+    routeSelectionExpression: "${request.method} ${request.path}",
+});
 
 const config = new pulumi.Config();
 const domain = config.get('domain');
 
 const apiRootPath = `${pulumi.getStack() == "prod" ? "" : pulumi.getStack()}`
-export const apiUrl = pulumi.interpolate`${registerApiDomain()}/${apiRootPath}`
-export const authRoot = "auth"
-export const cognitoCallback = `${authRoot}/cognito/idpresponse`
 
 function registerApiDomain() {
     if (domain != null && domain != '') {
@@ -30,12 +31,21 @@ function registerApiDomain() {
 
         });
         new aws.apigatewayv2.ApiMapping("api-domain-mapping", {
-            apiId: apiGateway.id,
+            apiId: apiGw.id,
             stage: "$default",
             domainName: apiDomain.domainName,
         });
         return `https://${apiDomainUrl}`
     } else {
-        return pulumi.interpolate`${apiGateway.apiEndpoint}`
+        return pulumi.interpolate`${apiGw.apiEndpoint}`
     }
+}
+
+export const gateway = {
+    type: "gateway",
+    id: apiGw.id,
+    url: pulumi.interpolate`${registerApiDomain()}/${apiRootPath}`,
+    authCallback: `auth/cognito/idpresponse`,
+    principal: "apigateway.amazonaws.com",
+    sourceArn: pulumi.interpolate`${apiGw.executionArn}/*/*`
 }

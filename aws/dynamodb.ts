@@ -1,6 +1,6 @@
 import * as aws from "@pulumi/aws";
 
-export const dataTable = new aws.dynamodb.Table('data', {
+const data = new aws.dynamodb.Table('data', {
     attributes: [
         {name: 'pk', type: 'S'},
         {name: 'sk', type: 'S'}
@@ -10,7 +10,7 @@ export const dataTable = new aws.dynamodb.Table('data', {
     billingMode: 'PAY_PER_REQUEST',
 });
 
-export const sessionsTable = new aws.dynamodb.Table('sessions', {
+const sessions = new aws.dynamodb.Table('sessions', {
     // TODO set TTL for records in this table.
     attributes: [
         {name: 'session_id', type: 'S'},
@@ -28,7 +28,7 @@ export const sessionsTable = new aws.dynamodb.Table('sessions', {
     ttl: {attributeName: 'session_expires_at', enabled: true}
 });
 
-export const locksTable = new aws.dynamodb.Table('locks', {
+const locks = new aws.dynamodb.Table('locks', {
     attributes: [
         {name: 'pk', type: 'S'},
     ],
@@ -36,3 +36,16 @@ export const locksTable = new aws.dynamodb.Table('locks', {
     billingMode: 'PAY_PER_REQUEST',
     ttl: {attributeName: 'ttl', enabled: true}
 });
+
+export const dataTable = {
+    arn: data.arn,
+    name: data.name
+}
+export const sessionsTable = {
+    arn: sessions.arn,
+    name: sessions.name
+}
+export const locksTable = {
+    arn: locks.arn,
+    name: locks.name
+}

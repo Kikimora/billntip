@@ -1,12 +1,9 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-
-import {apiGateway} from "./api-gateway";
-import {authorizer} from "./authorizer";
-import {LambdaHandler} from "../../billntip-lambdas";
-import {createLambda} from "../lambda";
-import {givePermission, makeDynamoDbAccess} from "../permissions";
-import {dataTable} from "../dynamodb";
+import {createLambda, LambdaHandler, givePermission, makeDynamoDbAccess} from "../../lambda";
+import {authorizer} from "../authorizer";
+import {dataTable} from "../env";
+import {gateway} from "../gateway";
 
 const apiServiceLambda = createLambda(
     LambdaHandler.ApiHandler,
@@ -15,10 +12,10 @@ const apiServiceLambda = createLambda(
         timeout: 5,
         memorySize: 512
     },
-    [makeDynamoDbAccess(dataTable)]);
-givePermission(apiServiceLambda, apiGateway)
+    [makeDynamoDbAccess(dataTable.arn)]);
+givePermission(apiServiceLambda, gateway)
 const integration = new aws.apigatewayv2.Integration("api-service-integration", {
-    apiId: apiGateway.id,
+    apiId: gateway.id,
     integrationType: "AWS_PROXY", // AWS_PROXY for Lambda function integration
     integrationUri: apiServiceLambda.function.arn,
     requestParameters: {
@@ -30,7 +27,7 @@ const integration = new aws.apigatewayv2.Integration("api-service-integration", 
     payloadFormatVersion: "2.0"
 });
 export const apiRoute = new aws.apigatewayv2.Route("api-routing", {
-    apiId: apiGateway.id,
+    apiId: gateway.id,
     routeKey: "$default",
     target: pulumi.interpolate`integrations/${integration.id}`,
     authorizationType: "CUSTOM",

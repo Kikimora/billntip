@@ -19,14 +19,14 @@ import {init as dynamoDbInit} from './dynamodb'
 const httpMock = http as jest.Mocked<typeof http>;
 const {default: httpReal} = jest.requireActual('../src/http');
 const SessionKey = 'JSESSIONID';
-const {tokenEndpoint, userPoolId, userPoolClientId, sessionTable, locksTable, apiUrl} = prepareAuthorizerEnvironment();
+const {dynamodb, api, cognito, tokenEndpoint} = prepareAuthorizerEnvironment();
 import {code, cookie, hooks} from "../src/authorizer";
 import {AxiosResponse} from "axios";
 import {useVariables} from "../src/authorizer/ctx";
 import {makeLockStore} from "../src/dynamodb";
 import {configure} from "../src/diagnostics";
 
-const ddb = dynamoDbInit(sessionTable)
+const ddb = dynamoDbInit(dynamodb.sessionsTable.name)
 
 const event: APIGatewayProxyEventV2 = {
     routeKey: "",
@@ -104,7 +104,7 @@ const testContext: {
 } = {}
 
 beforeAll(async () => {
-    const testCognitoModule = await cognitoInit(userPoolId, userPoolClientId)
+    const testCognitoModule = await cognitoInit(cognito.pool.id, cognito.client.id)
     testContext.group = await testCognitoModule.loadTestGroup()
     testContext.user = await testContext.group.createUniqueUser()
     httpMock.post.mockImplementation(cognitoMock);
@@ -225,7 +225,7 @@ describe('Lambda authorizer', () => {
         sessionId = await startSession();
         hooks.cookieAuthorizerStart = jest.fn().mockImplementation(async function () {
             //Verify session locked before business logic starts
-            const store = makeLockStore(locksTable)
+            const store = makeLockStore(dynamodb.locksTable.name)
             const sessionLock = await store.load(sessionId)
             expect(sessionLock).toEqual(expect.objectContaining({
                 pk: sessionId,
@@ -360,7 +360,7 @@ describe('Lambda authorizer', () => {
 describe('Tokens endpoint', () => {
     it('returns tokens when called with valid session cookie', async () => {
         const sessionId = await startSession();
-        const response = await httpReal.get(`${apiUrl}/auth/tokens`, {
+        const response = await httpReal.get(`${api.gateway.url}/auth/tokens`, {
             headers: {'Cookie': `${SessionKey}=${sessionId}`},
         })
         console.log(response.data, response.headers)
@@ -368,12 +368,12 @@ describe('Tokens endpoint', () => {
     }, 10000)
 
     it('returns 401 when called without session cookie', async () => {
-        const response = await httpReal.get(`${apiUrl}/auth/tokens`)
+        const response = await httpReal.get(`${api.gateway.url}/auth/tokens`)
         expect(response.status).toBe(401)
     }, 10000)
 
     it('returns 403 when called with invalid session cookie', async () => {
-        const response = await httpReal.get(`${apiUrl}/auth/tokens`, {
+        const response = await httpReal.get(`${api.gateway.url}/auth/tokens`, {
             headers: {'Cookie': `${SessionKey}="Invalid session id"`},
         })
         expect(response.status).toBe(403)
@@ -386,22 +386,22 @@ describe('Tokens endpoint', () => {
 function prepareAuthorizerEnvironment() {
     const o = upath.join(__dirname, "..", "out", "outputs.json")
     const outputs = JSON.parse(fs.readFileSync(o).toString("utf-8"))
-    const {sessionTable, locksTable, userPoolId, userPoolClientId, userPoolDomain, apiUrl} = outputs as any
-    const tokenEndpoint = `https://${userPoolDomain}.auth.eu-south-1.amazoncognito.com/oauth2/token`;
-    const oathIssuer = `https://cognito-idp.eu-south-1.amazonaws.com/${userPoolId}`;
+    const {dynamodb, api, cognito, s3} = outputs as any
+    const tokenEndpoint = `https://${cognito.domain}.auth.eu-south-1.amazoncognito.com/oauth2/token`;
+    const oathIssuer = `https://cognito-idp.eu-south-1.amazonaws.com/${cognito.pool.id}`;
     Object.assign(process.env, {
         COOKIE_NAME: SessionKey,
-        SESSION_TABLE: sessionTable,
-        LOCKS_TABLE: locksTable,
-        USER_POOL_ID: userPoolId,
-        OAUTH_CLIENT_ID: userPoolClientId, //user pool client id
+        SESSION_TABLE: dynamodb.sessionsTable.name,
+        LOCKS_TABLE: dynamodb.locksTable.name,
+        USER_POOL_ID: cognito.pool.id,
+        OAUTH_CLIENT_ID: cognito.client.id, //user pool client id
         OAUTH_ISSUER: oathIssuer,
         OAUTH_TOKEN_ENDPOINT: tokenEndpoint,
         POST_AUTH_REDIRECT_URL: "https://localhost",
         AWS_REGION: "eu-south-1",
         AUTHORIZER_CACHE_TTL: 120
     })
-    return {tokenEndpoint, userPoolId, userPoolClientId, oathIssuer, sessionTable, locksTable, apiUrl};
+    return {dynamodb, api, cognito, s3, tokenEndpoint};
 }
 
 /**

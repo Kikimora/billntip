@@ -1,22 +1,25 @@
-import {apiGateway} from "./api-gateway";
 import * as aws from "@pulumi/aws";
-import {apiUrl} from "./urls";
-import {apiRoute} from "./api-impl";
-import {callbackRoute} from "./authorizer";
-import * as pulumi from "@pulumi/pulumi";
+import {gateway} from "./gateway";
+import {callbackRoute} from "./auth"
+import {apiRoute} from "./$default"
+
+export {gateway};
+// export * from "./auth"
+// export * from "./$default"
+// export * from "./authorizer"
 
 const deployment = new aws.apigatewayv2.Deployment(
     "api-deployment",
     {
-        apiId: apiGateway.id,
+        apiId: gateway.id,
     },
     {
         dependsOn: [apiRoute, callbackRoute]
     });
 
-export const stackStage = new aws.apigatewayv2.Stage("api-stage", {
-    apiId: apiGateway.id,
-    name: pulumi.getStack(),
+new aws.apigatewayv2.Stage("api-stage", {
+    apiId: gateway.id,
+    name: "dev",
     autoDeploy: true,
     // accessLogSettings: {
     //     destinationArn: "",
@@ -24,8 +27,8 @@ export const stackStage = new aws.apigatewayv2.Stage("api-stage", {
     // }
 });
 
-export const prodStage = new aws.apigatewayv2.Stage("api-default-stage", {
-    apiId: apiGateway.id,
+new aws.apigatewayv2.Stage("api-default-stage", {
+    apiId: gateway.id,
     name: "$default",
     deploymentId: deployment.id,
     autoDeploy: false,
@@ -35,4 +38,3 @@ export const prodStage = new aws.apigatewayv2.Stage("api-default-stage", {
     // }
 });
 
-export {apiUrl, apiGateway, deployment};

@@ -1,9 +1,8 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import {apiUrl, cognitoCallback} from "./api/urls";
-import {createLambda} from "./lambda";
-import {givePermission} from "./permissions";
-import {LambdaHandler} from "../billntip-lambdas";
+import {gateway} from "../api";
+import {createLambda, LambdaHandler, givePermission} from "../lambda";
+import {tokenValidity} from "./settings";
 
 const config = new pulumi.Config();
 
@@ -38,7 +37,8 @@ const smsSenderRole = new aws.iam.Role('users-sms-sender-role', {
         }
     ]
 })
-export const preSignup = createLambda(LambdaHandler.UsersPreSignupHandler, {}, {})
+
+const preSignup = createLambda(LambdaHandler.UsersPreSignupHandler, {}, {})
 
 export const userPool = new aws.cognito.UserPool('users', {
     autoVerifiedAttributes: ['email', 'phone_number'],
@@ -87,8 +87,6 @@ export const userPool = new aws.cognito.UserPool('users', {
     emailVerificationSubject: "Your verification code",
     smsVerificationMessage: "Your verification code is {####}.",
 })
-
-givePermission(preSignup, userPool)
 
 // Note - providerName and providerType must match - https://github.com/aws/aws-cli/issues/3179
 const facebookIdp = new aws.cognito.IdentityProvider("users-facebook-idp", {
@@ -164,17 +162,6 @@ export const userPoolDomain = new aws.cognito.UserPoolDomain("users-hosted-ui", 
     userPoolId: userPool.id,
 });
 
-const tokenValidity = {
-    accessTokenValidity: 3600,
-    refreshTokenValidity: 365,
-    idTokenValidity: 3600,
-    tokenValidityUnits: {
-        idToken: "seconds",
-        accessToken: "seconds",
-        refreshToken: "days"
-    }
-}
-
 export const userPoolClient = new aws.cognito.UserPoolClient("users-api-client", {
     userPoolId: userPool.id,
     allowedOauthFlows: ["code"],
@@ -186,7 +173,7 @@ export const userPoolClient = new aws.cognito.UserPoolClient("users-api-client",
     //Also client_credentials seem to require `generateSecret` which complicate admin login.
     //allowedOauthFlows: ["code", "client_credentials"],
     callbackUrls: [
-        pulumi.interpolate`${apiUrl}/${cognitoCallback}`,
+        pulumi.interpolate`${gateway.url}/${gateway.authCallback}`,
     ],
     allowedOauthFlowsUserPoolClient: true,
     explicitAuthFlows: ["ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"],
@@ -200,37 +187,17 @@ export const userPoolClient = new aws.cognito.UserPoolClient("users-api-client",
 
 }, {ignoreChanges: ['callbackUrls']});
 
+
+export const pool = {
+    type: "userpool",
+    id: userPool.id,
+    arn: userPool.arn,
+    principal: "cognito-idp.amazonaws.com",
+    sourceArn: userPool.arn,
+}
+givePermission(preSignup, pool)
+
 // Create an email identity for SES
 new aws.ses.EmailIdentity('users-hello-email-identity', {
     email: 'hello@billntip.com',
 });
-
-type TokenType = "accessToken" | "idToken" | 'refreshToken'
-
-export function tokenValidityInSeconds(token: TokenType) {
-    const tokenUnits = tokenValidity.tokenValidityUnits[token] ?? 'hours'
-    const tokenValue = (tokenValidity as any)[`${token}Validity`] as number
-    switch (tokenUnits) {
-        case 'seconds':
-            return tokenValue
-        case 'minutes':
-            return tokenValue * 60
-        case 'hours':
-            return tokenValue * 3600
-        case 'days':
-            return tokenValue * 3600 * 24
-        default:
-            throw new Error('Unexpected token units ' + tokenUnits)
-    }
-}
-
-/**
- * Use one pool with one client
- * Use one pool with two clients
- * Use two pools
- *
- * Cognito App Client
- *
- */
-
-

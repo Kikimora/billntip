@@ -8,6 +8,7 @@ import {LambdaBuilder} from "../lambdas";
 import _ from "../util";
 import RoleInlinePolicy = iam.RoleInlinePolicy;
 
+export {LambdaHandler}
 export type LambdaEnvironment = Record<string, string | pulumi.Output<string>>
 
 export const makeLambdaName = makeLambdaNamer(pulumi.getStack())
@@ -91,4 +92,60 @@ const defaultLambdaArguments = {
         logFormat: "JSON",
         systemLogLevel: pulumi.getStack() == "dev" ? "DEBUG" : "WARN"
     }
+}
+
+interface LambdaCaller {
+    principal: pulumi.Input<string>,
+    sourceArn: pulumi.Input<string>
+}
+
+export function givePermission(lambda: Lambda, caller: LambdaCaller) {
+    const id = makeResourceId(lambda.handler)
+    return new aws.lambda.Permission(`${id}-permissions`, {
+        action: "lambda:invokeFunction",
+        function: lambda.function.arn,
+        principal: caller.principal,
+        sourceArn: caller.sourceArn,
+    });
+}
+
+export function makeDynamoDbAccess(...tables: pulumi.Input<string>[]) {
+    return pulumi.all(tables).apply(arns => ({
+            name: `DynamoDbAccess`,
+            policy: JSON.stringify({
+                Version: "2012-10-17",
+                Statement: [{
+                    Effect: "Allow",
+                    Action: [
+                        "dynamodb:GetItem",
+                        "dynamodb:DeleteItem",
+                        "dynamodb:PutItem",
+                        "dynamodb:Scan",
+                        "dynamodb:Query",
+                        "dynamodb:UpdateItem",
+                        "dynamodb:DescribeTable",
+                    ],
+                    Resource: arns,
+                }],
+            })
+        }
+    ))
+}
+
+export function makeUserPoolAccess(...userPools: pulumi.Input<string>[]) {
+    return pulumi.all(userPools).apply(arns => (
+        {
+            name: 'UserPoolAccess',
+            policy: JSON.stringify({
+                Version: "2012-10-17",
+                Statement: [{
+                    Effect: "Allow",
+                    Action: [
+                        "cognito-idp:DescribeUserPoolClient",
+                    ],
+                    Resource: arns,
+                }],
+            })
+        }
+    ))
 }
