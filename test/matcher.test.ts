@@ -1,6 +1,6 @@
-import {Schema, compileSchema} from "../src/matcher";
+import {Schema, compileSchema} from "@app/diagnostics/matcher";
 
-const testSchema : Schema = {
+const testSchema: Schema = {
     primitives: {
         str: "test string",
         num: 1,
@@ -50,7 +50,7 @@ const testValue = {
 
 describe("matcher", () => {
     it("compiles schema", () => {
-        const fn = compileSchema(testSchema, true)
+        expect(function () { compileSchema(testSchema, true) }).not.toThrow()
     })
 
     it("returns true if object matches", () => {

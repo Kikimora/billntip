@@ -2,8 +2,8 @@ import {z} from "zod";
 import _ from "lodash";
 import {LRUCache} from "lru-cache";
 import {describeUserPoolClient} from "../cognito";
-import {toSeconds} from "../../test/util";
-import {EMF, Tracer} from "../diagnostics";
+import {toSeconds} from "@app/util";
+import {EMF, Tracer} from "@app/diagnostics";
 
 export const AuthTracer = new Tracer("authorizer")
 export const Metrics = EMF.namespace("auhtorizer")

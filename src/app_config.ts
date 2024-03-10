@@ -1,6 +1,6 @@
 import {S3} from "@aws-sdk/client-s3";
-import {configure, EMF, Tracer, TracingOptions} from "./diagnostics";
-import {repeat, retry} from "./util";
+import {configure, EMF, Tracer, TracingOptions} from "@app/diagnostics";
+import {repeat, retry} from "@app/util";
 
 export const MetricsNS = "Bill&Tip"
 

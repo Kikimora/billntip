@@ -1,4 +1,4 @@
-import {createLockStore, LockHandle, LockStore, makeLockStore} from "../../src/dynamodb/lock";
+import {createLockStore, LockHandle, LockStore, makeLockStore} from "@app/dynamodb/lock";
 
 beforeAll(async () => {
     try {

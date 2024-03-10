@@ -10,7 +10,7 @@ import {
     putCommand,
     getCommand,
     queryCommand, scanCommand, batchGet, batchWrite, deleteCommand, transactGet, transactWrite
-} from "../../src/dynamodb";
+} from "@app/dynamodb";
 
 const Table = table("sessions",
     {"session_id": D.String} as const,

@@ -1,5 +1,106 @@
 import _ from "lodash"
 
+import {Tracer} from "./diagnostics";
+import {v4} from "uuid";
+
+type TimeUnitsType  = "days" |  "hours" |  "minutes" |  "seconds"
+
+export function delay(timeout: number) {
+    return new Promise(function (resolve) {
+        setTimeout(resolve, timeout);
+    });
+}
+
+/**
+ * Poller options
+ */
+export interface PollerOptions {
+    /**
+     * Maximum number of iterations this poller allowed to perform.
+     */
+    maxIterations?: number,
+    /**
+     * Maximum time the poller allowed to run.
+     */
+    timeout?: number,
+    /**
+     * Delay between poller operations in milliseconds.
+     */
+    delay?: number | (() => number)
+    /**
+     * Poller operation name.
+     */
+    name?: string
+}
+
+export interface Just<V, Type extends string> {
+    type: Type
+    value: V
+}
+
+/**
+ * Retry operation several times until it either succeed, timeout or reaches maximum number of allowed attempts.
+ * @param action - operation to perform
+ * @param options - operation options.
+ */
+export async function retry<T>(action: () => Promise<T>, options: PollerOptions): Promise<T> {
+    let result!: T
+    await repeat(async function (done) {
+        result = await action();
+        done()
+    }, options)
+    return result;
+}
+
+type PollerFunction = (done: () => void) => Promise<any>
+
+/**
+ * Run operation in a loop until it signal completion, time out or reaches maximum number of allowed attempts.
+ * @param action - operation to perform
+ * @param options - operation options.
+ */
+export async function repeat(action: PollerFunction, options: PollerOptions): Promise<void> {
+    const name = options.name ?? (options.name = v4())
+    const tracer = utilTracer.withScope(`repeat.${name}`)
+    const maxIteration = options.maxIterations ?? -1
+    const timeout = options.timeout ?? -1
+    const delayMs = options.delay ?? 0
+    const deadline = options.timeout != null ? performance.now() + timeout : null
+    let iterations = 0;
+    let done = false;
+    let lastError: Error | undefined
+    do {
+        try {
+            await action(function () {
+                done = true;
+            })
+            if (done) return
+        } catch (e: any) {
+            lastError = e
+            const now = performance.now();
+            if (maxIteration >= 0 && iterations >= maxIteration ||
+                deadline != null && deadline > now) {
+                throw tracer.addContext(e, {options, iterations, now, deadline})
+            }
+        }
+
+        try {
+            iterations++
+            if (typeof delayMs == "number") {
+                await delay(delayMs)
+            } else {
+                const timeout = delayMs();
+                await delay(timeout)
+            }
+        } catch (e) {
+            const now = performance.now();
+            throw tracer.addContext(e, {options, iterations, deadline, now, lastError})
+        }
+    } while (true)
+}
+
+const utilTracer = new Tracer("util")
+
 //IDK why but without this pulumi fails to compile files using _.defaults
 //Other lodash methods compile just fine.
 declare module "lodash" {
@@ -21,14 +122,36 @@ declare module "lodash" {
 
 declare module 'lodash' {
     interface LoDashStatic {
-        throw(errorMessage: string, E?:{ new(m:string): Error ;}): never
+        throw(errorMessage: string, E?: { new(m: string): Error; }): never
     }
 }
 
 _.mixin({
-    'throw': function(errorMessage: string, E?:{ new(m:string): Error ;}): never {
+    'throw': function (errorMessage: string, E?: { new(m: string): Error; }): never {
         throw new (E ?? Error)(errorMessage);
     }
 })
 
 export default _
+
+
+export const nanoid = (t = 21) => {
+    const rnd = crypto.getRandomValues(new Uint8Array(t));
+    const newVar = (t: any, e: any) => t += (e &= 63) < 36 ? e.toString(36) : e < 62 ? (e - 26).toString(36).toUpperCase() : e > 62 ? "-" : "_";
+    return rnd.reduce(newVar, "");
+};
+
+export function toSeconds(value: number, units: TimeUnitsType) {
+    switch (units) {
+        case 'seconds':
+            return value
+        case 'minutes':
+            return value * 60
+        case 'hours':
+            return value * 3600
+        case 'days':
+            return value * 3600 * 24
+        default:
+            throw new Error('Unexpected token units ' + value)
+    }
+}

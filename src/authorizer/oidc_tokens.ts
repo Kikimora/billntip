@@ -4,7 +4,7 @@ import http from "../http";
 import {Env, useVariables} from "./ctx";
 import {CognitoJwtVerifier} from "aws-jwt-verify";
 import {CognitoAccessTokenPayload, CognitoIdTokenPayload} from "aws-jwt-verify/jwt-model";
-import {errorContext, withErrorContext} from "../diagnostics";
+import {errorContext, withErrorContext} from "@app/diagnostics";
 
 export const accessTokenVerifier = CognitoJwtVerifier.create({
     userPoolId: Env.userPoolId,

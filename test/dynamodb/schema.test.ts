@@ -3,7 +3,7 @@ import {
     D,
     attributeGenerator,
     SchemaType,
-} from "../../src/dynamodb/schema";
+} from "@app/dynamodb/schema";
 
 const SampleSchema = {
     numberArray: D.Array(D.Number),

@@ -4,7 +4,7 @@ import crypto from "crypto";
 import {Env, useVariables, AuthTracer} from "./ctx";
 import OidcTokens from "./oidc_tokens";
 import SessionCookie from "./cookie";
-import {D, deleteCommand, getCommand, LockHandle, makeLockStore, putCommand, table, updateCommand} from "../dynamodb";
+import {D, deleteCommand, getCommand, LockHandle, makeLockStore, putCommand, table, updateCommand} from "@app/dynamodb";
 
 const dynamoDb = new DynamoDB({region: Env.region})
 const tracer = AuthTracer.withScope("session")

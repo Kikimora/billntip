@@ -3,6 +3,7 @@
     "strict": true,
     "outDir": "out/build",
     "baseUrl": ".",
+    //Note - same path mapping should be in jest.config.js
     "paths": {
       "@aws/*": [
         "./aws/*"

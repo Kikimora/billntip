@@ -371,7 +371,7 @@ export interface TracingOptions {
          */
         error?: Schema | boolean
         /**
-         * Trigger running at the start of the request against an object of shape {[event]{@link APIGatewayProxyEvent}, [context]{@link Context}}. Default - false.
+         * Trigger running at the start of the request against an object of shape {[event]{@link APIGatewayProxyEvent}, [context]{@link ErrorContext}}. Default - false.
          */
         request?: Schema | boolean
     },
@@ -597,7 +597,7 @@ interface TracingSessionOptions extends TracingOptions {
     context?: Context
 }
 
-const Context = Symbol('error_context')
+export const ErrorContext = Symbol('error_context')
 
 /**
  * Adds error context to the error and returns it
@@ -617,7 +617,7 @@ const Context = Symbol('error_context')
  * @param value - initial error context value
  */
 export function errorContext(e: any, tag: string, value?: TraceAttributes): Record<string, Serializable> {
-    const contextStack = Context in e ? e[Context] : (e[Context] = [])
+    const contextStack = ErrorContext in e ? e[ErrorContext] : (e[ErrorContext] = [])
     const item = {tag: tag, ...value}
     contextStack.push(item)
     return item
@@ -845,7 +845,7 @@ export class Tracer {
                 level: 'error',
                 message: error.message,
                 error,
-                attributes: (error as any)[Context]?.toReversed()
+                attributes: (error as any)[ErrorContext]?.toReversed()
             })
         } else {
             this.recordEvent({tag: this.tag, level: 'error', message: JSON.stringify(error), attributes})

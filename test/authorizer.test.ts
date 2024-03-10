@@ -20,11 +20,11 @@ const httpMock = http as jest.Mocked<typeof http>;
 const {default: httpReal} = jest.requireActual('../src/http');
 const SessionKey = 'JSESSIONID';
 const {dynamodb, api, cognito, tokenEndpoint} = prepareAuthorizerEnvironment();
-import {code, cookie, hooks} from "../src/authorizer";
+import {code, cookie, hooks} from "@src/authorizer";
 import {AxiosResponse} from "axios";
-import {useVariables} from "../src/authorizer/ctx";
-import {makeLockStore} from "../src/dynamodb";
-import {configure} from "../src/diagnostics";
+import {useVariables} from "@src/authorizer/ctx";
+import {makeLockStore} from "@app/dynamodb";
+import {configure} from "@app/diagnostics";
 
 const ddb = dynamoDbInit(dynamodb.sessionsTable.name)
 

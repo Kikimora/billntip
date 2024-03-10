@@ -6,7 +6,7 @@ import {
 } from "aws-lambda";
 import {accessTokenVerifier, idTokenVerifier, startAuthOperation} from "./module";
 import {AuthorizerContext, Metrics} from "./ctx";
-import {configure, Tracer} from '../diagnostics'
+import {configure, Tracer} from '@app/diagnostics'
 
 const Unauthorized = {isAuthorized: false, context: {}}
 const BadRequest = {statusCode: 400, body: JSON.stringify({'error': 'Invalid request parameters.'})}

@@ -1,4 +1,4 @@
-import {configure, EMF, EventRecorder, Trace, Tracer} from "../src/diagnostics"
+import {configure, EMF, EventRecorder, Trace, Tracer} from "@app/diagnostics"
 
 let tracer: Tracer
 let recorder: EventRecorder
@@ -355,11 +355,15 @@ describe("EMF", () => {
     })
 
     it("reportMetrics throws if called without dimensions", () => {
-        metrics = metricsBuilder.build()
-        expect(function () {
-            metrics.latency(1)
-            metrics.reportMetrics()
-        }).toThrow()
+        const metrics = metricsBuilder.build()
+        try {
+            expect(function () {
+                metrics.latency(1)
+                metrics.reportMetrics()
+            }).toThrow()
+        } finally {
+            metrics.stop()
+        }
     })
 
     describe("metrics lookup", () => {

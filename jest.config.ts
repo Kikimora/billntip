@@ -7,4 +7,9 @@ module.exports = {
     transform: {
         '^.+\\.tsx?$': ['ts-jest', { diagnostics:true }]
     },
+    moduleNameMapper: {
+        '^@app/(.*)$': '<rootDir>/$1',
+        '^@aws/(.*)$': '<rootDir>/aws/$1',
+        '^@src/(.*)$': '<rootDir>/src/$1'
+    },
 };

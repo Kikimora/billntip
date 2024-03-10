@@ -2,9 +2,9 @@ import {ConditionalCheckFailedException, CreateTableCommand, DynamoDB} from "@aw
 import {unmarshall} from "@aws-sdk/util-dynamodb";
 import {D, Table, table} from "./schema";
 import {updateCommand} from "./update";
-import {Just, repeat, retry} from "../util";
+import {Just, repeat, retry} from "@app/util";
 import {deleteCommand} from "./delete";
-import {Tracer, withErrorContext} from "../diagnostics";
+import {Tracer, withErrorContext} from "@app/diagnostics";
 import {getCommand} from "./get";
 
 const tracer = new Tracer("dynamodb_locks")

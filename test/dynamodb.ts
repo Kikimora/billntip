@@ -1,7 +1,6 @@
 import {DynamoDBClient} from "@aws-sdk/client-dynamodb";
 import {unmarshall} from '@aws-sdk/util-dynamodb';
-import {D, getCommand, SchemaType, table, updateCommand} from "../src/dynamodb";
-import {TableSchema} from "../src/dynamodb/schema";
+import {D, TableSchema, getCommand, SchemaType, table, updateCommand} from "@app/dynamodb";
 
 const dynamodb = new DynamoDBClient()
 

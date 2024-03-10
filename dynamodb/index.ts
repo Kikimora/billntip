@@ -1,5 +1,5 @@
 
-export {D, SchemaType, table} from "./schema"
+export {D, SchemaType, table, TableSchema} from "./schema"
 
 export {get, getCommand} from "./get"
 export {transactGet} from "./transactGet"
