@@ -18,6 +18,13 @@ export const idTokenVerifier = CognitoJwtVerifier.create({
     clientId: Env.clientId,
 })
 
+export interface TokenEndpointResponse {
+    access_token: string
+    id_token: string
+    refresh_token: string
+    expires_in: number
+}
+
 /**
  * Open ID Connect (OIDC) tokens.
  */
@@ -38,7 +45,7 @@ export default class OidcTokens {
     }
 
     /**
-     * Verify id token using keys from OIDC provider key store.
+     * Verify id token using keys from OIDC provider key store. Prerequisite before calling {@link idTokenPayload}.
      */
     async verifyIdToken() {
         try {
@@ -57,7 +64,7 @@ export default class OidcTokens {
     }
 
     /**
-     * Verify access token using keys from OIDC provider key store.
+     * Verify access token using keys from OIDC provider key store. Prerequisite before calling {@link accessTokenPayload}.
      */
     async verifyAccessToken() {
         try {

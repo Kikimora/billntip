@@ -1,6 +1,6 @@
 import * as upath from "upath";
 import fs from 'fs'
-import {Builder, Lambda, lambdaSet} from "@app/lambda";
+import {Builder, Lambda, lambdaSet} from "@app/lambda/builder";
 import _ from "lodash";
 import * as pulumi from "@pulumi/pulumi";
 import {newLambda, newPolicy} from "@aws/util";

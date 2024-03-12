@@ -6,7 +6,7 @@ export const MetricsNS = "Bill&Tip"
 
 const metrics = EMF.namespace(MetricsNS)
     .dimensions("functionName", "functionVersion")
-    .build()
+    .startReporter()
 
 interface BillntipConfig {
     tracing: TracingOptions

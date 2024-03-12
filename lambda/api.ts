@@ -135,11 +135,11 @@ export class Pipeline<TEvent = Request> {
         return this as any as Pipeline<TNext & TEvent>
     }
 
-    done(handler: Handler<TEvent, lambda.APIGatewayProxyResultV2<object>>): Handler<Request> {
+    done(handler: Handler<TEvent, lambda.APIGatewayProxyResultV2<object>>): Handler {
         this.assertNotDone()
         this._done = true
         if (this.first === undefined) {
-            return handler as Handler<Request>
+            return handler as Handler<TEvent>
         }
         if (this.last !== undefined) {
             this.last.context.next = handler
@@ -202,8 +202,8 @@ export class Pipeline<TEvent = Request> {
  *  .handleErrors()
  *  .done(function (e) { throw new Error() })
  */
-export function pipeline() {
-    return new Pipeline()
+export function pipeline<T = Request>() {
+    return new Pipeline<T>()
 }
 
 interface JsonRequest {
@@ -281,7 +281,7 @@ Pipeline.prototype.withRoute = function () {
  */
 export function requireIAMAuth(this: Middleware<IAMAuthorizedRequest>, e: Request, ctx: Context) {
     if (!isIAMAuthorizedRequest(e)) {
-        throw new Error()
+        throw withErrorContext(new Error("IAM authorizer required for the event."), "requireIAMAuth")
     }
     return this.next(e, ctx)
 }
@@ -291,7 +291,7 @@ export function requireIAMAuth(this: Middleware<IAMAuthorizedRequest>, e: Reques
  */
 export function requireJWTAuth(this: Middleware<JWTAuthorizedRequest>, e: Request, ctx: Context) {
     if (!isJWTAuthorizedRequest(e)) {
-        throw new Error()
+        throw withErrorContext(new Error("JWT authorizer required for the event."), "isJWTAuthorizedRequest")
     }
     return this.next(e, ctx)
 }
@@ -301,7 +301,7 @@ export function requireJWTAuth(this: Middleware<JWTAuthorizedRequest>, e: Reques
  */
 export function requireLambdaAuth<T = unknown>(this: Middleware<LambdaAuthorizedRequest<T>>, e: Request, ctx: Context) {
     if (!isLambdaAuthorizedRequest<T>(e)) {
-        throw new Error()
+        throw withErrorContext(new Error("Lambda authorizer required for the event."), "requireLambdaAuth")
     }
     return this.next(e, ctx)
 }
@@ -356,9 +356,9 @@ interface RequestTracingOptions {
      */
     tracer?: Tracer
     /**
-     * A function generating request tracing tag ({@link startSession}. Default is `${context.functionName}.${context.functionVersion}`.
+     * Request tracing tag or tag generating function (see {@link startSession}. Default is `${context.functionName}.${context.functionVersion}`.
      */
-    tag?: (event: Request, context: Context) => string
+    tag?: string | ((event: Request, context: Context) => string)
 }
 
 const defaultApiTracer = new Tracer("api");
@@ -368,8 +368,17 @@ const defaultApiTracer = new Tracer("api");
  */
 export function traceRequest(options: RequestTracingOptions = {}): MiddlewareFunction<TracedEvent> {
     const requestTracer = options.tracer ?? defaultApiTracer
-    const tag = options.tag ?? function (_, ctx) {
-        return `${ctx.functionName}.${ctx.functionVersion}`
+    let {tag} = options
+    if (tag === undefined) {
+        tag = function (_, ctx) {
+            return `${ctx.functionName}.${ctx.functionVersion}`
+        }
+    }
+    if (typeof tag === "string") {
+        const constTag = tag;
+        tag = function () {
+            return constTag
+        }
     }
 
     return async function (this: Middleware<TracedEvent>, e: Request, ctx: Context) {

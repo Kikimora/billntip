@@ -1,6 +1,6 @@
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {z} from "zod";
-import crypto from "crypto";
+import shortUUID from "short-uuid"
 import {Env, useVariables, AuthTracer} from "./ctx";
 import OidcTokens from "./oidc_tokens";
 import SessionCookie from "./cookie";
@@ -8,8 +8,15 @@ import {D, deleteCommand, getCommand, LockHandle, makeLockStore, putCommand, tab
 
 const dynamoDb = new DynamoDB({region: Env.region})
 const tracer = AuthTracer.withScope("session")
-//TODO create table in infra and pass it name in env variable.
+
+const shortUUIDGenerator = shortUUID(shortUUID.constants.flickrBase58)
 const store = makeLockStore(Env.locksTable, {dynamoDb})
+
+export type SessionContext = {
+    access_token: string,
+    id_token: string,
+    expires_at: number
+}
 
 export const Sessions = table(Env.sessionTable,
     {session_id: D.String} as const,
@@ -18,31 +25,42 @@ export const Sessions = table(Env.sessionTable,
         id_token: D.String,
         refresh_token: D.String,
         expires_at: D.Number,
-        session_expires_at: D.Number,
-        cached_till: D.Number,
-        salt: D.String
+        refresh_token_expires_at: D.Number,
+        cached_till: D.Number
     } as const)
 
 /**
  * Session data stored in the session store.
  */
 export default class SessionData implements SessionItem {
+    /**
+     * Session identifier.
+     */
     readonly sessionId: string
+    /**
+     * Access token (sometimes JWT, sometimes opaque string) to authorize operations against backend.
+     */
     readonly accessToken: string
+    /**
+     * JWT token with user profile information.
+     */
     readonly idToken: string
+    /**
+     * OIDC refresh token.
+     */
     readonly refreshToken: string
     /**
-     * Access token expiration time unix epoch (seconds from 1 January 1970).
-     * Calculated at tokens arrival as `now + tokens.expiresIn`.
+     * Access token expiration time as **seconds** since the [epoch]{@link https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date#the_epoch_timestamps_and_invalid_date}.
+     * Calculated at tokens arrival as "{@link now} + {@link OidcTokens.expiresIn}".
      */
     readonly accessExpiresAt: number
     /**
-     * Refresh token expiration time as unix epoch (seconds from 1 January 1970),
+     * Refresh token expiration time as **seconds** since the [epoch]{@link https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date#the_epoch_timestamps_and_invalid_date}.
      */
-    readonly sessionExpiresAt: number
+    readonly refreshTokenExpiresAt: number
 
     /**
-     * Authorizer cache expiration as unix epoch (seconds from 1 January 1970).
+     * Authorizer cache expiration as milliseconds since the [epoch]{@link https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date#the_epoch_timestamps_and_invalid_date}.
      * 0 indicates item was never cached.
      */
     get cachedTill() {
@@ -50,16 +68,15 @@ export default class SessionData implements SessionItem {
     }
 
     private _cachedTill: number = 0;
-    readonly salt: string
 
     /**
-     * Return public infomration about the session
+     * Return public information about the session
      */
     get info() {
         return {
             sessionId: this.sessionId,
             accessExpiresAt: new Date(this.accessExpiresAt * 1000),
-            sessionExpiresAt: new Date(this.sessionExpiresAt * 1000),
+            refreshTokenExpiresAt: new Date(this.refreshTokenExpiresAt * 1000),
             cachedTill: this.cachedTill
         }
     }
@@ -77,8 +94,7 @@ export default class SessionData implements SessionItem {
         this.idToken = item.idToken
         this.refreshToken = item.refreshToken
         this.accessExpiresAt = item.accessExpiresAt
-        this.sessionExpiresAt = item.sessionExpiresAt
-        this.salt = item.salt
+        this.refreshTokenExpiresAt = item.refreshTokenExpiresAt
         this._cachedTill = item.cachedTill
     }
 
@@ -99,8 +115,7 @@ export default class SessionData implements SessionItem {
                 idToken: attrs['id_token'].S,
                 refreshToken: attrs['refresh_token'].S,
                 accessExpiresAt: Number(attrs['expires_at'].N),
-                sessionExpiresAt: Number(attrs['session_expires_at'].N),
-                salt: attrs['salt'].S,
+                refreshTokenExpiresAt: Number(attrs['refresh_token_expires_at'].N),
                 cachedTill: Number(attrs['cached_till'].N),
             });
             return new SessionData(item, false, sessionLock)
@@ -125,42 +140,40 @@ export default class SessionData implements SessionItem {
     /**
      * Create new session from OIDC tokens. {@param tokens} must have {@link OidcTokens#refreshToken}.
      */
-    public static fromTokens(tokens: OidcTokens): SessionData {
-        const salt = generateSalt(16)
+    public static createWithTokens(tokens: OidcTokens): SessionData {
         const {now, refreshTokenTtl} = useVariables()
         const refreshToken = tokens.refreshToken
         if (refreshToken == null) throw new Error('Cannot create new session without a refresh token.')
         //TODO add user sub and email to DynamoDB.
         const item = parseSessionItem({
-            sessionId: makeSessionId(refreshToken, salt),
+            sessionId: makeSessionId(),
             accessToken: tokens.accessToken,
             idToken: tokens.idToken,
             refreshToken,
-            accessExpiresAt: Math.floor((now + tokens.expiresIn * 1000) / 1000),
-            sessionExpiresAt: Math.floor((now + refreshTokenTtl * 1000) / 1000),
-            cachedTill: 0,
-            salt
+            accessExpiresAt: now + tokens.expiresIn,
+            refreshTokenExpiresAt: now + refreshTokenTtl,
+            cachedTill: 0
         });
         return new SessionData(item, false)
     }
 
     /**
-     * Create a new version of the session data with new tokens.
+     * Create a new version of the session data with new tokens. New session has different session id, thus session
+     * cookie must be rotated.
      */
     withTokens(tokens: OidcTokens): SessionData {
         const {now, refreshTokenTtl} = useVariables()
-        const isNew = tokens.refreshToken != null && tokens.refreshToken != this.refreshToken
+        const isRefreshTokenRotated = tokens.refreshToken != null && tokens.refreshToken != this.refreshToken
         const item = parseSessionItem({
-            sessionId: isNew ? makeSessionId(tokens.refreshToken, this.salt) : this.sessionId,
+            sessionId: makeSessionId(),
             accessToken: tokens.accessToken,
             idToken: tokens.idToken,
-            refreshToken: isNew ? tokens.refreshToken : this.refreshToken,
+            refreshToken: isRefreshTokenRotated ? tokens.refreshToken : this.refreshToken,
             accessExpiresAt: now + tokens.expiresIn,
-            sessionExpiresAt: isNew ? now + refreshTokenTtl : this.sessionExpiresAt,
-            salt: this.salt,
+            refreshTokenExpiresAt: isRefreshTokenRotated ? now + refreshTokenTtl : this.refreshTokenExpiresAt,
             cachedTill: this.cachedTill
         })
-        return new SessionData(item, isNew, this.lock)
+        return new SessionData(item, isRefreshTokenRotated, this.lock)
     }
 
     /**
@@ -174,9 +187,8 @@ export default class SessionData implements SessionItem {
                 access_token: this.accessToken,
                 id_token: this.idToken,
                 expires_at: this.accessExpiresAt,
-                session_expires_at: this.sessionExpiresAt,
+                refresh_token_expires_at: this.refreshTokenExpiresAt,
                 cached_till: this.cachedTill,
-                salt: this.salt
             },
             condition: ({key: {session_id}}) => `attribute_not_exists(${session_id})`
         });
@@ -191,18 +203,15 @@ export default class SessionData implements SessionItem {
      * Save session data to the store.
      */
     async save() {
-        const {now} = useVariables()
         const {sessionId} = this
         const command = updateCommand(Sessions, {
             key: {session_id: sessionId},
-            values: {now},
             expression: ({attr, val}) => `SET
                 ${attr.refresh_token} = ${val(this.refreshToken)},
-                ${attr.expires_at} = ${val(this.accessExpiresAt)},
-                ${attr.session_expires_at} = ${val(this.sessionExpiresAt)},
+                ${attr.refresh_token_expires_at} = ${val(this.refreshTokenExpiresAt)},
                 ${attr.access_token} = ${val(this.accessToken)},
                 ${attr.id_token} = ${val(this.idToken)},
-                ${attr.salt} = ${val(this.salt)},
+                ${attr.expires_at} = ${val(this.accessExpiresAt)},
                 ${attr.cached_till} = ${val(this.cachedTill)}
             `,
             condition: ({key}) => `attribute_exists(${key.session_id})`,
@@ -215,12 +224,12 @@ export default class SessionData implements SessionItem {
     }
 
     /**
-     * Notify session about a cache extension. Call this method from authorizer function.
+     * Notify session about a cache extension. Call this method from authorizer function to let session know that cache record TTL extended.
      */
-    notifyCacheTtlExtension() {
+    updateCacheTtl() {
         const {now} = useVariables()
         const {authorizerCacheTtl} = Env
-        this._cachedTill = Math.floor(now / 1000 + authorizerCacheTtl)
+        this._cachedTill = now + authorizerCacheTtl
     }
 
     /**
@@ -228,7 +237,7 @@ export default class SessionData implements SessionItem {
      */
     get isTimeToRefresh(): boolean {
         const {now} = useVariables()
-        return this.cachedTill >= this.accessExpiresAt || this.accessExpiresAt * 1000 - now < 10000
+        return this.cachedTill >= this.accessExpiresAt || this.accessExpiresAt - now < 10
     }
 
     /**
@@ -250,16 +259,14 @@ export default class SessionData implements SessionItem {
      * Create cookie for the session data
      */
     makeCookie() {
-        const {now, refreshTokenTtl} = useVariables()
-        const newSessionExpiresAt = now + refreshTokenTtl * 1000
-        const expiration = new Date(newSessionExpiresAt)
+        const expiration = new Date(this.refreshTokenExpiresAt * 1000)
         return new SessionCookie(this.sessionId, expiration)
     }
 
     /**
      * Make authentication context variables.
      */
-    context() {
+    context() : SessionContext {
         return {
             'access_token': this.accessToken,
             'id_token': this.idToken,
@@ -274,8 +281,7 @@ const SessionItemSchema = z.object({
     idToken: z.string().min(1).readonly(),
     refreshToken: z.string().min(1).readonly(),
     accessExpiresAt: z.number().min(1).readonly(),
-    sessionExpiresAt: z.number().min(1).readonly(),
-    salt: z.string().min(1).readonly(),
+    refreshTokenExpiresAt: z.number().min(1).readonly(),
     cachedTill: z.number().min(0).readonly(),
 })
 type SessionItem = z.infer<typeof SessionItemSchema>
@@ -288,16 +294,6 @@ function parseSessionItem(x: Partial<SessionItem>): SessionItem {
     }
 }
 
-/**
- * Generate base64 encoded salt
- */
-const generateSalt = (length: number): string => {
-    return crypto.randomBytes(length).toString('base64');
-}
-
-/**
- * Generate session id by hashing refresh token.
- */
-const makeSessionId = (refreshToken: string, salt: string): string => {
-    return crypto.pbkdf2Sync(refreshToken, salt, 10000, 64, 'sha256').toString('base64url')
+const makeSessionId = (): string => {
+    return shortUUIDGenerator.generate()
 }

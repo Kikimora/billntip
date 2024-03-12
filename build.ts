@@ -1,7 +1,7 @@
 import {program} from 'commander';
 import * as _ from "lodash";
 import * as dotenv from 'dotenv';
-import {Lambda, pickLambdas} from "@app/lambda";
+import {Lambda, pickLambdas} from "@app/lambda/builder";
 import {Lambdas, makeBuilder} from "@aws/lambdas";
 
 dotenv.config();

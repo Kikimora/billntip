@@ -2,7 +2,7 @@ import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 import {FunctionArgs} from "@pulumi/aws/lambda";
 import {iam} from "@pulumi/aws/types/input";
-import {Builder, Lambda as LambdaDeclaration} from "@app/lambda";
+import {Builder, Lambda as LambdaDeclaration} from "@app/lambda/builder";
 import _ from '@app/util';
 import RoleInlinePolicy = iam.RoleInlinePolicy;
 

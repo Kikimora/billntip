@@ -1,4 +1,4 @@
-import {TokenEndpointResponse} from "../src/authorizer/module";
+import {TokenEndpointResponse} from "@src/authorizer/oidc_tokens";
 
 jest.mock('../src/http');
 
@@ -7,33 +7,34 @@ import * as fs from "fs";
 import * as upath from "upath";
 import {
     APIGatewayAuthorizerEvent,
-    APIGatewayProxyEventV2,
     APIGatewayProxyStructuredResultV2,
     Context
 } from "aws-lambda";
 import _ from "lodash";
+import {Request} from "@app/lambda"
 import http from "../src/http"
 import {init as cognitoInit, TestGroup, TestUser} from "./cognito"
 import {init as dynamoDbInit} from './dynamodb'
 
 const httpMock = http as jest.Mocked<typeof http>;
 const {default: httpReal} = jest.requireActual('../src/http');
-const SessionKey = 'JSESSIONID';
+const SessionKey = 'SID';
 const {dynamodb, api, cognito, tokenEndpoint} = prepareAuthorizerEnvironment();
 import {code, cookie, hooks} from "@src/authorizer";
 import {AxiosResponse} from "axios";
-import {useVariables} from "@src/authorizer/ctx";
+import {Metrics, useVariables} from "@src/authorizer/ctx";
 import {makeLockStore} from "@app/dynamodb";
 import {configure} from "@app/diagnostics";
+import SessionCookie from "@src/authorizer/cookie";
 
 const ddb = dynamoDbInit(dynamodb.sessionsTable.name)
 
-const event: APIGatewayProxyEventV2 = {
+const event: Request = {
     routeKey: "",
     rawPath: "",
     headers: {},
     rawQueryString: "",
-    requestContext: {} as any,
+    requestContext: {authorizer: undefined} as any,
     version: "2.0",
     isBase64Encoded: false
 }
@@ -68,7 +69,7 @@ const authEvent: APIGatewayAuthorizerEvent = {
     path: "",
     httpMethod: "",
     headers: {
-        'Cookie': 'JSESSIONID=abc.xyz'
+        'Cookie': 'SID=abc.xyz'
     },
     multiValueHeaders: {},
     pathParameters: null,
@@ -112,6 +113,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
     await testContext.user?.delete()
+    Metrics.stop()
 })
 
 beforeEach(() => {
@@ -175,12 +177,12 @@ describe('OAuth callback', () => {
             'id_token': expect.toBeString(),
             'access_token': expect.toBeString(),
             'refresh_token': expect.toBeString(),
-            'salt': expect.toBeString(),
             'expires_at': expect.toBePositive(),
-            'session_expires_at': expect.toBePositive(),
+            'refresh_token_expires_at': expect.toBePositive(),
+            'cached_till': 0
         }))
         expect(session!['lock']).toBeUndefined()
-        const sessionExpiresAt = session!['session_expires_at']
+        const sessionExpiresAt = session!['refresh_token_expires_at']
         const {refreshTokenTtl} = useVariables()
         expect(sessionExpiresAt).toBeCloseTo(now + refreshTokenTtl, -1)
         const expiresAt = session!['expires_at']
@@ -234,7 +236,6 @@ describe('Lambda authorizer', () => {
             }))
         })
         hooks.cookieAuthorizerRefresh = jest.fn()
-        hooks.cookieAuthorizerNewSession = jest.fn()
         hooks.cookieAuthorizerFinish = jest.fn().mockImplementation(async function () {
                 //Verify session is unlocked when done
                 const session = await ddb.getSession(sessionId)
@@ -245,7 +246,6 @@ describe('Lambda authorizer', () => {
     afterEach(() => {
         delete hooks.cookieAuthorizerStart
         delete hooks.cookieAuthorizerRefresh
-        delete hooks.cookieAuthorizerNewSession
         delete hooks.cookieAuthorizerFinish
     })
 
@@ -261,7 +261,7 @@ describe('Lambda authorizer', () => {
         expect(hooks.cookieAuthorizerFinish).toHaveBeenCalled()
     })
 
-    describe('refreshes tokens using OAuth token endpoint', () => {
+    describe('refreshes tokens and rotates cookie', () => {
         let sessionBefore: any;
         beforeEach(async () => {
             sessionBefore = await ddb.updateSession(sessionId, {'expires_at': 1})
@@ -280,56 +280,37 @@ describe('Lambda authorizer', () => {
             )
         })
         it('saves new tokens to dynamodb', async () => {
+            const authResult = await authorize(sessionId)
+            const {context} = authResult
+            const {id} = SessionCookie.load(context!.new_cookie!)!
+            const sessionAfter = (await ddb.getSession(id))!
+            expect(hooks.cookieAuthorizerRefresh).toHaveBeenCalled()
+            expect(sessionAfter.access_token).not.toEqual(sessionBefore['access_token'])
+            expect(sessionAfter.id_token).not.toEqual(sessionBefore['id_token'])
+            expect(sessionAfter.refresh_token).toEqual(sessionBefore['refresh_token'])
+            expect(sessionAfter.expires_at).toBeGreaterThan(sessionBefore['expires_at'])
+            expect(sessionAfter.session_expires_at).toEqual(sessionBefore['session_expires_at'])
+        })
+        it('return new session cookie and tokens', async () => {
+            const response = await authorize(sessionId)
+            const cookieHeader = parseSessionCookieHeader(response.context!.new_cookie!)
+            const newSession = (await ddb.getSession(cookieHeader[SessionKey] as string))!
+            expect(cookieHeader).toEqual(expect.objectContaining(sessionCookie()))
+            expect(response).toEqual(expect.objectContaining({
+                isAuthorized: true,
+                context: {
+                    'new_cookie': expect.any(String),
+                    'access_token': newSession['access_token'],
+                    'id_token': newSession['id_token'],
+                    'expires_at': newSession['expires_at']
+                }
+            }))
+        })
+        it('saves new session and removes old from store', async () => {
             await authorize(sessionId)
             const sessionAfter = (await ddb.getSession(sessionId))!
-            expect(hooks.cookieAuthorizerRefresh).toHaveBeenCalled()
-            expect(sessionAfter['access_token']).not.toBe(sessionBefore['access_token'])
-            expect(sessionAfter['id_token']).not.toBe(sessionBefore['id_token'])
-            expect(sessionAfter['refresh_token']).toBe(sessionBefore['refresh_token'])
-            expect(sessionAfter['expires_at']).toBeGreaterThan(sessionBefore['expires_at'])
-            expect(sessionAfter['session_expires_at']).toBe(sessionBefore['session_expires_at'])
+            expect(sessionAfter).toBeNil()
         })
-
-        describe('if refresh token rotate', () => {
-            beforeEach(async () => {
-                httpMock.post.mockImplementation(async function () {
-                    return {
-                        status: 200,
-                        data: {
-                            access_token: 'ACCESS TOKEN',
-                            id_token: 'ID TOKEN',
-                            expires_in: 3600,
-                            refresh_token: 'NEW REFRESH TOKEN'
-                        }
-                    }
-                })
-            })
-            it('issues new session cookie and tokens', async () => {
-                const response = await authorize(sessionId)
-                const cookieHeader = parseSessionCookieHeader(response.context.new_cookie)
-                const newSession = (await ddb.getSession(cookieHeader[SessionKey] as string))!
-
-                expect(cookieHeader).toEqual(expect.objectContaining(sessionCookie()))
-                expect(response).toEqual(expect.objectContaining({
-                    isAuthorized: true,
-                    context: {
-                        'new_cookie': expect.any(String),
-                        'access_token': newSession['access_token'],
-                        'id_token': newSession['id_token'],
-                        'expires_at': newSession['expires_at']
-                    }
-                }))
-            })
-            it('saves new session and removes old from store', async () => {
-                const response = await authorize(sessionId)
-                const cookieHeader = parseSessionCookieHeader(response.context.new_cookie);
-                const sessionAfter = (await ddb.getSession(sessionId))!
-                const newSession = (await ddb.getSession(cookieHeader[SessionKey] as string))!
-                expect(sessionAfter).toBeNil()
-                expect(newSession['refresh_token']).toEqual('NEW REFRESH TOKEN')
-            })
-        })
-
         describe('if token endpoint fails', () => {
             function setupFailure(code: 400 | 500) {
                 httpMock.post.mockImplementation(async function () {

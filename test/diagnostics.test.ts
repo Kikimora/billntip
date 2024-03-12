@@ -267,10 +267,10 @@ describe("EMF", () => {
         .metric("latency", {units: "Milliseconds"})
         .metric("callCount", {units: "Count", dimensions: ["functionName"], storageResolution: 1})
     let stdout!: jest.SpyInstance;
-    let metrics!: ReturnType<typeof metricsBuilder.build>;
+    let metrics!: ReturnType<typeof metricsBuilder.startReporter>;
 
     beforeEach(() => {
-        metrics = metricsBuilder.build()
+        metrics = metricsBuilder.startReporter()
         metrics.setDimensions({
             functionVersion: "$LATEST",
             functionName: "test"
@@ -355,7 +355,7 @@ describe("EMF", () => {
     })
 
     it("reportMetrics throws if called without dimensions", () => {
-        const metrics = metricsBuilder.build()
+        const metrics = metricsBuilder.startReporter()
         try {
             expect(function () {
                 metrics.latency(1)

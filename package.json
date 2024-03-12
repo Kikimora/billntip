@@ -48,7 +48,8 @@
     "type-fest": "^4.10.2",
     "upath": "^2.0.1",
     "uuid": "^9.0.1",
-    "zod": "^3.22.4"
+    "zod": "^3.22.4",
+    "short-uuid": "^4.2.2"
   },
   "scripts": {
     "out-dir": "cat tsconfig.json | npx  jsonc-cli read '[\"compilerOptions\", \"outDir\"]' | tr -d '\"'",

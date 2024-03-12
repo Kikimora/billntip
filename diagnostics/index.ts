@@ -193,10 +193,12 @@ export class EMF<Metrics extends string = never, Dimensions extends string = nev
     }
 
     /**
-     * Build a metric reporter - combination of {@link EMFMetricsReporter} and {@link EMFDimensionsReporter}.
+     * Build and starts a metric reporter - combination of {@link EMFMetricsReporter} and {@link EMFDimensionsReporter}.
      * Reporter batches metrics and writes them if over 100 metric values reported, a minute interval passes on runtime shutdown.
+     *
+     * Call {@link stop} when you don't longer need it.
      */
-    build(): EMFMetricsReporter<Metrics> & EMFDimensionsReporter<Dimensions> & EMFMetricsCollector {
+    startReporter(): EMFMetricsReporter<Metrics> & EMFDimensionsReporter<Dimensions> & EMFMetricsCollector {
         type DimensionValues = { [key in Dimensions]: string }
         type Collector = EMFMetricsReporter<Metrics> & EMFDimensionsReporter<Dimensions> & EMFMetricsCollector
 
@@ -224,6 +226,7 @@ export class EMF<Metrics extends string = never, Dimensions extends string = nev
 
         const onShutdown = function () {
             reportMetrics("SIGTERM - Runtime shutdown")
+            stop()
         }
         process.on('SIGTERM', onShutdown)
 
@@ -639,6 +642,34 @@ export function withErrorContext(e: any, name: string, value?: TraceAttributes):
     errorContext(e, name, value)
     return e
 }
+
+/**
+ * Find most recently added error context with a given tag
+ * @param e - error
+ * @param tag - context tag
+ */
+export function findErrorContext(e: any, tag: string): Record<string, Serializable> | undefined {
+    const contextStack = ErrorContext in e ? e[ErrorContext] : (e[ErrorContext] = [])
+    for (let i = 0; i < contextStack.length; ++i) {
+        const errorContext = contextStack[i];
+        if (errorContext.tag === tag) return errorContext
+    }
+    return undefined
+}
+
+/**
+ * Get all error context optionally filtered by tag.
+ * @param e - error
+ * @param tag - error context tag
+ */
+export function* getErrorContexts(e: any, tag?: string): Iterable<Record<string, Serializable>> {
+    const contextStack = ErrorContext in e ? e[ErrorContext] : (e[ErrorContext] = [])
+    for (let i = 0; i < contextStack.length; ++i) {
+        const errorContext = contextStack[i];
+        if (tag === undefined || errorContext.tag === tag) yield errorContext
+    }
+}
+
 
 /**
  * # Tracing

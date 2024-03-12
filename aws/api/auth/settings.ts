@@ -19,7 +19,7 @@ export const authorizerCacheTtl = accessTokenTtl - 10
 
 export const environment = {
     variables: {
-        COOKIE_NAME: 'JSESSIONID',
+        COOKIE_NAME: 'SID',
         SESSION_TABLE: sessionsTable.name,
         LOCKS_TABLE: locksTable.name,
         USER_POOL_ID: pool.id,

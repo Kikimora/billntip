@@ -25,7 +25,7 @@ const sessions = new aws.dynamodb.Table('sessions', {
     ],
     hashKey: 'session_id',
     billingMode: 'PAY_PER_REQUEST',
-    ttl: {attributeName: 'session_expires_at', enabled: true}
+    ttl: {attributeName: 'refresh_token_expires_at', enabled: true}
 });
 
 const locks = new aws.dynamodb.Table('locks', {

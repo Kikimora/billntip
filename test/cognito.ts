@@ -10,7 +10,7 @@ import {
     GroupType
 } from "@aws-sdk/client-cognito-identity-provider";
 import {createHmac} from 'crypto';
-import {TokenEndpointResponse} from "@src/authorizer/module";
+import {TokenEndpointResponse} from "@src/authorizer/oidc_tokens";
 import {retry, nanoid} from "@app/util";
 
 const cognito = new CognitoIdentityProviderClient()
