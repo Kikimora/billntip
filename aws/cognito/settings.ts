@@ -1,3 +1,5 @@
+import * as pulumi from "@pulumi/pulumi";
+import * as gateway from "@aws/api/gateway";
 
 export const tokenValidity = {
     accessTokenValidity: 3600,
@@ -9,3 +11,5 @@ export const tokenValidity = {
         refreshToken: "days"
     }
 }
+
+export const callbackUrl = pulumi.interpolate`${gateway.url}/${gateway.authCallback}`

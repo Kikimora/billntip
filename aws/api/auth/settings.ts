@@ -1,8 +1,7 @@
-import {dataTable, locksTable, sessionsTable} from "@aws/dynamodb";
-import {client, domain, pool} from "@aws/cognito";
 import * as pulumi from "@pulumi/pulumi";
 import * as gateway from "@aws/api/gateway";
-import {tokenValidityInSeconds} from "@aws/cognito/util";
+import {locksTable, sessionsTable} from "@aws/dynamodb";
+import {apiClient, domain, pool, tokenValidityInSeconds} from "@aws/cognito";
 import {newPolicy} from "@aws/util";
 import {allowDynamoDb} from "@aws/lambdas";
 
@@ -23,7 +22,7 @@ export const environment = {
         SESSION_TABLE: sessionsTable.name,
         LOCKS_TABLE: locksTable.name,
         USER_POOL_ID: pool.id,
-        OAUTH_CLIENT_ID: client.id, //user pool client id
+        OAUTH_CLIENT_ID: apiClient.id, //user pool client id
         OAUTH_ISSUER: issuer,
         OAUTH_TOKEN_ENDPOINT: pulumi.interpolate`${cognitoDomain}/oauth2/token`,
         POST_AUTH_REDIRECT_URL: gateway.url,

@@ -166,12 +166,15 @@ const newLambdaModule = function (decl: LambdaDeclaration) {
             const args = _.merge({}, _args, defaults)
             const handler = `index.${decl.handler}`;
             const lambdaFunction = new aws.lambda.Function(`${id}-fn`, {
-                ...args,
-                name: builder.lambdaName(decl),
-                code: new pulumi.asset.FileArchive(builder.bundle(decl.module, "ts")),
-                handler,
-                role: role.arn,
-            }, _opts)
+                    ...args,
+                    name: builder.lambdaName(decl),
+                    code: new pulumi.asset.FileArchive(builder.bundle(decl.module, "ts")),
+                    handler,
+                    role: role.arn,
+                },
+                //Ignore changes in code otherwise Pulumi detects changes every update.
+                //Use `npm run update` script to update Lambdas e.g. `npm run update --handlers 'authorizer.*'`
+                {ignoreChanges: ['code'], ..._opts})
 
             const lambda = {
                 id,
