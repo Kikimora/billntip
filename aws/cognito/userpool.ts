@@ -1,27 +1,28 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import {grantInvoke, newLambda} from "@aws/util";
+import {grantInvoke, newLambda, newLambdaRole, newPolicy} from "@aws/util";
 import {Lambdas} from "@aws/lambdas";
 
 const config = new pulumi.Config();
 
 const externalId = config.get('cognito-sms-external-id')!
-const smsSenderRole = new aws.iam.Role('cognito-sms-sender-role', {
-    assumeRolePolicy: JSON.stringify({
-        Version: "2012-10-17",
-        Statement: [{
-            Action: "sts:AssumeRole",
-            Effect: "Allow",
-            Principal: {
-                Service: "cognito-idp.amazonaws.com",
-            },
-            Condition: {
-                StringEquals: {
-                    "sts:ExternalId": externalId
-                }
+const cognitoAssumeRolePolicy = JSON.stringify({
+    Version: "2012-10-17",
+    Statement: [{
+        Action: "sts:AssumeRole",
+        Effect: "Allow",
+        Principal: {
+            Service: "cognito-idp.amazonaws.com",
+        },
+        Condition: {
+            StringEquals: {
+                "sts:ExternalId": externalId
             }
-        }],
-    }),
+        }
+    }],
+});
+const smsSenderRole = new aws.iam.Role('cognito-sms-sender-role', {
+    assumeRolePolicy: cognitoAssumeRolePolicy,
     inlinePolicies: [
         {
             name: 'SNSPublish',
@@ -37,7 +38,16 @@ const smsSenderRole = new aws.iam.Role('cognito-sms-sender-role', {
     ]
 })
 
-const preSignup = newLambda(Lambdas['users.preSignup']).build()
+const manageUsersRole = newLambdaRole("cognito-manage-users-role")
+const preSignup = newLambda(Lambdas['users.preSignup'])
+    .role(manageUsersRole)
+    .build()
+const postSignup = newLambda(Lambdas['users.postSignup'])
+    .role(manageUsersRole)
+    .build()
+const info = newLambda(Lambdas['users.info'])
+    .role(manageUsersRole)
+    .build()
 
 const pool = new aws.cognito.UserPool('cognito-user-pool', {
     autoVerifiedAttributes: ['email', 'phone_number'],
@@ -48,7 +58,11 @@ const pool = new aws.cognito.UserPool('cognito-user-pool', {
         //    lambdaArn: "arn:of:your:lambda:function",
         //    lambdaVersion: "V1_0",
         // },
-        preSignUp: preSignup.arn
+        preSignUp: preSignup.arn,
+        postConfirmation: postSignup.arn,
+        preAuthentication: info.arn,
+        postAuthentication: info.arn,
+        preTokenGeneration: info.arn,
     },
     // Define password policy
     passwordPolicy: {
@@ -65,6 +79,8 @@ const pool = new aws.cognito.UserPool('cognito-user-pool', {
         snsCallerArn: smsSenderRole.arn,
     },
     // Define which attributes can be used to sign in
+    //See https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html#user-pool-settings-aliases
+    //for discussion of username attributes vs alias attributes
     usernameAttributes: ["email", "phone_number"],
     // Customizes the user invitation message if you're using adminCreateUser
     adminCreateUserConfig: {
@@ -84,14 +100,8 @@ const pool = new aws.cognito.UserPool('cognito-user-pool', {
     // Customizable email and SMS verification messages
     emailVerificationMessage: "Your verification code is {####}.",
     emailVerificationSubject: "Your verification code",
-    smsVerificationMessage: "Your verification code is {####}.",
-    schemas: [{
-        name: "country",
-        attributeDataType: "String",
-        mutable: true
-    }]
+    smsVerificationMessage: "Your verification code is {####}."
 })
-
 
 export const userPool = {
     type: "userpool",
@@ -101,6 +111,26 @@ export const userPool = {
     sourceArn: pool.arn,
 }
 grantInvoke(preSignup, userPool)
+grantInvoke(postSignup, userPool)
+grantInvoke(info, userPool)
+
+const args = {
+    ...newPolicy("ManageUsers")
+        .allow(
+            "cognito-idp:ListUsers",
+            "cognito-idp:AdminUpdateUserAttributes",
+            "cognito-idp:AdminCreateUser",
+            "cognito-idp:AdminSetUserPassword",
+            "cognito-idp:AdminLinkUserAccounts",
+        ).on(pool)
+        .build()
+};
+const manageUsersPolicy = new aws.iam.Policy("cognito-manage-users-policy", args)
+
+new aws.iam.RolePolicyAttachment("cognito-manage-users-policy-attachment", {
+    role: manageUsersRole,
+    policyArn: manageUsersPolicy.arn
+})
 
 new aws.cognito.UserGroup("cognito-recipient-group", {
     name: "recipient",

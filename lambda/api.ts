@@ -97,7 +97,7 @@ export interface Middleware<TEvent = {}> {
     /**
      * Next request handler in the middleware chain
      */
-    readonly next: Handler<Request & TEvent>
+    readonly next: Handler<TEvent>
 }
 
 type Writeable<T> = {
@@ -135,7 +135,7 @@ export class Pipeline<TEvent = Request> {
         return this as any as Pipeline<TNext & TEvent>
     }
 
-    done(handler: Handler<TEvent, lambda.APIGatewayProxyResultV2<object>>): Handler {
+    done(handler: Handler<TEvent>): Handler {
         this.assertNotDone()
         this._done = true
         if (this.first === undefined) {
@@ -358,7 +358,7 @@ interface RequestTracingOptions {
     /**
      * Request tracing tag or tag generating function (see {@link startSession}. Default is `${context.functionName}.${context.functionVersion}`.
      */
-    tag?: string | ((event: Request, context: Context) => string)
+    tag?: string | ((event: any, context: Context) => string)
 }
 
 const defaultApiTracer = new Tracer("api");
@@ -381,17 +381,20 @@ export function traceRequest(options: RequestTracingOptions = {}): MiddlewareFun
         }
     }
 
-    return async function (this: Middleware<TracedEvent>, e: Request, ctx: Context) {
+    return async function (this: Middleware<TracedEvent>, e: any, ctx: Context) {
         const tracer = requestTracer.startSession(tag(e, ctx), e, ctx)
-        const {requestContext: {authorizer, ...requestContext}, ...rest} = e
-        const eventToTrace = {
-            ...rest,
-            requestContext: {...requestContext}
-        }
-        tracer.info("Started", {event: eventToTrace, context: {...ctx}})
+        tracer.info("Started", {event: eventData(e), context: {...ctx}})
         try {
-            const event = e as Request & TracedEvent
-            event.tracer = tracer
+            const event = e as TracedEvent
+            //Define property such that it does not show up in JSON serialisation.
+            //This is critical in some cases such as Cognito Lambda Triggers which return event (their input) as their response.
+            //If returned event contains 'tracer' property then some Lambda Triggers fail.
+            Object.defineProperty(event, 'tracer', {
+                value: tracer,
+                enumerable: false,
+                configurable: false,
+                writable: false
+            })
             const result = await this.next(event, ctx)
             tracer.info("Finished", {result})
             return result
@@ -400,6 +403,19 @@ export function traceRequest(options: RequestTracingOptions = {}): MiddlewareFun
             throw e
         } finally {
             tracer.done()
+        }
+    }
+
+    function eventData(e: any) {
+        if ('requestContext' in e) {
+            //Remove authorizer from API GW request
+            const {requestContext: {authorizer, ...requestContext}, ...rest} = e
+            return {
+                ...rest,
+                requestContext: {...requestContext}
+            }
+        } else {
+            return e
         }
     }
 }

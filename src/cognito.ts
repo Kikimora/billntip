@@ -2,7 +2,7 @@ import {
     AdminAddUserToGroupCommand,
     AdminCreateUserCommand,
     AdminLinkProviderForUserCommand,
-    AdminSetUserPasswordCommand,
+    AdminSetUserPasswordCommand, AdminUpdateUserAttributesCommand,
     CognitoIdentityProviderClient, DescribeUserPoolClientCommand,
     DescribeUserPoolCommand,
     ListUsersCommand
@@ -98,12 +98,24 @@ export async function adminAddUserToGroup(userPoolId: string, username: string, 
     await cognito.send(command)
 }
 
+export async function adminUpdateAttributes(userPoolId: string, username: string, attributes: Record<string, string>) {
+    const command = new AdminUpdateUserAttributesCommand({
+        UserPoolId: userPoolId,
+        Username: username,
+        UserAttributes: Object.entries(attributes).map(([k, v]) => ({
+            Name: k, Value: v
+        }))
+    });
+    return await cognito.send(command)
+}
+
 export async function describeUserPool(userPoolId: string) {
     const command = new DescribeUserPoolCommand({UserPoolId: userPoolId})
     const r = await cognito.send(command)
     if (_.isNull(r?.UserPool)) throw new Error(`UserPool ${userPoolId} not found`)
     return r.UserPool!
 }
+
 export async function describeUserPoolClient(userPoolId: string, clientId: string) {
     const command = new DescribeUserPoolClientCommand({
         UserPoolId: userPoolId,
@@ -147,7 +159,8 @@ export async function linkSocialProfile(event: PreSignUpTriggerEvent): Promise<S
     // has it as google_1234 or facebook_1234. In the call to `adminLinkProviderForUser`
     // the provider name has to be Google or Facebook (first letter capitalized)
     const providerName = _.capitalize(providerNameValue);
-    const username = cognitoUser.Username || 'username-not-found';
+    if (cognitoUser.Username === undefined) throw new Error(`Cognito user does not have a username`)
+    const username = cognitoUser.Username;
     await adminLinkUserAccounts(userPoolId, username, providerName, providerUserId);
     return {username, providerName, providerUserId}
 }

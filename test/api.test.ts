@@ -1,6 +1,5 @@
 import {Context} from "aws-lambda";
 import {
-    authorizerType,
     IAMAuthorizedRequest, JWTAuthorizedRequest, LambdaAuthorizedRequest,
     Middleware,
     pipeline,
@@ -130,7 +129,6 @@ describe("Lambda API requireXYZAuth middleware", () => {
     // Typed dummyHandler won't compile if I mess up with template magic one day and pass untyped request down the
     // middleware chain.
     const dummyHandler = async function (e: AuthorizedRequest) {
-        const authType = authorizerType(e)
         return e.requestContext.authorizer
     };
 
@@ -188,7 +186,7 @@ describe("Lambda API trace request middleware", () => {
     })
 
     it("record event finish", async () => {
-        const handler = pipeline().traceRequest().do(injectSpy).done(async function (e) {
+        const handler = pipeline().traceRequest().do(injectSpy).done(async function () {
             return {message: "Hello world"}
         })
         await handler(request, context)

@@ -4,7 +4,6 @@ import {FunctionArgs} from "@pulumi/aws/lambda";
 import {iam} from "@pulumi/aws/types/input";
 import {Builder, Lambda as LambdaDeclaration} from "@app/lambda/builder";
 import _ from '@app/util';
-import RoleInlinePolicy = iam.RoleInlinePolicy;
 
 /**
  * Details of an AWS service that wants to call a Lambda function.
@@ -29,6 +28,17 @@ interface StatementBuilder {
     on(...resources: AwsResource[]): PolicyBuilder
 }
 
+interface RolePolicy {
+    /**
+     * Name of the role policy.
+     */
+    name: pulumi.Input<string>;
+    /**
+     * Policy document as a JSON formatted string.
+     */
+    policy: pulumi.Input<string>;
+}
+
 /**
  * IAM role policy builder.
  */
@@ -48,7 +58,7 @@ interface PolicyBuilder {
     /**
      * Builds inline policy.
      */
-    build(): RoleInlinePolicy
+    build(): RolePolicy
 }
 
 /**
@@ -72,7 +82,7 @@ interface LambdaBuilder {
      * Specify
      * @param permissions
      */
-    inlinePolicy(...permissions: RoleInlinePolicy[]): LambdaBuilder,
+    inlinePolicy(...permissions: RolePolicy[]): LambdaBuilder,
 
     /**
      * Set lambda function exeuction role.
@@ -117,7 +127,7 @@ interface NewLambdaModule {
 const newLambdaModule = function (decl: LambdaDeclaration) {
     let _opts: pulumi.CustomResourceOptions
     let _args: Partial<FunctionArgs> = {}
-    let _policies: RoleInlinePolicy[] = []
+    let _policies: RolePolicy[] = []
     let _role: aws.iam.Role
     let _client: LambdaClient
 
@@ -130,7 +140,7 @@ const newLambdaModule = function (decl: LambdaDeclaration) {
             _args = _.merge(_args, args)
             return this
         },
-        inlinePolicy(...policies: RoleInlinePolicy[]) {
+        inlinePolicy(...policies: RolePolicy[]) {
             _policies.push(...policies)
             return this
         },
@@ -161,7 +171,7 @@ const newLambdaModule = function (decl: LambdaDeclaration) {
             }
 
             const id = makeResourceId(decl)
-            const role = _policies !== undefined ? createLambdaRole(`${id}-role`, ..._policies) : _role;
+            const role = _role !== undefined ? _role : newLambdaRole(`${id}-role`, ..._policies);
             const defaults = newLambda.defaults ?? {}
             const args = _.merge({}, _args, defaults)
             const handler = `index.${decl.handler}`;
@@ -170,7 +180,7 @@ const newLambdaModule = function (decl: LambdaDeclaration) {
                     name: builder.lambdaName(decl),
                     code: new pulumi.asset.FileArchive(builder.bundle(decl.module, "ts")),
                     handler,
-                    role: role.arn,
+                    role: role.arn
                 },
                 //Ignore changes in code otherwise Pulumi detects changes every update.
                 //Use `npm run update` script to update Lambdas e.g. `npm run update --handlers 'authorizer.*'`
@@ -191,7 +201,7 @@ const newLambdaModule = function (decl: LambdaDeclaration) {
     return lambdaBuilder
 }
 newLambdaModule.defaults = {} as Partial<FunctionArgs>
-newLambdaModule.role = createLambdaRole
+newLambdaModule.role = newLambdaRole
 newLambdaModule.builder = undefined
 export const newLambda: NewLambdaModule = newLambdaModule
 
@@ -222,15 +232,15 @@ export function newPolicy(name: string): PolicyBuilder {
             return statementBuilder("Deny", actions)
         },
         build() {
-            return pulumi.all(statements).apply(statements => {
-                return {
-                    name,
-                    Policy: JSON.stringify({
+            return {
+                name,
+                policy: pulumi.all(statements).apply(statements =>
+                    JSON.stringify({
                         Version: "2012-10-17",
                         Statement: statements,
                     })
-                }
-            })
+                )
+            }
         }
     }
 
@@ -244,7 +254,7 @@ export type Lambda = {
     invokeArn: pulumi.Input<string>
 }
 
-function createLambdaRole(name: string, ...settings: iam.RoleInlinePolicy[]) {
+export function newLambdaRole(name: string, ...settings: iam.RoleInlinePolicy[]) {
     return new aws.iam.Role(name, {
         assumeRolePolicy: {
             Version: "2012-10-17",
