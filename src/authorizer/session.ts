@@ -5,6 +5,7 @@ import {Env, useVariables, AuthTracer} from "./ctx";
 import OidcTokens from "./oidc_tokens";
 import SessionCookie from "./cookie";
 import {D, deleteCommand, getCommand, LockHandle, makeLockStore, putCommand, table, updateCommand} from "@app/dynamodb";
+import {jwtDecode} from "jwt-decode";
 
 const dynamoDb = new DynamoDB({region: Env.region})
 const tracer = AuthTracer.withScope("session")
@@ -13,8 +14,8 @@ const shortUUIDGenerator = shortUUID(shortUUID.constants.flickrBase58)
 const store = makeLockStore(Env.locksTable, {dynamoDb})
 
 export type SessionContext = {
-    access_token: string,
-    id_token: string,
+    access_token: object,
+    id_token: object,
     expires_at: number
 }
 
@@ -268,8 +269,8 @@ export default class SessionData implements SessionItem {
      */
     context() : SessionContext {
         return {
-            'access_token': this.accessToken,
-            'id_token': this.idToken,
+            'access_token': jwtDecode(this.accessToken),
+            'id_token': jwtDecode(this.idToken),
             'expires_at': this.accessExpiresAt
         }
     }

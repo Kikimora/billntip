@@ -26,6 +26,7 @@ import {Metrics, useVariables} from "@src/authorizer/ctx";
 import {makeLockStore} from "@app/dynamodb";
 import {configure} from "@app/diagnostics";
 import SessionCookie from "@src/authorizer/cookie";
+import {jwtDecode} from "jwt-decode";
 
 const ddb = dynamoDbInit(dynamodb.sessionsTable.name)
 
@@ -105,7 +106,7 @@ const testContext: {
 } = {}
 
 beforeAll(async () => {
-    const testCognitoModule = await cognitoInit(cognito.pool.id, cognito.client.id)
+    const testCognitoModule = await cognitoInit(cognito.pool.id, cognito.apiClient.id)
     testContext.group = await testCognitoModule.loadTestGroup()
     testContext.user = await testContext.group.createUniqueUser()
     httpMock.post.mockImplementation(cognitoMock);
@@ -300,8 +301,8 @@ describe('Lambda authorizer', () => {
                 isAuthorized: true,
                 context: {
                     'new_cookie': expect.any(String),
-                    'access_token': newSession['access_token'],
-                    'id_token': newSession['id_token'],
+                    'access_token': jwtDecode(newSession['access_token']),
+                    'id_token': jwtDecode(newSession['id_token']),
                     'expires_at': newSession['expires_at']
                 }
             }))
@@ -375,7 +376,7 @@ function prepareAuthorizerEnvironment() {
         SESSION_TABLE: dynamodb.sessionsTable.name,
         LOCKS_TABLE: dynamodb.locksTable.name,
         USER_POOL_ID: cognito.pool.id,
-        OAUTH_CLIENT_ID: cognito.client.id, //user pool client id
+        OAUTH_CLIENT_ID: cognito.apiClient.id, //user pool client id
         OAUTH_ISSUER: oathIssuer,
         OAUTH_TOKEN_ENDPOINT: tokenEndpoint,
         POST_AUTH_REDIRECT_URL: "https://localhost",

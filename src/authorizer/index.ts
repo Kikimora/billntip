@@ -153,6 +153,7 @@ export const cookie = pipeline<APIGatewayAuthorizerEvent>()
 export const code = pipeline()
     .traceRequest({tracer, tag: "code"})
     .done(async function (event, context): Promise<Promise<APIGatewayProxyStructuredResultV2>> {
+        Metrics.setDimensions({functionVersion: context.functionVersion})
         const {tracer} = event
         await initModuleVariables(context.awsRequestId)
         //TODO support OAuth PKCE for better security
@@ -160,7 +161,9 @@ export const code = pipeline()
         const callbackUrl = `https://${event.requestContext.domainName}${event.rawPath}`
         const tokens = await OidcTokens.authorisationCode(code, callbackUrl)
         if (tokens == null) return BadRequest
+        const start = performance.now()
         await Promise.all([tokens.verifyIdToken(), tokens.verifyAccessToken()])
+        Metrics.tokenVerificationLatency(performance.now() - start)
         const session = SessionData.createWithTokens(tokens)
         const cookie = session.makeCookie()
         await session.create()
@@ -207,16 +210,9 @@ export const tokens = pipeline()
     .traceRequest({tracer, tag: "tokens"})
     .requireLambdaAuth<AuthContext>()
     .done(async function (event, context): Promise<APIGatewayProxyStructuredResultV2> {
-            Metrics.setDimensions({functionVersion: context.functionVersion})
             const authContext = event.requestContext.authorizer.lambda ?? {
-                id_token: "", access_token: "", expires_at: 0
+                id_token: {}, access_token: {}, expires_at: 0
             }
-            const start = performance.now()
-            await Promise.all([
-                idTokenVerifier.verify(authContext.id_token),
-                accessTokenVerifier.verify(authContext.access_token)
-            ])
-            Metrics.tokenVerificationLatency(performance.now() - start)
             return {
                 statusCode: 200,
                 body: JSON.stringify({

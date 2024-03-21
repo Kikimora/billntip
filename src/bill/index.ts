@@ -12,9 +12,9 @@ export const Routes = {
 configure({triggers: {request: true}})
 
 export const invite = pipeline()
-    .requireLambdaAuth()
     .traceRequest()
     .withRoutes(Routes)
+    .requireLambdaAuth()
     .parseJsonBody()
     .done(async function (e) {
         switch (e.routeKey) {
