@@ -3,11 +3,18 @@ import * as aws from "@pulumi/aws";
 const data = new aws.dynamodb.Table('data', {
     attributes: [
         {name: 'pk', type: 'S'},
-        {name: 'sk', type: 'S'}
+        {name: 'sk', type: 'S'},
+        {name: 'uid', type: 'S'}
     ],
     hashKey: 'pk',
     rangeKey: 'sk',
     billingMode: 'PAY_PER_REQUEST',
+    globalSecondaryIndexes: [{
+        name: "business_users",
+        hashKey: "uid",
+        rangeKey: "sk",
+        projectionType: "ALL"
+    }]
 });
 
 const sessions = new aws.dynamodb.Table('sessions', {

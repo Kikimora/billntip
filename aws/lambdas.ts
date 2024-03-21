@@ -16,12 +16,22 @@ export const Api = {
     handlers: ["handler"]
 } as const
 
-export const Cognito = {
-    name: "users",
-    handlers: ["preSignup"]
+export const Bill = {
+    name: "bill",
+    handlers: ["invite"]
 } as const
 
-export const Lambdas = lambdaSet().add(Authorizer).add(Api).add(Cognito).build()
+export const Tip = {
+    name: "tip",
+    handlers: ["invite"]
+} as const
+
+export const Cognito = {
+    name: "users",
+    handlers: ["preSignup", "postSignup", "info"]
+} as const
+
+export const Lambdas = lambdaSet().add(Authorizer).add(Api).add(Cognito).add(Bill).add(Tip).build()
 
 function makeLambdaNamer(stack: string) {
     return function (lambda: Lambda) {

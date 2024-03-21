@@ -11,7 +11,8 @@ import {
 } from "@aws-sdk/client-cognito-identity-provider";
 import {createHmac} from 'crypto';
 import {TokenEndpointResponse} from "@src/authorizer/oidc_tokens";
-import {retry, nanoid} from "@app/util";
+import {retry} from "@app/util";
+import shortUUID from "short-uuid";
 
 const cognito = new CognitoIdentityProviderClient()
 const password = "Qweqwe_1";
@@ -31,6 +32,8 @@ export interface TestGroup {
 export interface TestCognitoModule {
     loadTestGroup(): Promise<TestGroup>
 }
+
+const shortUUIDGenerator = shortUUID(shortUUID.constants.flickrBase58)
 
 export async function init(userPoolId: string, userPoolClientId: string): Promise<TestCognitoModule> {
 
@@ -107,7 +110,7 @@ export async function init(userPoolId: string, userPoolClientId: string): Promis
         }
 
         async createUniqueUser() {
-            const username = `${nanoid(8)}@mailinator.com`
+            const username = `${shortUUIDGenerator.generate()}@mailinator.com`
             const signupCommand = new AdminCreateUserCommand({
                 UserPoolId: userPoolId,
                 Username: username,

@@ -4,6 +4,7 @@ import {FunctionArgs} from "@pulumi/aws/lambda";
 import {iam} from "@pulumi/aws/types/input";
 import {Builder, Lambda as LambdaDeclaration} from "@app/lambda/builder";
 import _ from '@app/util';
+import {RouteMap} from "@app/lambda";
 
 /**
  * Details of an AWS service that wants to call a Lambda function.
@@ -271,4 +272,60 @@ export function newLambdaRole(name: string, ...settings: iam.RoleInlinePolicy[])
             'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
         ]
     });
+}
+
+
+interface ApiRoute extends Omit<aws.apigatewayv2.RouteState, "routeKey"> {
+    routeKey: string
+}
+
+export function newApiGwIntegration(apiId: pulumi.Output<string>, lambda: Lambda) {
+    const integration = new aws.apigatewayv2.Integration(`${lambda.id}-integration`, {
+        apiId: apiId,
+        integrationType: "AWS_PROXY", // AWS_PROXY for Lambda function integration
+        integrationUri: lambda.arn,
+        payloadFormatVersion: "2.0"
+    });
+
+    let _default: Partial<ApiRoute>
+    let routes: aws.apigatewayv2.Route[] = []
+
+    return {
+
+        defaults(route: Partial<ApiRoute>) {
+            _default = route
+            return this
+        },
+
+        addRoutes(routes: RouteMap) {
+            for (let [k, v] of Object.entries(routes)) {
+                this.addRoute({routeKey: v, operationName: k})
+            }
+            return this
+        },
+
+        addRoute(route: ApiRoute) {
+            const {routeKey} = route
+            //GET /bill/invite/{id} -> get-bill-invite-id
+            const [method, path, ...rest] = routeKey.split(' ')
+            if (rest.length > 0) throw new Error(`Invalid routeKey ${routeKey}`)
+            const name = `${method.toLowerCase()}-${_.trim(path, '/').replaceAll('/', '-').replaceAll(/[}{]/g, '')}`
+
+            routes.push(new aws.apigatewayv2.Route(name, {
+                ..._default,
+                ...route,
+                apiId,
+                target: pulumi.interpolate`integrations/${integration.id}`
+            }))
+
+            return this
+        },
+
+        done() {
+            return {
+                integration,
+                routes
+            }
+        }
+    }
 }

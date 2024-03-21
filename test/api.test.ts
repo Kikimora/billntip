@@ -112,9 +112,9 @@ describe("Lambda API JSON Body middleware", () => {
 })
 
 describe("Lambda API withRoute middleware", () => {
-    const handler = pipeline().withRoute().done(async function (e) {
+    const handler = pipeline().withRoutes().done(async function (e) {
         return {
-            body: e.route
+            body: e.routeKey
         }
     })
     it("adds route key", async () => {

@@ -239,41 +239,63 @@ Pipeline.prototype.parseJsonBody = function () {
 }
 
 type HttpMethod = "GET" | "PUT" | "POST" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS"
+export type RouteMap = { [key: string]: `${HttpMethod} ${string}` }
 
-interface RouteEvent {
-    route: `${HttpMethod} ${string}`
+interface RouteEvent<T extends RouteMap> {
+    routeKey: T[keyof T]
 }
 
-/**
- * See {@link addRoute}.
- */
-export function addRoute(this: Middleware<RouteEvent>, event: Request, context: Context) {
-    const request = event as Request & RouteEvent
-    request.route = `${event.requestContext.http.method} ${event.routeKey}` as any
-    return this.next(request, context)
+interface RoutesMiddlewareOptions {
+    /**
+     * Don't raise 404 if lambda receives an unknown {@link Request.routeKey}. Default - false.
+     */
+    allowUnknownRoutes?: boolean
 }
 
 export interface Pipeline<TEvent = Request> {
     /**
      * Add [route]{@link RouteEvent.route} key to the request combining HTTP method and [routeKey]{@link https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-integrations-lambda.html}.
      * @example
+     * //In api/things.ts
+     * export const Routes = {
+     *     "ListThings": "GET /things",
+     *     "GetThing": "GET /thing/{id}",
+     *     "CreateThing": "POST /thing",
+     *     "UpdateThing": "PUT /things/{id}",
+     *     "DeleteThing": "DELETE /things/{id}"
+     * } as const
      * export const handler = pipeline()
-     *  .addRoute()
+     *  .withRoutes(Routes)
      *  .done(function (e) {
      *      switch(e.route) {
      *          case "POST /users": return postUsers(e)
      *          case "GET /users": return getUsers(e)
      *          case "PUT /users/{userId}": return putUser(e)
      *          case "DELETE /users/{userId}": return deleteUsers(e)
-     *          default: throw new Error("Unknown route " + e.route)
      *      }
      *  })
+     *  //somewhere in the infrastructure code ...
+     *  import {newApiGwIntegration, newLambda} from "@aws/util"
+     *  import {Routes} from "@api/things"
+     *  const lambda = newLambda({ module: 'things', handler: 'handler' }).build()
+     *  newApiGwIntegration(gateway.id, lambda)
+     *     .addRoutes(Routes)
      */
-    withRoute(): Pipeline<TEvent & RouteEvent>
+    withRoutes<T extends RouteMap>(routes?: T, options?: RoutesMiddlewareOptions): Pipeline<TEvent & RouteEvent<T>>
 }
 
-Pipeline.prototype.withRoute = function () {
-    return this.do(addRoute)
+Pipeline.prototype.withRoutes = function <T extends RouteMap>(routes?: T, options?: RoutesMiddlewareOptions) {
+    const allowUnknownRoutes = options?.allowUnknownRoutes ?? routes === undefined
+    const keys = new Set(Object.values(routes ?? {}))
+    return this.do(function (this: Middleware, event: Request, context: Context) {
+        const {routeKey} = event
+        const knownRoute = allowUnknownRoutes || keys.has(routeKey as any);
+        if (!knownRoute) {
+            return Promise.resolve({statusCode: 404})
+        }
+        const request = event as Request & RouteEvent<T>
+        return this.next(request, context)
+    })
 }
 
 /**
@@ -331,21 +353,6 @@ Pipeline.prototype.requireJWTAuth = function () {
 }
 Pipeline.prototype.requireLambdaAuth = function <T = unknown>() {
     return this.do(requireLambdaAuth<T>)
-}
-
-export async function handleErrors(this: Middleware, e: Request, ctx: Context) {
-    try {
-        return await this.next(e, ctx)
-    } catch (e) {
-
-        if (e instanceof SyntaxError) {
-            //cannot parse json
-        }
-
-        return {
-            statusCode: 400
-        }
-    }
 }
 
 export type TracedEvent = { tracer: Tracer }

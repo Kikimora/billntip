@@ -1,16 +1,16 @@
-import {APIGatewayProxyEventV2, APIGatewayProxyResultV2} from "aws-lambda";
 import { jwtDecode } from "jwt-decode";
+import {pipeline} from "@app/lambda";
+import {SessionContext} from "@src/authorizer/session";
 
-export async function handler(req:APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
-    const accessTokenHeader = req.headers['x-accesstoken'] as string;
-    const accessToken = accessTokenHeader ? jwtDecode(accessTokenHeader) : "";
-    const idTokenHeader = req.headers['x-idtoken'] as string;
-    const idToken = idTokenHeader ? jwtDecode(idTokenHeader) : "";
-    return {
-        statusCode:200,
-        body: JSON.stringify({
-            "access_token": accessToken,
-            "id_token": idToken,
-        }, null, 2)
-    }
-}
+export const handler = pipeline()
+    .traceRequest()
+    .requireLambdaAuth<SessionContext>()
+    .done(function (req) {
+        return Promise.resolve({
+            statusCode:200,
+            body: JSON.stringify({
+                "access_token": jwtDecode(req.requestContext.authorizer.lambda.access_token),
+                "id_token": jwtDecode(req.requestContext.authorizer.lambda.id_token),
+            }, null, 2)
+        })
+    })

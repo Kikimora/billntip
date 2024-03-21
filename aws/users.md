@@ -447,3 +447,12 @@ To get there we need:
 4. Allow `SignUp` users to confirm their alias attributes without knowing their username:
     1. Build custom confirmation page
     2. Send short link to the confirmation page with code and username in both email and SMS confirmation.
+
+
+TODO 
+1. invite endpoint calling `AdminCreateUser` with verified email
+2. update userpool, share new details with Nikita, tell him to use address attribute for country
+3. create business, recipient and invite records in DynamoDb
+4. create index for recipient invites
+5. create invite record together with `AdminCreateUser` call with a TTL matching temp password.
+4. accept invite endpoint updating invite record with yes.

@@ -2,6 +2,8 @@ import * as aws from "@pulumi/aws";
 import * as gateway from "./gateway";
 import {callbackRoute} from "./auth"
 import {apiRoute} from "./$default"
+import tip from "./tip"
+import bill from "./bill"
 
 export * as authorizer from "./authorizer"
 export * as gateway from "./gateway"
@@ -12,7 +14,7 @@ const deployment = new aws.apigatewayv2.Deployment(
         apiId: gateway.id,
     },
     {
-        dependsOn: [apiRoute, callbackRoute]
+        dependsOn: [apiRoute, callbackRoute, ...tip.routes, ...bill.routes]
     });
 
 new aws.apigatewayv2.Stage("api-stage", {
