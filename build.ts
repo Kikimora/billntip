@@ -1,7 +1,7 @@
 import {program} from 'commander';
 import * as _ from "lodash";
 import * as dotenv from 'dotenv';
-import {Lambda, pickLambdas} from "@app/lambda/builder";
+import {LambdaSource, pickLambdas} from "@app/lambda/builder";
 import {Lambdas, makeBuilder} from "@aws/lambdas";
 
 dotenv.config();
@@ -14,7 +14,7 @@ program
     .argument('<handlers...>', 'Lambda handlers (Ex: api.handler, api.* or all)')
     .action(async function (handlers: string[], options) {
 
-        const lambdas = handlers.flatMap(function (spec: string): Lambda[] {
+        const lambdas = handlers.flatMap(function (spec: string): LambdaSource[] {
             return pickLambdas(Lambdas, spec)
         })
 
@@ -30,7 +30,7 @@ program
 program.parse(process.argv.slice(1))
 
 function buildAndUpdate(options: any) {
-    return async function (lambda: Lambda) {
+    return async function (lambda: LambdaSource) {
         const {module} = lambda
         const builder = makeBuilder(options.stack);
         if (options.build && !builder.buildTasks[module]) {

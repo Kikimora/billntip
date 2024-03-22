@@ -206,8 +206,8 @@ export function pipeline<T = Request>() {
     return new Pipeline<T>()
 }
 
-interface JsonRequest {
-    json: object
+export interface JsonRequest {
+    json: unknown
 }
 
 /**

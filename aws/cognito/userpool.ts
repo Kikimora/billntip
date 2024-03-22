@@ -103,16 +103,19 @@ const pool = new aws.cognito.UserPool('cognito-user-pool', {
     smsVerificationMessage: "Your verification code is {####}."
 })
 
-export const userPool = {
+const userPool = {
     type: "userpool",
     id: pool.id,
     arn: pool.arn,
     principal: "cognito-idp.amazonaws.com",
     sourceArn: pool.arn,
+    urn: pool.urn
 }
 grantInvoke(preSignup, userPool)
 grantInvoke(postSignup, userPool)
 grantInvoke(info, userPool)
+
+export default userPool
 
 const args = {
     ...newPolicy("ManageUsers")

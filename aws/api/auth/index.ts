@@ -1,2 +1,2 @@
-export {callbackRoute} from "./cognito/callback"
-export {tokensRoute} from "./tokens"
+export {default as callbackRoute} from "./cognito/callback"
+export {default as tokensRoute} from "./tokens"

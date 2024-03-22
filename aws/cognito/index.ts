@@ -1,23 +1,29 @@
-import {apiClient as api} from "./api-client";
-import {frontendClient as frontend} from "./frontend-client";
-import {userPool} from "./userpool";
-import {userPoolDomain} from "@aws/cognito/domain";
+import userPool from "./userpool";
+import userPoolDomain from "./domain";
+import {appleIdp, facebookIdp, googleIdp} from "./idps";
 
-export const pool = userPool
+export default {
 
-/**
- * Confidential Cognito API client for backend.
- */
-export const apiClient = {
-    id: api.id
+    /**
+     * Cognito user pool
+     */
+    userPool,
+    /**
+     * Cognito user pool domain
+     */
+    userPoolDomain,
+    identityProviders: {
+        apple: {
+            name: appleIdp.providerName,
+            urn: appleIdp.urn
+        },
+        facebook: {
+            name: facebookIdp.providerName,
+            urn: facebookIdp.urn
+        },
+        google: {
+            name: googleIdp.providerName,
+            urn: googleIdp.urn
+        }
+    }
 }
-/**
- * Public Cognito API client for frontend application.
- */
-export const frontendClient = {
-    id: frontend.id
-}
-
-export const domain = userPoolDomain.domain
-
-export {tokenValidityInSeconds} from "./util"

@@ -7,16 +7,17 @@ import {LambdaClient, UpdateFunctionCodeCommand} from "@aws-sdk/client-lambda";
 
 export type LambdaModule = { name: string, handlers: readonly string[] }
 export type Type<T extends LambdaModule> = { [key in T['handlers'][number]]: (...args: any[]) => Promise<any> }
-export type Lambda = { module: string, handler: string }
+export type LambdaSource = { readonly module: string, readonly handler: string }
 
+// This line does not compile in Pulumi environment and ok everywhere else.
 // https://github.com/pulumi/pulumi/issues/4876
 // In November 2020, with the release of TypeScript 4.1, template strings became type-checkable thanks to the
 // introduction of template literal types.
-// Pulumi uses ts-node 7.0.1 which uses "typescript": "^2.8.3"
-// Solution is to override pulumi's
+// Pulumi uses ts-node 7.0.1 which uses "typescript": "^2.8.3" which does not support template literal types.
+// Solution is to override pulumi's typescript version
 export type LambdaHandler<T extends LambdaModule> = `${T['name']}.${T['handlers'][number]}`
 
-export type LambdaSet<T extends `${string}.${string}`> = { [key in T]: Lambda }
+export type LambdaSet<T extends `${string}.${string}`> = { [key in T]: LambdaSource }
 
 export function lambdaSet() {
     return new LambdaSetBuilder()
@@ -24,7 +25,7 @@ export function lambdaSet() {
 
 class LambdaSetBuilder<T extends `${string}.${string}` = never> {
 
-    private set: { [key: `${string}.${string}`]: Lambda } = {}
+    private set: { [key: `${string}.${string}`]: LambdaSource } = {}
 
     add<Module extends LambdaModule>(module: Module): LambdaSetBuilder<T | LambdaHandler<Module>> {
         for (let handler of module.handlers) {
@@ -53,7 +54,7 @@ export function pickLambdas(lambdas: LambdaSet<any>, spec: string) {
     if (spec in lambdas) {
         return [lambdas[spec]]
     } else {
-        return Object.values(lambdas).filter(function (lambda: Lambda) {
+        return Object.values(lambdas).filter(function (lambda: LambdaSource) {
             return (module == "*" || lambda.module == module) && (handler == "*" || lambda.handler == handler)
         })
     }
@@ -82,7 +83,7 @@ export interface LambdaBuilderOptions {
     /**
      * Function to build AWS Lambda name from module and handler.
      */
-    readonly lambdaName: (lambdaHandler: Lambda) => string
+    readonly lambdaName: (lambdaHandler: LambdaSource) => string
 }
 
 export class Builder {
@@ -94,7 +95,7 @@ export class Builder {
     private readonly esBuildOptions: esbuild.BuildOptions
     private readonly _readArchive: (module: string) => Promise<Uint8Array>
 
-    readonly lambdaName: (lambda: Lambda) => string
+    readonly lambdaName: (lambda: LambdaSource) => string
 
     constructor(opts: LambdaBuilderOptions) {
         this.outDir = upath.resolve(opts.outDir ?? "./out")
@@ -187,7 +188,7 @@ export class Builder {
     /**
      * Update AWS Lambda function.
      */
-    public async update(lambda: Lambda, publish: boolean = true) {
+    public async update(lambda: LambdaSource, publish: boolean = true) {
         const {module} = lambda
         const zip = await this._readArchive(module)
         const update = new UpdateFunctionCodeCommand({

@@ -36,6 +36,7 @@ export type DynamoDbType = DynamoDbSchema
     | DynamoDbArraySchema
     | DynamoDbMapSchema
     | DynamoDbBasicType
+    | string
 
 //<!-- @formatter:off -->
 /**
@@ -66,6 +67,7 @@ export type SchemaType<T> = (
     : T extends { $array: any } ? Array<SchemaType<T['$array']>>
     : T extends { $map: any } ? {[key:string]: SchemaType<T['$map']>}
     : T extends DynamoDbSchema ? { -readonly [k in keyof T] -?: SchemaType<T[k]>; }
+    : T extends string ? T
     : never
 )
 
@@ -90,6 +92,7 @@ export type AttributeGenerator<T> =
     : T extends DynamoDbArraySchema ? (idx:number)=>AttributeGenerator<T['$array']> & StringBuilder
     : T extends DynamoDbMapSchema ? (idx:string)=>AttributeGenerator<T['$map']> & StringBuilder
     : T extends DynamoDbSchema ? { [k in KeyOf<T>]: AttributeGenerator<T[k]> & StringBuilder; }
+    : T extends string ? T
     : never
 //<!-- @formatter:on -->
 
@@ -100,35 +103,35 @@ export namespace D {
     /**
      * DynamoDb string.
      */
-    export const String = "S"
+    export const String = "S" as const
     /**
      * DynamoDb number.
      */
-    export const Number = "N"
+    export const Number = "N" as const
     /**
      * DynamoDb binary object.
      */
-    export const Binary = "B"
+    export const Binary = "B" as const
     /**
      * DynamoDb string set.
      */
-    export const StringSet = "SS"
+    export const StringSet = "SS" as const
     /**
      * DynamoDb number set.
      */
-    export const NumberSet = "NS"
+    export const NumberSet = "NS" as const
     /**
      * DynamoDb binary objects set.
      */
-    export const BinarySet = "BS"
+    export const BinarySet = "BS" as const
     /**
      * DynamoDb null (unknown item).
      */
-    export const Unknown = "NULL"
+    export const Unknown = "NULL" as const
     /**
      * DynamoDb boolean.
      */
-    export const Boolean = "BOOL"
+    export const Boolean = "BOOL" as const
     /**
      * DynamoDb map, mapping from string to a DynamoDb attributes.
      */
@@ -197,7 +200,7 @@ export function attributeGenerator<T>(schema: T, callback?: (path: string[]) => 
  */
 export type ValuesGenerator<T> = {
     [key in KeyOf<T>]-?: string
-} & ((val: any, key?:string) => string)
+} & ((val: any, key?: string) => string)
 
 /**
  * Update expression context provides normal context variables (e.g. key, attr, val) as well as helper methods to
@@ -247,7 +250,7 @@ export class UpdateContext<T, V> {
  */
 export function valueGenerator<T>(values: T, callback: (key: string, value: any) => void): ValuesGenerator<T> {
     let valIndex = 1;
-    const result = function (val: any, key?:string) {
+    const result = function (val: any, key?: string) {
         key = key ?? ":__val" + valIndex++;
         callback(key, val)
         return key
@@ -433,6 +436,22 @@ export type TableSchema<T> = T extends Table<any, any> ? (T['key'] & T['attribut
  * @param name - DynamoDB table name
  * @param key - key attributes (partition and sort key)
  * @param attributes - other than key attributes of the table
+ *
+ * @example - single table design for users and teams
+ * import {D, table} from "@app/dynamodb"
+ * const Users = table("SingleTable", {
+ *     pk: D.String as `usr_${string}`
+ * }, {
+ *     name: D.String,
+ *     age: D.Number
+ * })
+ * const Teams = table("SingleTable", {
+ *     pk: D.String as `team_${string}`,
+ *     sk: D.String as `usr_${string}`,
+ * }, {
+ *     joined_at: D.Number,
+ *     score: D.Number
+ * })
  */
 export function table<Key, Attributes>(name: string,
                                        key: DynamoDbSchemaType<Key>,

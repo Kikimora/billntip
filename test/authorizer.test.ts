@@ -106,7 +106,7 @@ const testContext: {
 } = {}
 
 beforeAll(async () => {
-    const testCognitoModule = await cognitoInit(cognito.pool.id, cognito.apiClient.id)
+    const testCognitoModule = await cognitoInit(cognito.userPool.id, cognito.clients.api.id)
     testContext.group = await testCognitoModule.loadTestGroup()
     testContext.user = await testContext.group.createUniqueUser()
     httpMock.post.mockImplementation(cognitoMock);
@@ -366,17 +366,17 @@ describe('Tokens endpoint', () => {
  * Populate process.env with values required by authorizer Lambda function
  */
 function prepareAuthorizerEnvironment() {
-    const o = upath.join(__dirname, "..", "out", "outputs.json")
+    const o = upath.join(__dirname, "..", "aws", "resources.json")
     const outputs = JSON.parse(fs.readFileSync(o).toString("utf-8"))
     const {dynamodb, api, cognito, s3} = outputs as any
-    const tokenEndpoint = `https://${cognito.domain}.auth.eu-south-1.amazoncognito.com/oauth2/token`;
-    const oathIssuer = `https://cognito-idp.eu-south-1.amazonaws.com/${cognito.pool.id}`;
+    const tokenEndpoint = `https://${cognito.userPoolDomain.domain}.auth.eu-south-1.amazoncognito.com/oauth2/token`;
+    const oathIssuer = `https://cognito-idp.eu-south-1.amazonaws.com/${cognito.userPool.id}`;
     Object.assign(process.env, {
         COOKIE_NAME: SessionKey,
         SESSION_TABLE: dynamodb.sessionsTable.name,
         LOCKS_TABLE: dynamodb.locksTable.name,
-        USER_POOL_ID: cognito.pool.id,
-        OAUTH_CLIENT_ID: cognito.apiClient.id, //user pool client id
+        USER_POOL_ID: cognito.userPool.id,
+        OAUTH_CLIENT_ID: cognito.clients.api.id, //user pool client id
         OAUTH_ISSUER: oathIssuer,
         OAUTH_TOKEN_ENDPOINT: tokenEndpoint,
         POST_AUTH_REDIRECT_URL: "https://localhost",

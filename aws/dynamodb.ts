@@ -1,4 +1,5 @@
 import * as aws from "@pulumi/aws";
+import {newPolicy} from "@aws/util";
 
 const data = new aws.dynamodb.Table('data', {
     attributes: [
@@ -55,4 +56,15 @@ export const sessionsTable = {
 export const locksTable = {
     arn: locks.arn,
     name: locks.name
+}
+
+export function allowCrud() {
+    return newPolicy('DynamoDbAccess')
+        .allow("dynamodb:GetItem",
+            "dynamodb:DeleteItem",
+            "dynamodb:PutItem",
+            "dynamodb:Scan",
+            "dynamodb:Query",
+            "dynamodb:UpdateItem",
+            "dynamodb:DescribeTable")
 }

@@ -1,9 +1,9 @@
 import * as upath from "upath";
 import fs from 'fs'
-import {Builder, Lambda, lambdaSet} from "@app/lambda/builder";
+import {Builder, LambdaSource, lambdaSet} from "@app/lambda/builder";
 import _ from "lodash";
 import * as pulumi from "@pulumi/pulumi";
-import {newLambda, newPolicy} from "@aws/util";
+import {newLambda} from "@aws/util";
 import * as aws from "@pulumi/aws";
 
 export const Authorizer = {
@@ -34,20 +34,11 @@ export const Cognito = {
 export const Lambdas = lambdaSet().add(Authorizer).add(Api).add(Cognito).add(Bill).add(Tip).build()
 
 function makeLambdaNamer(stack: string) {
-    return function (lambda: Lambda) {
+    return function (lambda: LambdaSource) {
         const {module, handler} = lambda
         return `billntip-${stack}-${module}-${handler}-fn`
     }
 }
-
-export const allowDynamoDb = newPolicy('DynamoDbAccess')
-    .allow("dynamodb:GetItem",
-        "dynamodb:DeleteItem",
-        "dynamodb:PutItem",
-        "dynamodb:Scan",
-        "dynamodb:Query",
-        "dynamodb:UpdateItem",
-        "dynamodb:DescribeTable");
 
 export const makeBuilder = _.memoize(function (stack) {
 

@@ -1,6 +1,6 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
-import {userPool} from "./userpool";
+import userPool from "./userpool";
 
 const config = new pulumi.Config();
 // Note - providerName and providerType must match - https://github.com/aws/aws-cli/issues/3179

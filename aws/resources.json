@@ -1,0 +1,171 @@
+{
+  "dynamodb": {
+    "locksTable": {
+      "arn": "arn:aws:dynamodb:eu-south-1:381491945919:table/locks-e544f38",
+      "name": "locks-e544f38"
+    },
+    "sessionsTable": {
+      "arn": "arn:aws:dynamodb:eu-south-1:381491945919:table/sessions-b097e39",
+      "name": "sessions-b097e39"
+    },
+    "dataTable": {
+      "arn": "arn:aws:dynamodb:eu-south-1:381491945919:table/data-33df69c",
+      "name": "data-33df69c"
+    }
+  },
+  "cognito": {
+    "userPool": {
+      "type": "userpool",
+      "id": "eu-south-1_6Wg8hrnO1",
+      "arn": "arn:aws:cognito-idp:eu-south-1:381491945919:userpool/eu-south-1_6Wg8hrnO1",
+      "principal": "cognito-idp.amazonaws.com",
+      "sourceArn": "arn:aws:cognito-idp:eu-south-1:381491945919:userpool/eu-south-1_6Wg8hrnO1",
+      "urn": "urn:pulumi:dev::BillAndTip::aws:cognito/userPool:UserPool::cognito-user-pool"
+    },
+    "userPoolDomain": {
+      "certificateArn": "",
+      "cloudfrontDistribution": "d1rnvcw0ivoszf.cloudfront.net",
+      "domain": "billntip",
+      "id": "billntip",
+      "s3Bucket": "aws-cognito-prod-mxp-assets",
+      "urn": "urn:pulumi:dev::BillAndTip::aws:cognito/userPoolDomain:UserPoolDomain::cognito-hosted-ui-domain"
+    },
+    "identityProviders": {
+      "apple": {
+        "name": "SignInWithApple",
+        "urn": "urn:pulumi:dev::BillAndTip::aws:cognito/identityProvider:IdentityProvider::cognito-apple-idp"
+      },
+      "facebook": {
+        "name": "Facebook",
+        "urn": "urn:pulumi:dev::BillAndTip::aws:cognito/identityProvider:IdentityProvider::cognito-facebook-idp"
+      },
+      "google": {
+        "name": "Google",
+        "urn": "urn:pulumi:dev::BillAndTip::aws:cognito/identityProvider:IdentityProvider::cognito-google-idp"
+      }
+    },
+    "clients": {
+      "api": {
+        "id": "7nmck08pbf94d04clmbr7s88un",
+        "urn": "urn:pulumi:dev::BillAndTip::aws:cognito/userPoolClient:UserPoolClient::cognito-api-client"
+      },
+      "frontend": {
+        "id": "6rmeclp33hm9qgovulm3056kui",
+        "urn": "urn:pulumi:dev::BillAndTip::aws:cognito/userPoolClient:UserPoolClient::cognito-frontend-client"
+      }
+    }
+  },
+  "api": {
+    "gateway": {
+      "id": "91cdkha2y8",
+      "url": "https://91cdkha2y8.execute-api.eu-south-1.amazonaws.com/dev",
+      "urn": "urn:pulumi:dev::BillAndTip::aws:apigatewayv2/api:Api::api"
+    },
+    "authorizer": {
+      "id": "vwmth7",
+      "name": "user-authorizer",
+      "src": "authorizer/cookie",
+      "urn": "urn:pulumi:dev::BillAndTip::aws:apigatewayv2/authorizer:Authorizer::cookie-authorizer"
+    },
+    "routes": [
+      {
+        "operationName": "",
+        "routeKey": "$default",
+        "authorizerId": "vwmth7",
+        "target": "integrations/lic4h9p",
+        "src": "api/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-api-handler-fn"
+      },
+      {
+        "operationName": "",
+        "routeKey": "GET /auth/tokens",
+        "authorizerId": "vwmth7",
+        "target": "integrations/vjhpd80",
+        "src": "authorizer/tokens",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-authorizer-tokens-fn"
+      },
+      {
+        "operationName": "",
+        "routeKey": "GET /auth/cognito/idpresponse",
+        "authorizerId": "",
+        "target": "integrations/hfc9wkk",
+        "src": "authorizer/code",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-authorizer-code-fn"
+      },
+      {
+        "operationName": "GetInvite",
+        "routeKey": "GET /tip/invite/{id}",
+        "authorizerId": "vwmth7",
+        "target": "integrations/vq81yt2",
+        "src": "tip/invite",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-invite-fn"
+      },
+      {
+        "operationName": "ListInvites",
+        "routeKey": "GET /tip/invites",
+        "authorizerId": "vwmth7",
+        "target": "integrations/vq81yt2",
+        "src": "tip/invite",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-invite-fn"
+      },
+      {
+        "operationName": "AcceptInvite",
+        "routeKey": "PUT /tip/invite/{id}",
+        "authorizerId": "vwmth7",
+        "target": "integrations/vq81yt2",
+        "src": "tip/invite",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-invite-fn"
+      },
+      {
+        "operationName": "RejectInvite",
+        "routeKey": "DELETE /tip/invite/{id}",
+        "authorizerId": "vwmth7",
+        "target": "integrations/vq81yt2",
+        "src": "tip/invite",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-invite-fn"
+      },
+      {
+        "operationName": "GetInvite",
+        "routeKey": "GET /bill/invite/{id}",
+        "authorizerId": "vwmth7",
+        "target": "integrations/21wfazd",
+        "src": "bill/invite",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
+      },
+      {
+        "operationName": "ListInvites",
+        "routeKey": "GET /bill/invites",
+        "authorizerId": "vwmth7",
+        "target": "integrations/21wfazd",
+        "src": "bill/invite",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
+      },
+      {
+        "operationName": "CreateInvite",
+        "routeKey": "POST /bill/invite",
+        "authorizerId": "vwmth7",
+        "target": "integrations/21wfazd",
+        "src": "bill/invite",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
+      },
+      {
+        "operationName": "DeleteInvite",
+        "routeKey": "DELETE /bill/invite/{id}",
+        "authorizerId": "vwmth7",
+        "target": "integrations/21wfazd",
+        "src": "bill/invite",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
+      }
+    ],
+    "deployment": {
+      "id": "fx9mec",
+      "urn": "urn:pulumi:dev::BillAndTip::aws:apigatewayv2/deployment:Deployment::api-deployment",
+      "autoDeployed": false
+    }
+  },
+  "s3": {
+    "bucket": {
+      "id": "bucket-f965b61"
+    }
+  }
+}

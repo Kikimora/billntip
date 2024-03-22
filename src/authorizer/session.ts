@@ -13,9 +13,27 @@ const tracer = AuthTracer.withScope("session")
 const shortUUIDGenerator = shortUUID(shortUUID.constants.flickrBase58)
 const store = makeLockStore(Env.locksTable, {dynamoDb})
 
-export type SessionContext = {
+interface IdToken {
+    "at_hash": string,
+    "aud": string,
+    "auth_time": number,
+    "cognito:groups": string [],
+    "cognito:username": string,
+    "email": string,
+    "email_verified": boolean,
+    "event_id"?: string,
+    "exp": number,
+    "iat": number,
+    "iss": string,
+    "jti": string,
+    "origin_jti"?: string,
+    "sub": string,
+    "token_use": "id"
+}
+
+export type SessionContext<Id = IdToken> = {
     access_token: object,
-    id_token: object,
+    id_token: Id,
     expires_at: number
 }
 
@@ -267,7 +285,7 @@ export default class SessionData implements SessionItem {
     /**
      * Make authentication context variables.
      */
-    context() : SessionContext {
+    context(): SessionContext {
         return {
             'access_token': jwtDecode(this.accessToken),
             'id_token': jwtDecode(this.idToken),

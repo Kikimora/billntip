@@ -2,19 +2,22 @@ import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 import {FunctionArgs} from "@pulumi/aws/lambda";
 import {iam} from "@pulumi/aws/types/input";
-import {Builder, Lambda as LambdaDeclaration} from "@app/lambda/builder";
+import {Builder, LambdaSource} from "@app/lambda/builder";
 import _ from '@app/util';
 import {RouteMap} from "@app/lambda";
+import {IntegrationArgs} from "@pulumi/aws/apigatewayv2/integration";
+import {RequiredKeysOf} from "type-fest";
+import {ProviderResource} from "@pulumi/pulumi";
 
 /**
  * Details of an AWS service that wants to call a Lambda function.
  */
-interface LambdaClient {
+export interface LambdaCaller {
     principal: pulumi.Input<string>,
     sourceArn: pulumi.Input<string>
 }
 
-const makeResourceId = _.memoize(function ({module, handler}: LambdaDeclaration) {
+const makeResourceId = _.memoize(function ({module, handler}: LambdaSource) {
     return `${module}-${handler}`
 })
 
@@ -95,17 +98,17 @@ interface LambdaBuilder {
      * Grant rights to invoke the function
      * @param client - grantee
      */
-    grantInvoke(client: LambdaClient): LambdaBuilder
+    grantInvoke(client: LambdaCaller): LambdaBuilder
 
     /**
      * Build lambda function
      */
-    build(): Lambda
+    build(): LambdaFunction
 }
 
 type AwsResource = { arn: pulumi.Output<string> }
 
-export function grantInvoke(lambda: Lambda, client: LambdaClient): aws.lambda.Permission {
+export function grantInvoke(lambda: LambdaFunction, client: LambdaCaller): aws.lambda.Permission {
     const {id, arn} = lambda
     return new aws.lambda.Permission(`${id}-permissions`, {
         action: "lambda:invokeFunction",
@@ -116,7 +119,7 @@ export function grantInvoke(lambda: Lambda, client: LambdaClient): aws.lambda.Pe
 }
 
 interface NewLambdaModule {
-    (decl: LambdaDeclaration): LambdaBuilder
+    (decl: LambdaSource): LambdaBuilder
 
     defaults: Partial<FunctionArgs>
 
@@ -125,12 +128,12 @@ interface NewLambdaModule {
     role(name: string, ...settings: iam.RoleInlinePolicy[]): aws.iam.Role
 }
 
-const newLambdaModule = function (decl: LambdaDeclaration) {
+const newLambdaModule = function (src: LambdaSource) {
     let _opts: pulumi.CustomResourceOptions
     let _args: Partial<FunctionArgs> = {}
     let _policies: RolePolicy[] = []
     let _role: aws.iam.Role
-    let _client: LambdaClient
+    let _client: LambdaCaller
 
     const lambdaBuilder: LambdaBuilder = {
         options(options: pulumi.CustomResourceOptions) {
@@ -149,12 +152,12 @@ const newLambdaModule = function (decl: LambdaDeclaration) {
             _role = role
             return this
         },
-        grantInvoke(client: LambdaClient) {
+        grantInvoke(client: LambdaCaller) {
             _client = client
             return this
         },
 
-        build(builder?: Builder): Lambda {
+        build(builder?: Builder): LambdaFunction {
             if (_role !== undefined && _policies.length > 0)
                 throw new Error("Either role or permissions can be specified but not both.")
 
@@ -171,15 +174,15 @@ const newLambdaModule = function (decl: LambdaDeclaration) {
                 throw new Error("")
             }
 
-            const id = makeResourceId(decl)
+            const id = makeResourceId(src)
             const role = _role !== undefined ? _role : newLambdaRole(`${id}-role`, ..._policies);
             const defaults = newLambda.defaults ?? {}
             const args = _.merge({}, _args, defaults)
-            const handler = `index.${decl.handler}`;
+            const handler = `index.${src.handler}`;
             const lambdaFunction = new aws.lambda.Function(`${id}-fn`, {
                     ...args,
-                    name: builder.lambdaName(decl),
-                    code: new pulumi.asset.FileArchive(builder.bundle(decl.module, "ts")),
+                    name: builder.lambdaName(src),
+                    code: new pulumi.asset.FileArchive(builder.bundle(src.module, "ts")),
                     handler,
                     role: role.arn
                 },
@@ -189,6 +192,7 @@ const newLambdaModule = function (decl: LambdaDeclaration) {
 
             const lambda = {
                 id,
+                src,
                 handler,
                 arn: lambdaFunction.arn,
                 invokeArn: lambdaFunction.invokeArn,
@@ -248,11 +252,12 @@ export function newPolicy(name: string): PolicyBuilder {
     return policyBuilder
 }
 
-export type Lambda = {
+export type LambdaFunction = {
+    src: LambdaSource,
     handler: string
     id: string
-    arn: pulumi.Input<string>
-    invokeArn: pulumi.Input<string>
+    arn: pulumi.Output<string>
+    invokeArn: pulumi.Output<string>
 }
 
 export function newLambdaRole(name: string, ...settings: iam.RoleInlinePolicy[]) {
@@ -279,16 +284,31 @@ interface ApiRoute extends Omit<aws.apigatewayv2.RouteState, "routeKey"> {
     routeKey: string
 }
 
-export function newApiGwIntegration(apiId: pulumi.Output<string>, lambda: Lambda) {
+export interface ApiGateway {
+    /**
+     * Logical API Gateway name
+     */
+    name: string,
+    /**
+     * API Gateway identifier (aka apiId)
+     */
+    id: pulumi.Output<string>,
+}
+
+export type Resource<T extends Record<string, any>> = Omit<{ [key in RequiredKeysOf<T>]: T['key'] }, 'getProvider'>
+export type RouteResource = aws.apigatewayv2.Route & { src: string, lambdaArn: pulumi.Output<string> }
+
+export function newApiGwIntegration(gw: ApiGateway, lambda: LambdaFunction, args?: Partial<IntegrationArgs>) {
     const integration = new aws.apigatewayv2.Integration(`${lambda.id}-integration`, {
-        apiId: apiId,
         integrationType: "AWS_PROXY", // AWS_PROXY for Lambda function integration
+        ...args,
+        apiId: gw.id,
         integrationUri: lambda.arn,
-        payloadFormatVersion: "2.0"
+        payloadFormatVersion: "2.0",
     });
 
     let _default: Partial<ApiRoute>
-    let routes: aws.apigatewayv2.Route[] = []
+    let routes: RouteResource[] = []
 
     return {
 
@@ -306,17 +326,17 @@ export function newApiGwIntegration(apiId: pulumi.Output<string>, lambda: Lambda
 
         addRoute(route: ApiRoute) {
             const {routeKey} = route
-            //GET /bill/invite/{id} -> get-bill-invite-id
-            const [method, path, ...rest] = routeKey.split(' ')
-            if (rest.length > 0) throw new Error(`Invalid routeKey ${routeKey}`)
-            const name = `${method.toLowerCase()}-${_.trim(path, '/').replaceAll('/', '-').replaceAll(/[}{]/g, '')}`
+            const name = `${gw.name}-${makeName(routeKey)}`
 
-            routes.push(new aws.apigatewayv2.Route(name, {
+            const routeResource = new aws.apigatewayv2.Route(name, {
                 ..._default,
                 ...route,
-                apiId,
+                apiId: gw.id,
                 target: pulumi.interpolate`integrations/${integration.id}`
-            }))
+            }) as any;
+            routeResource.src = `${lambda.src.module}/${lambda.src.handler}`
+            routeResource.lambdaArn = lambda.arn
+            routes.push(routeResource)
 
             return this
         },
@@ -328,4 +348,20 @@ export function newApiGwIntegration(apiId: pulumi.Output<string>, lambda: Lambda
             }
         }
     }
+}
+
+/**
+ * Convert route key into logical resource name
+ * @param routeKey - API Gateway route key
+ * @example
+ * makeName("GET /bill/invite/{id}") //get-bill-invite-id
+ * makeName("$default") //default
+ */
+function makeName(routeKey: string) {
+    if (routeKey === "$default") {
+        return "default"
+    }
+    const [method, path, ...rest] = routeKey.split(' ')
+    if (rest.length > 0) throw new Error(`Invalid routeKey ${routeKey}`)
+    return `${method.toLowerCase()}-${_.trim(path, '/$').replaceAll('/', '-').replaceAll(/[}{]/g, '')}`
 }

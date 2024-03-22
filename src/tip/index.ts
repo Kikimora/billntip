@@ -1,12 +1,6 @@
-import {pipeline} from '@app/lambda'
 import _ from "lodash";
-
-export const Routes = {
-    "GetInvite": "GET /tip/invite/{id}",
-    "ListInvites": "GET /tip/invites",
-    "AcceptInvite": "PUT /tip/invite/{id}",
-    "RejectInvite": "DELETE /tip/invite/{id}"
-} as const
+import {pipeline} from '@app/lambda'
+import Routes from "./routes";
 
 export const handler = pipeline()
     .do(async function () {
