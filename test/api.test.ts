@@ -1,12 +1,19 @@
 import {Context} from "aws-lambda";
 import {
-    IAMAuthorizedRequest, JWTAuthorizedRequest, LambdaAuthorizedRequest,
+    IAMAuthorizedRequest,
+    JsonBodyError,
+    JWTAuthorizedRequest,
+    LambdaAuthorizedRequest,
     Middleware,
     pipeline,
     Request,
+    RouteMap,
     TracedEvent
 } from "@app/lambda";
-import {ErrorContext, Tracer} from "@app/diagnostics";
+import {Tracer} from "@app/diagnostics";
+import _ from "lodash";
+import {Type, TypeBoxError} from "@sinclair/typebox";
+import {StaticAssert} from "./util";
 
 let request!: any, context!: any
 beforeEach(() => {
@@ -83,7 +90,7 @@ describe("Lambda API Pipeline", () => {
 })
 
 describe("Lambda API JSON Body middleware", () => {
-    const handler = pipeline().parseJsonBody().done(async function (e) {
+    const handler = pipeline().parseJsonBody({checkContentType: false}).done(async function (e) {
         return {
             body: e.json
         }
@@ -99,28 +106,111 @@ describe("Lambda API JSON Body middleware", () => {
         expect(await handler(request, context)).toEqual({body: {x: "Hello", y: "World"}})
     })
 
-    it("throws SyntaxError on invalid JSON", () => {
+    it("throws SyntaxError on invalid JSON", async () => {
         request.body = "xyz"
         const faultyRequest = function () {
             return handler(request, context)
         };
-        expect(faultyRequest).toThrow(expect.objectContaining({
-            name: "SyntaxError",
-            [ErrorContext]: [{tag: "parseJsonBody"}]
-        }))
+        await expect(faultyRequest).rejects.toThrow(JsonBodyError)
+    })
+
+    it.each([
+        ["no Content-Type header", {}],
+        ["invalid Content-Type", {'Content-Type': 'text/xml'}],
+    ])("throws if %s", async (_str, headers) => {
+        request.body = "{}"
+        request.headers = headers
+        const handler = pipeline().parseJsonBody({checkContentType: true}).done(_.identity)
+        await expect(function () {
+            return handler(request, context)
+        }).rejects.toThrow(JsonBodyError)
     })
 })
 
+
 describe("Lambda API withRoute middleware", () => {
-    const handler = pipeline().withRoutes().done(async function (e) {
-        return {
-            body: e.routeKey
-        }
+    const UserRequest = Type.Object({
+        name: Type.String({minLength: 3, maxLength: 100}),
+        age: Type.Number({minimum: 0, maximum: 150})
     })
-    it("adds route key", async () => {
-        request.routeKey = "/pets/{id}"
-        request.requestContext = {http: {method: "POST"}}
-        expect(await handler(request, context)).toEqual({body: "POST /pets/{id}"})
+    const UserId = Type.Object({id: Type.Number({minimum: 0})})
+    const User = Type.Object({
+        ...UserRequest.properties,
+        ...UserId.properties
+    })
+    const UserAPI = {
+        "POST /users": {
+            body: UserRequest,
+            res: User
+        },
+        "GET /user/{id}": {
+            path: UserId,
+            query: Type.Object({
+                name: Type.Optional(UserRequest.properties.name),
+                age: Type.Optional(UserRequest.properties.age),
+            }),
+            res: User
+        },
+        "PUT /user/{id}": {
+            path: UserId,
+            body: UserRequest,
+            res: User
+        }
+    } as const satisfies RouteMap
+
+    const handler = pipeline()
+        .withRoutes(UserAPI)
+        .parseJsonBody({checkContentType: false})
+        .done(async function (req) {
+            StaticAssert<typeof req.routeKey, "GET /user/{id}" | "POST /users" | "PUT /user/{id}">().is(true)
+            switch (req.routeKey) {
+                case "GET /user/{id}": {
+                    const {path: {id}, query, body} = req.parse()
+                    StaticAssert<typeof id, number>().is(true);
+                    StaticAssert<typeof query, { name?: string, age?: number }>().is(true)
+                    StaticAssert<typeof body, unknown>().is(true)
+                    return {id, ...query}
+                }
+                case "PUT /user/{id}": {
+                    const {path: {id}, query, body} = req.parse()
+                    StaticAssert<typeof id, number>().is(true)
+                    StaticAssert<typeof query, unknown>().is(true)
+                    StaticAssert<typeof body, { name: string, age: number }>().is(true)
+                    return {id, ...body}
+                }
+                case "POST /users": {
+                    return {...req.validate()};
+                }
+            }
+        })
+
+    it("parse request", async () => {
+        request.routeKey = "PUT /user/{id}"
+        request.pathParameters = {id: 12}
+        request.body = JSON.stringify({name: "No Name", age: 5})
+        const response = await handler(request, context)
+        expect(response).toEqual({id: 12, name: "No Name", age: 5})
+    })
+
+    it.each([
+        ["presence of required parameter in the path", "PUT /user/{id}", {}, {name: "NoName", age: 1}, {}],
+        ["path parameter value", "PUT /user/{id}", {id: "aaa"}, {}, {}],
+        ["body", "PUT /user/{id}", {id: 12}, {name: 12}, {}],
+        ["query string", "GET /user/{id}", {}, {}, {name: 12}],
+    ])("validates %s", async (_, routeKey, path, body, query) => {
+        request.routeKey = routeKey
+        request.pathParameters = path
+        request.body = JSON.stringify(body)
+        request.queryStringParameters = query
+        await expect(async function () {
+            await handler(request, context)
+        }).rejects.toThrow(TypeBoxError)
+    })
+
+    it("returns 404", async () => {
+        request.routeKey = "POST /pets/{id}"
+        const response = await handler(request, context)
+        expect(response).toEqual({statusCode: 404})
     })
 })
 

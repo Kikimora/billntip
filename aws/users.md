@@ -425,7 +425,7 @@ If Cognito is configured to send an email with a link and user enters email then
 While perfectly matching Cognito API both flows have problems:
 
 1. Users cannot continue sign-up if they accidentally close the tab, or browser crash or OS decides to unload this
-    tab for some reason.
+   tab for some reason.
 2. It might be a problem to copy&paste code from SMS to laptop
 3. Users cannot continue sign-up process if they loose the confirmation link since they don't know the username
 
@@ -448,8 +448,21 @@ To get there we need:
     1. Build custom confirmation page
     2. Send short link to the confirmation page with code and username in both email and SMS confirmation.
 
+### Protect user attributes
 
-TODO 
+Cognito has a number of public API endpoints authorized by an access token with `aws.cognito.signin.user.admin scope`.
+One of such endpoints is `UpdateUserAttributes` which is quite unfortunate. First part of the problem is - user can
+update own attributes, including email and phone number if user has Cognito access token. The second part is - app
+cannot control this because there is no trigger. As soon as users have Cognito access_token
+with `aws.cognito.signin.user.admin` scope they can write anything into their attributes. This means backend code cannot
+rely on the information in the attributes as it can be anything.
+
+There are two workarounds
+1. Hide Cognito access token from users
+2. Grant read, but not write permissions to user attributes to app clients.
+
+TODO
+
 1. invite endpoint calling `AdminCreateUser` with verified email
 2. update userpool, share new details with Nikita, tell him to use address attribute for country
 3. create business, recipient and invite records in DynamoDb

@@ -39,7 +39,7 @@ export const invite = pipeline()
         const businesses = await dynamo.send(queryCommand(ManagersIndex, {
             indexName: "business_users",
             values: {
-                userId: `u_${req.requestContext.authorizer.lambda.id_token.sub}`,
+                userId: `u_${req.requestContext.authorizer.lambda.profile.sub}`,
             },
             keyCondition: ({key, val}) => `${key.uid} = ${val.userId}`
         }))
@@ -65,7 +65,7 @@ export const invite = pipeline()
             case 'GET /bill/invites': {
                 return {"operation": "GetInvites"}
             }
-            case 'POST /bill/invite': {
+            case 'POST /bill/invites': {
                 //validate JSON using Zod?
                 //how to map user to business?
                 //
@@ -103,12 +103,15 @@ export const invite = pipeline()
                 return {"operation": "CreateInvite"}
             }
             case 'GET /bill/invite/{id}': {
-                const {id} = e.pathParameters ?? _.throw("'id' required")
-                return {id}
+                const {path} = e.parse()
+                return {id: path.id}
             }
             case 'DELETE /bill/invite/{id}': {
-                const {id} = e.pathParameters ?? _.throw("'id' required")
-                return {id}
+                const {path} = e.parse()
+                return {id: path.id}
+            }
+            case "PUT /bill/invite/{id}": {
+                return {id: "!!!!"}
             }
         }
     })

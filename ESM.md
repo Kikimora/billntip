@@ -153,7 +153,7 @@ like this and forget about ESM for the next 5 years.
 import {LRUCache} from "lru-cache";
 
 const getSecrets = _.memoize(async function () {
-    /*load your secrets here*/
+   /*load your secrets here*/
 })
 getSecrets.cache = new LRUCache({ttl: 300000})
 

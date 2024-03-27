@@ -48,6 +48,12 @@ const postSignup = newLambda(Lambdas['users.postSignup'])
 const info = newLambda(Lambdas['users.info'])
     .role(manageUsersRole)
     .build()
+const preTokenGeneration = newLambda(Lambdas['users.preTokenGeneration'])
+    .role(manageUsersRole)
+    .build()
+const postAuthentication = newLambda(Lambdas['users.postAuthentication'])
+    .role(manageUsersRole)
+    .build()
 
 const pool = new aws.cognito.UserPool('cognito-user-pool', {
     autoVerifiedAttributes: ['email', 'phone_number'],
@@ -61,7 +67,7 @@ const pool = new aws.cognito.UserPool('cognito-user-pool', {
         preSignUp: preSignup.arn,
         postConfirmation: postSignup.arn,
         preAuthentication: info.arn,
-        postAuthentication: info.arn,
+        postAuthentication: postAuthentication.arn,
         preTokenGeneration: info.arn,
     },
     // Define password policy
@@ -114,6 +120,8 @@ const userPool = {
 grantInvoke(preSignup, userPool)
 grantInvoke(postSignup, userPool)
 grantInvoke(info, userPool)
+grantInvoke(preTokenGeneration, userPool)
+grantInvoke(postAuthentication, userPool)
 
 export default userPool
 

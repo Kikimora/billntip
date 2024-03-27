@@ -61,6 +61,7 @@ paths:
         '204':
           description: Business deleted successfully
 components:
+
   schemas:
     BusinessRequest:
       type: object

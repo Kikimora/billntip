@@ -319,7 +319,10 @@ export function newApiGwIntegration(gw: ApiGateway, lambda: LambdaFunction, args
 
         addRoutes(routes: RouteMap) {
             for (let [k, v] of Object.entries(routes)) {
-                this.addRoute({routeKey: v, operationName: k})
+                this.addRoute({
+                    routeKey: k,
+                    operationName: v.operationId,
+                })
             }
             return this
         },

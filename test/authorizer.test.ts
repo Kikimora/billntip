@@ -3,8 +3,6 @@ import {TokenEndpointResponse} from "@src/authorizer/oidc_tokens";
 jest.mock('../src/http');
 
 import 'jest-extended';
-import * as fs from "fs";
-import * as upath from "upath";
 import {
     APIGatewayAuthorizerEvent,
     APIGatewayProxyStructuredResultV2,
@@ -19,14 +17,18 @@ import {init as dynamoDbInit} from './dynamodb'
 const httpMock = http as jest.Mocked<typeof http>;
 const {default: httpReal} = jest.requireActual('../src/http');
 const SessionKey = 'SID';
-const {dynamodb, api, cognito, tokenEndpoint} = prepareAuthorizerEnvironment();
-import {code, cookie, hooks} from "@src/authorizer";
+import {resources} from "./util";
 import {AxiosResponse} from "axios";
-import {Metrics, useVariables} from "@src/authorizer/ctx";
 import {makeLockStore} from "@app/dynamodb";
 import {configure} from "@app/diagnostics";
-import SessionCookie from "@src/authorizer/cookie";
 import {jwtDecode} from "jwt-decode";
+
+//Init authorizer module, this has to happen after prepareAuthorizerEnvironment
+//due to env var dependencies.
+const {dynamodb, api, cognito, tokenEndpoint} = prepareAuthorizerEnvironment();
+import {code, cookie, hooks} from "@src/authorizer";
+import {Metrics, useVariables} from "@src/authorizer/ctx";
+import SessionCookie from "@src/authorizer/cookie";
 
 const ddb = dynamoDbInit(dynamodb.sessionsTable.name)
 
@@ -80,6 +82,7 @@ const authEvent: APIGatewayAuthorizerEvent = {
     stageVariables: null
 }
 
+// noinspection JSDeprecatedSymbols
 const awsContext: Context = {
     awsRequestId: "REQUEST ID",
     functionVersion: "$LATEST",
@@ -286,8 +289,8 @@ describe('Lambda authorizer', () => {
             const {id} = SessionCookie.load(context!.new_cookie!)!
             const sessionAfter = (await ddb.getSession(id))!
             expect(hooks.cookieAuthorizerRefresh).toHaveBeenCalled()
-            expect(sessionAfter.access_token).not.toEqual(sessionBefore['access_token'])
-            expect(sessionAfter.id_token).not.toEqual(sessionBefore['id_token'])
+            expect(sessionAfter.access_token).not.toEqual(sessionBefore['access'])
+            expect(sessionAfter.id).not.toEqual(sessionBefore['id_token'])
             expect(sessionAfter.refresh_token).toEqual(sessionBefore['refresh_token'])
             expect(sessionAfter.expires_at).toBeGreaterThan(sessionBefore['expires_at'])
             expect(sessionAfter.session_expires_at).toEqual(sessionBefore['session_expires_at'])
@@ -297,15 +300,17 @@ describe('Lambda authorizer', () => {
             const cookieHeader = parseSessionCookieHeader(response.context!.new_cookie!)
             const newSession = (await ddb.getSession(cookieHeader[SessionKey] as string))!
             expect(cookieHeader).toEqual(expect.objectContaining(sessionCookie()))
-            expect(response).toEqual(expect.objectContaining({
+            expect(response).toEqual({
                 isAuthorized: true,
                 context: {
                     'new_cookie': expect.any(String),
-                    'access_token': jwtDecode(newSession['access_token']),
-                    'id_token': jwtDecode(newSession['id_token']),
+                    'access_token': newSession['access_token'],
+                    'access': jwtDecode(newSession['access_token']),
+                    'id_token': newSession['id_token'],
+                    'profile': jwtDecode(newSession['id_token']),
                     'expires_at': newSession['expires_at']
                 }
-            }))
+            })
         })
         it('saves new session and removes old from store', async () => {
             await authorize(sessionId)
@@ -366,8 +371,7 @@ describe('Tokens endpoint', () => {
  * Populate process.env with values required by authorizer Lambda function
  */
 function prepareAuthorizerEnvironment() {
-    const o = upath.join(__dirname, "..", "aws", "resources.json")
-    const outputs = JSON.parse(fs.readFileSync(o).toString("utf-8"))
+    const outputs = resources()
     const {dynamodb, api, cognito, s3} = outputs as any
     const tokenEndpoint = `https://${cognito.userPoolDomain.domain}.auth.eu-south-1.amazoncognito.com/oauth2/token`;
     const oathIssuer = `https://cognito-idp.eu-south-1.amazonaws.com/${cognito.userPool.id}`;

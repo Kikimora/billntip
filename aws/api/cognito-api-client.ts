@@ -34,7 +34,7 @@ const cognitoApiClient = new aws.cognito.UserPoolClient("cognito-api-client", {
         cognito.identityProviders.facebook.name,
         cognito.identityProviders.apple.name
     ],
-
+    writeAttributes: []
 }, {ignoreChanges: ['callbackUrls']});
 
 type TokenType = "accessToken" | "idToken" | 'refreshToken'

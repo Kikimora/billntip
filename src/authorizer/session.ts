@@ -32,8 +32,10 @@ interface IdToken {
 }
 
 export type SessionContext<Id = IdToken> = {
-    access_token: object,
-    id_token: Id,
+    access_token: string,
+    access: object,
+    id_token: string,
+    profile: Id,
     expires_at: number
 }
 
@@ -287,8 +289,10 @@ export default class SessionData implements SessionItem {
      */
     context(): SessionContext {
         return {
-            'access_token': jwtDecode(this.accessToken),
-            'id_token': jwtDecode(this.idToken),
+            'access': jwtDecode(this.accessToken),
+            'access_token': this.accessToken,
+            'profile': jwtDecode(this.idToken),
+            'id_token': this.idToken,
             'expires_at': this.accessExpiresAt
         }
     }

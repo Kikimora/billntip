@@ -28,7 +28,7 @@ export const Tip = {
 
 export const Cognito = {
     name: "users",
-    handlers: ["preSignup", "postSignup", "info"]
+    handlers: ["preSignup", "postSignup", "info", "preTokenGeneration", "postAuthentication"]
 } as const
 
 export const Lambdas = lambdaSet().add(Authorizer).add(Api).add(Cognito).add(Bill).add(Tip).build()

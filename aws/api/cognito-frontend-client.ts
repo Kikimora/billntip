@@ -28,7 +28,7 @@ const cognitoFrontendClient = new aws.cognito.UserPoolClient("cognito-frontend-c
         cognito.identityProviders.facebook.name,
         cognito.identityProviders.apple.name
     ],
-
+    writeAttributes: []
 }, {ignoreChanges: ['callbackUrls']});
 
 export default {

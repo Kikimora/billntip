@@ -6,7 +6,6 @@ import {
 import {Env, initModuleVariables, Metrics} from "./ctx";
 import {configure, findErrorContext, Tracer} from '@app/diagnostics'
 import SessionData, {SessionContext} from "./session";
-import {accessTokenVerifier, idTokenVerifier} from "./oidc_tokens";
 import OidcTokens from "./oidc_tokens";
 import SessionCookie from "./cookie";
 import {pipeline} from "@app/lambda";
@@ -208,16 +207,16 @@ export const tokens = pipeline()
         }
     })
     .traceRequest({tracer, tag: "tokens"})
-    .requireLambdaAuth<AuthContext>()
-    .done(async function (event, context): Promise<APIGatewayProxyStructuredResultV2> {
-            const authContext = event.requestContext.authorizer.lambda ?? {
-                id_token: {}, access_token: {}, expires_at: 0
-            }
+    .requireLambdaAuth<SessionContext>()
+    .done(async function (event): Promise<APIGatewayProxyStructuredResultV2> {
+            const authContext = event.requestContext.authorizer.lambda
             return {
                 statusCode: 200,
                 body: JSON.stringify({
                     access_token: authContext.access_token,
                     id_token: authContext.id_token,
+                    profile: authContext.profile,
+                    access: authContext.access,
                     expires_at: authContext.expires_at
                 })
             }
