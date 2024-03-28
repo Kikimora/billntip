@@ -117,7 +117,7 @@ export default {
                     T.String())
             ]),
             clientMetadata: ClientMetadata,
-            session: T.String()
+            session: T.Optional(T.String())
         }),
         res: T.Null(),
         operationId: "RespondToAuthChallenge",

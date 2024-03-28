@@ -1,12 +1,23 @@
-import {CognitoIdentityProvider, UnauthorizedException} from "@aws-sdk/client-cognito-identity-provider";
+import {
+    CognitoIdentityProvider,
+    InitiateAuthCommandOutput,
+    UnauthorizedException
+} from "@aws-sdk/client-cognito-identity-provider";
 import * as process from "process";
 import _ from "@app/util";
 import {createHmac} from "crypto";
-import {HttpError, Middleware, pipeline, requireLambdaAuth, TracedEvent,} from "@app/lambda";
+import {HttpError, Middleware, pipeline, requireLambdaAuth, TracedEvent, Request} from "@app/lambda";
 import Routes from "./routes";
-import {SessionContext} from "@src/authorizer/session";
+import SessionData, {SessionContext} from "@src/authorizer/session";
 import {userPoolDetails} from "@src/cognito";
-import {configure} from "@app/diagnostics";
+import {configure, withErrorContext} from "@app/diagnostics";
+import OidcTokens from "@src/authorizer/oidc_tokens";
+import {jwtDecode} from "jwt-decode";
+import {
+    InitiateAuthResponse,
+    RespondToAuthChallengeResponse
+} from "@aws-sdk/client-cognito-identity-provider/dist-types/models/models_0";
+import {initModuleVariables} from "@src/authorizer/ctx";
 
 const ClientId = process.env.OAUTH_CLIENT_ID ?? _.throw("Missing required OAUTH_CLIENT_ID env variable")
 const UserPoolId = process.env.USER_POOL_ID ?? _.throw("Missing required USER_POOL_ID env variable")
@@ -106,7 +117,7 @@ export const handler = pipeline()
             case "POST /user/signin": {
                 const {ClientSecret} = await __init()
                 const {body} = req.parse()
-                return await cognito.initiateAuth({
+                const auth = await cognito.initiateAuth({
                     AuthFlow: body.authFlow,
                     ClientMetadata: body.clientMetadata,
                     AuthParameters: {
@@ -115,11 +126,12 @@ export const handler = pipeline()
                     },
                     ClientId,
                 })
+                return await processAuthResponse(req, auth);
             }
             case "POST /user/signin/challenge": {
                 const {ClientSecret} = await __init()
                 const {body} = req.parse()
-                return await cognito.respondToAuthChallenge({
+                const auth = await cognito.respondToAuthChallenge({
                     Session: body.session,
                     ChallengeName: body.challengeName,
                     ChallengeResponses: {
@@ -129,6 +141,7 @@ export const handler = pipeline()
                     ClientMetadata: body.clientMetadata,
                     ClientId,
                 })
+                return await processAuthResponse(req, auth);
             }
             case "POST /user/signout": {
                 requireLambdaAuth<SessionContext>(req)
@@ -267,4 +280,44 @@ function secretHash(username: string, clientSecret: string) {
     const hasher = createHmac('sha256', clientSecret);
     hasher.update(`${username}${ClientId}`);
     return hasher.digest('base64');
+}
+
+async function processAuthResponse(req: Request & TracedEvent, auth: InitiateAuthResponse | RespondToAuthChallengeResponse) {
+    if (auth.AuthenticationResult !== undefined) {
+        const {AccessToken, IdToken, RefreshToken, ExpiresIn} = auth.AuthenticationResult
+        if (AccessToken === undefined || IdToken === undefined ||
+            RefreshToken === undefined || ExpiresIn === undefined) {
+            throw withErrorContext(
+                new Error("Unexpected OIDC provider response"),
+                "POST /user/signin",
+                {
+                    cognitoResponse: auth.AuthenticationResult
+                })
+        }
+
+        await initModuleVariables()
+        const tokens = new OidcTokens(RefreshToken, IdToken, AccessToken, ExpiresIn)
+        const session = SessionData.createWithTokens(tokens)
+        const cookie = session.makeCookie()
+        await session.create()
+        req.tracer.info("new session", {
+            sessionId: session.sessionId,
+            refreshBefore: session.accessExpiresAt,
+            expiresAt: session.refreshTokenExpiresAt
+        })
+        return {
+            statusCode: 200,
+            headers: {'Set-Cookie': cookie.makeHeaderValue()},
+            body: JSON.stringify({
+                authenticationResult: {
+                    accessToken: session.accessToken,
+                    idToken: session.idToken,
+                    profile: jwtDecode(session.idToken)
+                },
+                challengeParameters: {}
+            })
+        }
+    } else {
+        return auth
+    }
 }

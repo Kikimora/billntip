@@ -38,10 +38,10 @@ export default class OidcTokens {
      * @param accessToken contains permission related information such as access scopes.
      * @param expiresIn access token expiration period in seconds.
      */
-    private constructor(readonly refreshToken: string | undefined,
-                        readonly idToken: string,
-                        readonly accessToken: string,
-                        readonly expiresIn: number) {
+    constructor(readonly refreshToken: string | undefined,
+                readonly idToken: string,
+                readonly accessToken: string,
+                readonly expiresIn: number) {
     }
 
     /**

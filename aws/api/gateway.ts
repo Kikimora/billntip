@@ -2,7 +2,6 @@ import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 import {domain} from "./config";
 import {newLambda} from "@aws/util";
-import authorizer from "@aws/api/authorizer";
 import {LambdaSource} from "@app/lambda/builder";
 
 const apiGw = new aws.apigatewayv2.Api('api', {

@@ -6,11 +6,11 @@ import * as aws from "@pulumi/aws";
 import gateway from "./gateway"
 import {LambdaSource} from "@app/lambda/builder";
 import * as pulumi from "@pulumi/pulumi";
-import {domain, region} from "@aws/api/config";
+import {region} from "@aws/api/config";
 import apiClient from "@aws/api/cognito-api-client";
 
 const issuer = pulumi.interpolate`https://cognito-idp.${region}.amazonaws.com/${cognito.userPool.id}`
-const cognitoDomain = pulumi.interpolate`https://${domain}.auth.${region}.amazoncognito.com`
+const cognitoDomain = pulumi.interpolate`https://${cognito.userPoolDomain.domain}.auth.${region}.amazoncognito.com`
 const accessTokenTtl = apiClient.tokenValidityInSeconds("accessToken");
 const idTokenTtl = apiClient.tokenValidityInSeconds("idToken");
 if (accessTokenTtl < 180 || idTokenTtl < 180) throw new Error("User Pool Client tokens should last longer than 3 minutes")

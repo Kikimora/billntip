@@ -77,7 +77,7 @@ let variables: AuthModuleVariables
  */
 export function useVariables() {
     if (variables == null) {
-        throw new Error("Cannot use auth module variables. Call `startAuthOperation()` before the call to `useVariables()`")
+        throw new Error("Cannot use auth module variables. Call `initModuleVariables()` before the call to `useVariables()`")
     }
     return variables
 }
