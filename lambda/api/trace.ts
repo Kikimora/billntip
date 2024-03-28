@@ -37,8 +37,8 @@ export function traceRequest(options: RequestTracingOptions = {}): MiddlewareFun
 
     return async function (this: Middleware<TracedEvent>, e: any, ctx: Context) {
         const tracer = e.tracer ?? requestTracer.startSession(tag(e, ctx), e, ctx)
-        tracer.info("Started", {event: eventData(e), context: {...ctx}})
         try {
+            tracer.info("Started", {event: eventData(e), context: {...ctx}})
             const event = e as TracedEvent
             //Define property such that it does not show up in JSON serialisation.
             //This is critical in some cases such as Cognito Lambda Triggers which return event (their input) as their response.

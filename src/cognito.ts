@@ -122,9 +122,19 @@ export async function describeUserPoolClient(userPoolId: string, clientId: strin
         ClientId: clientId
     })
     const r = await cognito.send(command)
-    if (_.isNull(r?.UserPoolClient)) throw new Error(`UserPoolClient ${clientId} not found`)
+    if (_.isNull(r?.UserPoolClient))
+        throw new Error(`Cannot read Cognito user pool client (${userPoolId}, ${clientId}) parameters. Might be a permission issue.`)
     return r.UserPoolClient!
 }
+
+/**
+ * Load and cache user pool details, keep details in memory for several minutes.
+ */
+export const userPoolDetails = _.memoize((userPoolId: string, clientId: string) => {
+    return describeUserPoolClient(userPoolId, clientId)
+})
+const cache = new LRUCache({ttl: 300, max: 1});
+userPoolDetails.cache = cache
 
 export const getOrFetchUserPoolById = _.memoize(describeUserPool)
 getOrFetchUserPoolById.cache = new LRUCache({max: 10, ttl: 1000 * 60 * 5})

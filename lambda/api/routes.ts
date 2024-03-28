@@ -1,10 +1,11 @@
 import {TSchema, StaticDecode, TUnknown, TypeBoxError} from "@sinclair/typebox";
 import {TypeCheck, TypeCompiler} from "@sinclair/typebox/compiler";
-import {ValueError, ValueErrorIterator} from "@sinclair/typebox/errors";
+import {ValueError} from "@sinclair/typebox/errors";
 import {ValueOf} from "type-fest";
 import {Context} from "aws-lambda";
 import _ from "lodash";
 import {Middleware, Pipeline, Request} from "./pipeline"
+import {HttpError} from "./errors";
 
 type HttpMethod = "GET" | "PUT" | "POST" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS" | "ANY"
 /**
@@ -52,7 +53,7 @@ type RequestSpec = {
      * Operation identifier
      */
     operationId?: string
-}
+} & { [key: string]: any }
 /**
  * Collection of routes. Note how typical use case adds `as const satisfies RouteMap` right after route map definition.
  * @example - simple user management API
@@ -85,8 +86,8 @@ type RequestSpec = {
  *     } as const satisfies RouteMap
  */
 export type RouteMap = {
-    [key: Route]: RequestSpec
-}
+    [key in Route]: RequestSpec
+} & { '$default'?: RequestSpec }
 
 /**
  * Route event has {@link routeKey} with values from {@link RouteMap}
@@ -180,11 +181,9 @@ Pipeline.prototype.withRoutes = function <T extends RouteMap>(api: T, options?: 
         }
         const request = event as Request & RouteEvent<T>
         const p = parsers[event.routeKey as keyof T]
-
-        request.parsers = p as any
-        request.parse = parse as any
-        request.validate = validate as any
-
+        Object.defineProperty(request, 'parsers', {value: p, enumerable: false})
+        Object.defineProperty(request, 'parse', {value: parse, enumerable: false})
+        Object.defineProperty(request, 'validate', {value: validate, enumerable: false})
         return this.next(request, context)
     })
 }
@@ -277,3 +276,13 @@ type ValidationErrors<T extends TSchema | undefined> = T extends undefined
 type ValidationResult<T extends RequestSpec> = {
     [key in RequestPart]: ValidationErrors<T[key]>
 }
+
+declare module "@sinclair/typebox" {
+    interface TypeBoxError extends HttpError {
+        readonly statusCode: number
+    }
+}
+Object.defineProperty(TypeBoxError.prototype, 'statusCode', {
+    value: 400,
+    writable: false
+})

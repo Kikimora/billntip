@@ -52,7 +52,6 @@ const cookieLambda = newAuthLambda(Lambdas['authorizer.cookie'])
     })
     .build()
 
-
 /**
  * Authorizer to use on API routes
  */
@@ -74,6 +73,16 @@ export default {
     authorizerUri: authorizer.authorizerUri,
     src: `${cookieLambda.src.module}/${cookieLambda.src.handler}`,
     gateway,
+    environment,
+    integrationArgs: {
+        requestParameters: {
+            "overwrite:header.Set-Cookie": "$context.authorizer.new_cookie",
+        }
+    },
+    apiRouteArgs: {
+        authorizationType: "CUSTOM",
+        authorizerId: authorizer.id
+    },
     /**
      * Create new lambda function performing an auth operation such as checking cookies, performing an OAUTH flow step, etc.
      */
@@ -84,15 +93,6 @@ export default {
      * @param lambda - integration Lambda function
      */
     newAuthorizedIntegration(lambda: LambdaFunction) {
-        return newApiGwIntegration(gateway, lambda,
-            {
-                requestParameters: {
-                    "overwrite:header.Set-Cookie": "$context.authorizer.new_cookie",
-                }
-            })
-            .defaults({
-                authorizationType: "CUSTOM",
-                authorizerId: this.id
-            })
+        return newApiGwIntegration(gateway, lambda, this.integrationArgs).defaults(this.apiRouteArgs)
     }
 }

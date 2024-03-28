@@ -116,7 +116,7 @@ describe("Lambda API JSON Body middleware", () => {
 
     it.each([
         ["no Content-Type header", {}],
-        ["invalid Content-Type", {'Content-Type': 'text/xml'}],
+        ["invalid Content-Type", {'content-type': 'text/xml'}],
     ])("throws if %s", async (_str, headers) => {
         request.body = "{}"
         request.headers = headers

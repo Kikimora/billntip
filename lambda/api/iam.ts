@@ -1,6 +1,6 @@
-import {Context} from "aws-lambda";
 import * as lambda from "aws-lambda";
 import {Middleware, Pipeline, Request} from "./pipeline"
+import { HttpError } from "./errors";
 
 type IAM = lambda.APIGatewayEventRequestContextIAMAuthorizer
 /**
@@ -61,40 +61,38 @@ export function authorizerType(r: Request): AuthorizerType {
     return "none"
 }
 
-export class IAMAuthorizerError extends Error {
-    constructor(message?:string) {
+export class NotAuthorizedError extends Error implements HttpError {
+    constructor(message?: string) {
         super(message);
     }
+    public readonly statusCode = 401
 }
 
 /**
  * See {@link Pipeline.requireIAMAuth}.
  */
-export function requireIAMAuth(this: Middleware<IAMAuthorizedRequest>, e: Request, ctx: Context) {
+export function requireIAMAuth(e: Request): asserts e is IAMAuthorizedRequest {
     if (!isIAMAuthorizedRequest(e)) {
-        throw new IAMAuthorizerError("IAM authorizer required for the event.")
+        throw new NotAuthorizedError("IAM authorizer required for the event.")
     }
-    return this.next(e, ctx)
 }
 
 /**
  * See {@link Pipeline.requireJWTAuth}.
  */
-export function requireJWTAuth(this: Middleware<JWTAuthorizedRequest>, e: Request, ctx: Context) {
+export function requireJWTAuth(e: Request): asserts e is JWTAuthorizedRequest {
     if (!isJWTAuthorizedRequest(e)) {
-        throw new IAMAuthorizerError("JWT authorizer required for the event.")
+        throw new NotAuthorizedError("JWT authorizer required for the event.")
     }
-    return this.next(e, ctx)
 }
 
 /**
  * See {@link Pipeline.requireLambdaAuth}.
  */
-export function requireLambdaAuth<T = unknown>(this: Middleware<LambdaAuthorizedRequest<T>>, e: Request, ctx: Context) {
+export function requireLambdaAuth<T = unknown>(e: Request): asserts e is LambdaAuthorizedRequest<T> {
     if (!isLambdaAuthorizedRequest<T>(e)) {
-        throw new IAMAuthorizerError("Lambda authorizer required for the event.")
+        throw new NotAuthorizedError("Lambda authorizer required for the event.")
     }
-    return this.next(e, ctx)
 }
 
 declare module "./pipeline" {
@@ -117,11 +115,20 @@ declare module "./pipeline" {
 }
 
 Pipeline.prototype.requireIAMAuth = function () {
-    return this.do(requireIAMAuth)
+    return this.do(async function (this: Middleware<IAMAuthorizedRequest>, e, ctx) {
+        requireIAMAuth(e)
+        return await this.next(e, ctx)
+    })
 }
 Pipeline.prototype.requireJWTAuth = function () {
-    return this.do(requireJWTAuth)
+    return this.do(async function (this: Middleware<JWTAuthorizedRequest>, e, ctx) {
+        requireJWTAuth(e)
+        return await this.next(e, ctx)
+    })
 }
 Pipeline.prototype.requireLambdaAuth = function <T = unknown>() {
-    return this.do(requireLambdaAuth<T>)
+    return this.do(async function (this: Middleware<LambdaAuthorizedRequest<T>>, e, ctx) {
+        requireLambdaAuth<T>(e)
+        return await this.next(e, ctx)
+    })
 }

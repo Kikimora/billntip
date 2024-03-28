@@ -93,16 +93,16 @@
         "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-authorizer-code-fn"
       },
       {
-        "operationName": "GetInvite",
-        "routeKey": "GET /tip/invite/{id}",
+        "operationName": "ListInvites",
+        "routeKey": "GET /tip/invites",
         "authorizerId": "vwmth7",
         "target": "integrations/vq81yt2",
         "src": "tip/invite",
         "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-invite-fn"
       },
       {
-        "operationName": "ListInvites",
-        "routeKey": "GET /tip/invites",
+        "operationName": "GetInvite",
+        "routeKey": "GET /tip/invite/{id}",
         "authorizerId": "vwmth7",
         "target": "integrations/vq81yt2",
         "src": "tip/invite",
@@ -125,14 +125,6 @@
         "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-invite-fn"
       },
       {
-        "operationName": "GetInvite",
-        "routeKey": "GET /bill/invite/{id}",
-        "authorizerId": "vwmth7",
-        "target": "integrations/21wfazd",
-        "src": "bill/invite",
-        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
-      },
-      {
         "operationName": "ListInvites",
         "routeKey": "GET /bill/invites",
         "authorizerId": "vwmth7",
@@ -142,7 +134,23 @@
       },
       {
         "operationName": "CreateInvite",
-        "routeKey": "POST /bill/invite",
+        "routeKey": "POST /bill/invites",
+        "authorizerId": "vwmth7",
+        "target": "integrations/21wfazd",
+        "src": "bill/invite",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
+      },
+      {
+        "operationName": "GetInvite",
+        "routeKey": "GET /bill/invite/{id}",
+        "authorizerId": "vwmth7",
+        "target": "integrations/21wfazd",
+        "src": "bill/invite",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
+      },
+      {
+        "operationName": "UpdateInvite",
+        "routeKey": "PUT /bill/invite/{id}",
         "authorizerId": "vwmth7",
         "target": "integrations/21wfazd",
         "src": "bill/invite",
@@ -155,6 +163,134 @@
         "target": "integrations/21wfazd",
         "src": "bill/invite",
         "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
+      },
+      {
+        "operationName": "UpdateUserAttributes",
+        "routeKey": "PUT /user",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "SignOut",
+        "routeKey": "POST /user/signout",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "ChangePassword",
+        "routeKey": "POST /user/password",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "GetSession",
+        "routeKey": "GET /user/session",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "GetDevices",
+        "routeKey": "GET /user/devices",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "UpdateDevice",
+        "routeKey": "GET /user/device/{id}",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "UpdateDeviceStatus",
+        "routeKey": "PUT /user/device/{id}",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "ConfirmDevice",
+        "routeKey": "PUT /user/device/{id}/confirm",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "ForgetDevice",
+        "routeKey": "DELETE /user/device/{id}",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "SignUp",
+        "routeKey": "POST /user",
+        "authorizerId": "",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "ConfirmSignUp",
+        "routeKey": "POST /user/confirm",
+        "authorizerId": "",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "",
+        "routeKey": "POST /user/resend_confirmation_code",
+        "authorizerId": "",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "InitiateAuth",
+        "routeKey": "POST /user/signin",
+        "authorizerId": "",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "RespondToAuthChallenge",
+        "routeKey": "POST /user/signin/challenge",
+        "authorizerId": "",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "ForgotPassword",
+        "routeKey": "POST /user/password/forgot",
+        "authorizerId": "",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "ConfirmForgotPassword",
+        "routeKey": "POST /user/password/confirm",
+        "authorizerId": "",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
       }
     ],
     "deployment": {

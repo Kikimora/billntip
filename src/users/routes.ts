@@ -20,7 +20,8 @@ export default {
             validationData: UserAttributes,
         }),
         res: T.Null(),
-        operationId: "SignUp"
+        operationId: "SignUp",
+        public: true
     },
     "PUT /user": {
         body: T.Object({
@@ -28,7 +29,8 @@ export default {
             userAttributes: UserAttributes
         }),
         res: T.Null(),
-        operationId: "UpdateUserAttributes"
+        operationId: "UpdateUserAttributes",
+        public: false
     },
     "POST /user/confirm": {
         operationId: "ConfirmSignUp",
@@ -37,14 +39,16 @@ export default {
             confirmationCode: T.String(),
             clientMetadata: ClientMetadata,
         }),
-        res: T.Null()
+        res: T.Null(),
+        public: true
     },
     "POST /user/resend_confirmation_code": {
         body: T.Object({
             username: T.String(),
             clientMetadata: ClientMetadata,
         }),
-        res: T.Null()
+        res: T.Null(),
+        public: true
     },
     "POST /user/signin": {
         operationId: "InitiateAuth",
@@ -58,10 +62,24 @@ export default {
                 T.Literal("USER_PASSWORD_AUTH"),
                 T.Literal("USER_SRP_AUTH")
             ]),
-            authParameters: T.Record(T.String(), T.String()),
+            authParameters: T.Intersect([
+                T.Partial(T.Record(
+                    T.Union([
+                        T.Literal("DEVICE_KEY"),
+                        T.Literal("PASSWORD"),
+                        T.Literal("REFRESH_TOKEN"),
+                        T.Literal("SRP_A"),
+                    ]),
+                    T.String())
+                ),
+                T.Record(
+                    T.Union([T.Literal("USERNAME")]),
+                    T.String()
+                )]),
             clientMetadata: ClientMetadata,
         }),
-        res: T.Null()
+        res: T.Null(),
+        public: true
     },
     "POST /user/signin/challenge": {
         body: T.Object({
@@ -77,17 +95,39 @@ export default {
                 T.Literal("ADMIN_NO_SRP_AUTH"),
                 T.Literal("NEW_PASSWORD_REQUIRED")
             ]),
-            challengeResponses: T.Record(T.String(), T.String()),
+            challengeResponses: T.Intersect([
+                T.Partial(T.Record(
+                    T.Union([
+                        T.Literal("DEVICE_KEY"),
+                        T.Literal("SMS_MFA_CODE"),
+                        T.Literal("PASSWORD_CLAIM_SIGNATURE"),
+                        T.Literal("PASSWORD_CLAIM_SECRET_BLOCK"),
+                        T.Literal("TIMESTAMP"),
+                        T.Literal("ANSWER"),
+                        T.Literal("NEW_PASSWORD"),
+                        T.Literal("SOFTWARE_TOKEN_MFA_CODE"),
+                        T.Literal("SRP_A"),
+                        T.Literal("SESSION"),
+                    ]),
+                    T.String())),
+                T.Record(
+                    T.Union([
+                        T.Literal("USERNAME")
+                    ]),
+                    T.String())
+            ]),
             clientMetadata: ClientMetadata,
             session: T.String()
         }),
         res: T.Null(),
         operationId: "RespondToAuthChallenge",
+        public: true
     },
     "POST /user/signout": {
         operationId: "SignOut",
         body: T.Null(),
-        res: T.Null()
+        res: T.Null(),
+        public: false
     },
     "POST /user/password": {
         operationId: "ChangePassword",
@@ -95,7 +135,8 @@ export default {
             previousPassword: T.String(),
             proposedPassword: T.String(),
         }),
-        res: T.Null()
+        res: T.Null(),
+        public: false
     },
 
     "POST /user/password/forgot": {
@@ -104,7 +145,8 @@ export default {
             username: T.String(),
             clientMetadata: ClientMetadata,
         }),
-        res: T.Null()
+        res: T.Null(),
+        public: true
     },
     "POST /user/password/confirm": {
         operationId: "ConfirmForgotPassword",
@@ -114,12 +156,14 @@ export default {
             password: T.String(),
             confirmationCode: T.String(),
         }),
-        res: T.Null()
+        res: T.Null(),
+        public: true
     },
     "GET /user/session": {
         operationId: "GetSession",
         body: T.Null(),
-        res: T.Null()// components.schemas.SessionResponse
+        res: T.Null(),// components.schemas.SessionResponse
+        public: false,
     },
     "GET /user/devices": {
         operationId: "GetDevices",
@@ -127,7 +171,8 @@ export default {
             paginationToken: T.Optional(T.String()),
             limit: T.Optional(T.Number({minimum: 1})),
         }),
-        res: T.Null()
+        res: T.Null(),
+        public: false
     },
     "GET /user/device/{id}": {
         operationId: "UpdateDevice",
@@ -137,7 +182,8 @@ export default {
                 T.Literal("not_remembered"),
             ]))
         }),
-        res: T.Null()
+        res: T.Null(),
+        public: false
     },
     "PUT /user/device/{id}": {
         operationId: "UpdateDeviceStatus",
@@ -147,7 +193,8 @@ export default {
                 T.Literal("not_remembered"),
             ]))
         }),
-        res: T.Null()
+        res: T.Null(),
+        public: false
     },
     "PUT /user/device/{id}/confirm": {
         operationId: "ConfirmDevice",
@@ -158,11 +205,13 @@ export default {
                 salt: T.Optional(T.String()),
             }))
         }),
-        res: T.Null()
+        res: T.Null(),
+        public: false
     },
     "DELETE /user/device/{id}": {
         operationId: "ForgetDevice",
         body: T.Null(),
-        res: T.Null()
+        res: T.Null(),
+        public: false
     },
 } as const satisfies RouteMap

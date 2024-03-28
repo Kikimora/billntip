@@ -1,45 +1,54 @@
-import {
-    CognitoIdentityProvider,
-    UnauthorizedException
-} from "@aws-sdk/client-cognito-identity-provider";
+import {CognitoIdentityProvider, UnauthorizedException} from "@aws-sdk/client-cognito-identity-provider";
 import * as process from "process";
-import _ from "lodash";
-import {
-    isLambdaAuthorizedRequest,
-    Middleware,
-    pipeline,
-    Request,
-} from "@app/lambda";
-import Routes from "./routes";
+import _ from "@app/util";
 import {createHmac} from "crypto";
+import {HttpError, Middleware, pipeline, requireLambdaAuth, TracedEvent,} from "@app/lambda";
+import Routes from "./routes";
 import {SessionContext} from "@src/authorizer/session";
+import {userPoolDetails} from "@src/cognito";
+import {configure} from "@app/diagnostics";
 
 const ClientId = process.env.OAUTH_CLIENT_ID ?? _.throw("Missing required OAUTH_CLIENT_ID env variable")
-const ClientSecret = process.env.OAUTH_CLIENT_SECRET ?? _.throw("Missing required OAUTH_CLIENT_SECRET env variable")
+const UserPoolId = process.env.USER_POOL_ID ?? _.throw("Missing required USER_POOL_ID env variable")
 const cognito = new CognitoIdentityProvider()
 
+/**
+ * Static initialisation loads user pool details.
+ */
+export async function __init() {
+    const {ClientSecret} = await userPoolDetails(UserPoolId, ClientId)
+    if (ClientSecret === undefined)
+        throw new Error("Cannot load UserPool client secret.")
+    return {ClientSecret}
+}
+
+declare module "@aws-sdk/client-cognito-identity-provider" {
+    interface UnauthorizedException extends HttpError {
+
+    }
+}
+Object.defineProperty(UnauthorizedException.prototype, 'statusCode', {
+    value: 401, writable: false
+})
+
+configure({triggers: {request: true}})
+
 export const handler = pipeline()
-    .do(async function (this: Middleware, e: any, ctx: any) {
-        try {
-            return await this.next(e, ctx)
-        } catch (e: any) {
-            if ('name' in e && e.name == "UnauthorizedException") {
-                return {statusCode: 401}
-            }
-            return {statusCode: 500}
-        }
-    })
+    .handleErrors()
     .traceRequest()
     .withRoutes(Routes)
     .parseJsonBody()
-    .do(async function (this: Middleware, e: any, ctx: any) {
+    .do(async function (this: Middleware, e: TracedEvent, ctx: any) {
         const response = await this.next(e, ctx)
+        //cleanup AWS noise
+        delete response.$metadata
         return toCamel(response)
     })
     .done(async function (req) {
         switch (req.routeKey) {
             case "GET /user/session":
-                const session = userSession(req);
+                requireLambdaAuth<SessionContext>(req)
+                const session = req.requestContext.authorizer.lambda;
                 return {
                     accessToken: session.access_token,
                     idToken: session.id_token,
@@ -47,6 +56,7 @@ export const handler = pipeline()
                     expiresAt: session.expires_at
                 }
             case "POST /user": {
+                const {ClientSecret} = await __init()
                 const {body} = req.parse()
                 return await cognito.signUp({
                     Username: body.username,
@@ -55,20 +65,24 @@ export const handler = pipeline()
                     ClientMetadata: body.clientMetadata,
                     ValidationData: body.userAttributes?.map(x => ({Name: x.name, Value: x.value})),
                     ClientId,
-                    SecretHash: secretHash(body.username),
+                    SecretHash: secretHash(body.username, ClientSecret),
                 })
             }
             case "POST /user/confirm": {
+                const {ClientSecret} = await __init()
                 const {body} = req.parse()
                 return await cognito.confirmSignUp({
                     Username: body.username,
                     ConfirmationCode: body.confirmationCode,
                     ClientMetadata: body.clientMetadata,
                     ClientId,
-                    SecretHash: secretHash(body.username)
+                    SecretHash: secretHash(body.username, ClientSecret)
                 })
             }
             case "PUT /user": {
+                requireLambdaAuth<SessionContext>(req)
+                const session = req.requestContext.authorizer.lambda;
+
                 //validate attributes
                 //add or remove user from a recipients group
                 //refresh tokens
@@ -76,63 +90,77 @@ export const handler = pipeline()
                 return await cognito.updateUserAttributes({
                     UserAttributes: body.userAttributes?.map(x => ({Name: x.name, Value: x.value})),
                     ClientMetadata: body.clientMetadata,
-                    AccessToken: userSession(req).access_token,
+                    AccessToken: session.access_token,
                 })
             }
             case "POST /user/resend_confirmation_code": {
+                const {ClientSecret} = await __init()
                 const {body} = req.parse()
                 return await cognito.resendConfirmationCode({
                     Username: body.username,
                     ClientMetadata: body.clientMetadata,
                     ClientId,
-                    SecretHash: secretHash(body.username)
+                    SecretHash: secretHash(body.username, ClientSecret)
                 })
             }
             case "POST /user/signin": {
+                const {ClientSecret} = await __init()
                 const {body} = req.parse()
                 return await cognito.initiateAuth({
                     AuthFlow: body.authFlow,
                     ClientMetadata: body.clientMetadata,
                     AuthParameters: {
-                        "SECRET_HASH": "",
+                        "SECRET_HASH": secretHash(body.authParameters['USERNAME'], ClientSecret),
                         ...body.authParameters
                     },
                     ClientId,
                 })
             }
             case "POST /user/signin/challenge": {
+                const {ClientSecret} = await __init()
                 const {body} = req.parse()
                 return await cognito.respondToAuthChallenge({
                     Session: body.session,
                     ChallengeName: body.challengeName,
-                    ChallengeResponses: body.challengeResponses,
+                    ChallengeResponses: {
+                        "SECRET_HASH": secretHash(body.challengeResponses['USERNAME'], ClientSecret),
+                        ...body.challengeResponses
+                    },
                     ClientMetadata: body.clientMetadata,
                     ClientId,
                 })
             }
             case "POST /user/signout": {
+                requireLambdaAuth<SessionContext>(req)
+                const session = req.requestContext.authorizer.lambda;
+
                 return await cognito.globalSignOut({
-                    AccessToken: userSession(req).access_token
+                    AccessToken: session.access_token
                 })
             }
             case "POST /user/password": {
+                requireLambdaAuth<SessionContext>(req)
+                const session = req.requestContext.authorizer.lambda;
+
                 const {body} = req.parse()
                 return await cognito.changePassword({
                     PreviousPassword: body.previousPassword,
                     ProposedPassword: body.proposedPassword,
-                    AccessToken: userSession(req).access_token,
+                    AccessToken: session.access_token,
                 })
             }
             case "POST /user/password/forgot": {
+                const {ClientSecret} = await __init()
                 const {body} = req.parse()
                 return await cognito.forgotPassword({
                     ClientMetadata: body.clientMetadata,
                     Username: body.username,
                     ClientId,
-                    SecretHash: secretHash(body.username)
+                    SecretHash: secretHash(body.username, ClientSecret)
                 })
             }
             case "POST /user/password/confirm": {
+                const {ClientSecret} = await __init()
                 const {body} = req.parse()
                 return await cognito.confirmForgotPassword({
                     Username: body.username,
@@ -140,24 +168,33 @@ export const handler = pipeline()
                     Password: body.password,
                     ConfirmationCode: body.confirmationCode,
                     ClientId,
-                    SecretHash: secretHash(body.username),
+                    SecretHash: secretHash(body.username, ClientSecret),
                 })
             }
             case "GET /user/devices": {
+                requireLambdaAuth<SessionContext>(req)
+                const session = req.requestContext.authorizer.lambda;
+
                 const {body} = req.parse()
                 return await cognito.listDevices({
                     Limit: body.limit,
                     PaginationToken: body.paginationToken,
-                    AccessToken: userSession(req).access_token,
+                    AccessToken: session.access_token,
                 })
             }
             case "GET /user/device/{id}": {
+                requireLambdaAuth<SessionContext>(req)
+                const session = req.requestContext.authorizer.lambda;
+
                 return await cognito.getDevice({
                     DeviceKey: req.pathParameters?.['id'],
-                    AccessToken: userSession(req).access_token,
+                    AccessToken: session.access_token,
                 })
             }
             case "PUT /user/device/{id}/confirm": {
+                requireLambdaAuth<SessionContext>(req)
+                const session = req.requestContext.authorizer.lambda;
+
                 const {body} = req.parse()
                 return await cognito.confirmDevice({
                     DeviceName: body.deviceName,
@@ -166,21 +203,27 @@ export const handler = pipeline()
                         PasswordVerifier: body.deviceSecretVerifierConfig?.passwordVerifier,
                     },
                     DeviceKey: req.pathParameters?.['id'],
-                    AccessToken: userSession(req).access_token,
+                    AccessToken: session.access_token,
                 })
             }
             case "DELETE /user/device/{id}": {
+                requireLambdaAuth<SessionContext>(req)
+                const session = req.requestContext.authorizer.lambda;
+
                 return await cognito.forgetDevice({
                     DeviceKey: req.pathParameters?.['id'],
-                    AccessToken: userSession(req).access_token,
+                    AccessToken: session.access_token,
                 })
             }
             case "PUT /user/device/{id}": {
+                requireLambdaAuth<SessionContext>(req)
+                const session = req.requestContext.authorizer.lambda;
+
                 const {body} = req.parse()
                 return await cognito.updateDeviceStatus({
                     DeviceKey: req.pathParameters?.['id'],
                     DeviceRememberedStatus: body.deviceRememberedStatus,
-                    AccessToken: userSession(req).access_token,
+                    AccessToken: session.access_token,
                 })
             }
         }
@@ -220,18 +263,8 @@ function toPascal(o: any) {
     return renameProperties(o, origKey => (origKey.charAt(0).toUpperCase() + origKey.slice(1) || origKey).toString())
 }
 
-function userSession(e: Request): SessionContext {
-    if (!isLambdaAuthorizedRequest<SessionContext>(e)) {
-        throw new UnauthorizedException({
-            message: "Unauthorized",
-            $metadata: {}
-        })
-    }
-    return e.requestContext.authorizer.lambda
-}
-
-function secretHash(username: string) {
-    const hasher = createHmac('sha256', ClientSecret);
+function secretHash(username: string, clientSecret: string) {
+    const hasher = createHmac('sha256', clientSecret);
     hasher.update(`${username}${ClientId}`);
     return hasher.digest('base64');
 }

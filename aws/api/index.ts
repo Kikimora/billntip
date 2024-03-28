@@ -6,10 +6,18 @@ import apiRoute from "./$default";
 import {callbackRoute, tokensRoute} from "./auth";
 import tip from "./tip";
 import bill from "./bill";
+import users from "./users";
 import cognitoApiClient from "./cognito-api-client";
 import cognitoFrontendClient from "./cognito-frontend-client";
 
-const routes = [...apiRoute.routes, ...tokensRoute.routes, ...callbackRoute.routes, ...tip.routes, ...bill.routes];
+const routes = [
+    ...apiRoute.routes,
+    ...tokensRoute.routes,
+    ...callbackRoute.routes,
+    ...tip.routes,
+    ...bill.routes,
+    ...users.routes
+];
 const deployment = new aws.apigatewayv2.Deployment(
     "api-deployment",
     {

@@ -1,4 +1,4 @@
-import {postAuthentication, preTokenGeneration} from "@src/users";
+import {postAuthentication} from "@src/cognito-triggers";
 import {resources} from "@app/test/util";
 import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
 import {Tracer} from "@app/diagnostics";

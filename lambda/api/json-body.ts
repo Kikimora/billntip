@@ -1,3 +1,4 @@
+import { HttpError } from "./errors";
 import {Middleware, Pipeline, Request} from "./pipeline";
 import {Context} from "aws-lambda";
 
@@ -24,10 +25,12 @@ declare module "./pipeline" {
     }
 }
 
-export class JsonBodyError extends Error {
+export class JsonBodyError extends Error implements HttpError {
     constructor(message?: string) {
         super(message);
     }
+
+    public readonly statusCode = 400
 }
 
 Pipeline.prototype.parseJsonBody = function (options?: ParseJsonBodyOptions) {
@@ -36,7 +39,7 @@ Pipeline.prototype.parseJsonBody = function (options?: ParseJsonBodyOptions) {
 
     return this.do(async function (this: Middleware<JsonRequest>, event: Request, context: Context) {
         const {body, isBase64Encoded} = event
-        if (body !== undefined && checkHeader && event.headers['Content-Type'] !== 'application/json') {
+        if (body !== undefined && checkHeader && event.headers['content-type'] !== 'application/json') {
             throw new JsonBodyError("Missing required 'Content-Type: application/json' header")
         }
         const request = event as Request & JsonRequest

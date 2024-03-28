@@ -33,7 +33,7 @@ function buildAndUpdate(options: any) {
     return async function (lambda: LambdaSource) {
         const {module} = lambda
         const builder = makeBuilder(options.stack);
-        if (options.toOpenAPI && !builder.buildTasks[module]) {
+        if (options.build && !builder.buildTasks[module]) {
             console.log("Building: ", module)
             // noinspection ES6MissingAwait
             builder.bundle(module)

@@ -1,7 +1,6 @@
 import {z} from "zod";
 import _ from "lodash";
-import {LRUCache} from "lru-cache";
-import {describeUserPoolClient} from "../cognito";
+import {userPoolDetails} from "../cognito";
 import {toSeconds} from "@app/util";
 import {EMF, Tracer} from "@app/diagnostics";
 
@@ -83,22 +82,13 @@ export function useVariables() {
     return variables
 }
 
-const readUserPoolDetails = _.memoize(async (userPoolId: string, clientId: string) => {
-    const userPoolClient = await describeUserPoolClient(userPoolId, clientId)
-    if (userPoolClient == null)
-        throw new Error(`Cannot read Cognito user pool client (${userPoolId}, ${clientId}) parameters. Might be a permission issue.`)
-    return userPoolClient
-})
-const cache = new LRUCache({ttl: 300, max: 1});
-readUserPoolDetails.cache = cache
-
 /**
  * Init module variables reported by {@link useVariables}
  * @param requestId - request id
  */
 export async function initModuleVariables(requestId?: string) {
     const {userPoolId, clientId} = Env
-    const userPoolClient = await readUserPoolDetails(userPoolId, clientId)
+    const userPoolClient = await userPoolDetails(userPoolId, clientId)
     const units = userPoolClient.TokenValidityUnits ?? _.throw("User pool must have tokens validity setting.")
     const accessTokenTtl = userPoolClient.AccessTokenValidity ?? _.throw("User pool must have access token validity setting.");
     const accessTokenUnits = units.AccessToken ?? _.throw("User pool must have access token validity setting.")
