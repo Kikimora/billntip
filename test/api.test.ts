@@ -14,6 +14,7 @@ import {Tracer} from "@app/diagnostics";
 import _ from "lodash";
 import {Type, TypeBoxError} from "@sinclair/typebox";
 import {StaticAssert} from "./util";
+import {ValueError} from "@sinclair/typebox/errors";
 
 let request!: any, context!: any
 beforeEach(() => {
@@ -133,28 +134,31 @@ describe("Lambda API withRoute middleware", () => {
         name: Type.String({minLength: 3, maxLength: 100}),
         age: Type.Number({minimum: 0, maximum: 150})
     })
-    const UserId = Type.Object({id: Type.Number({minimum: 0})})
+    const UserId = {id: Type.Number({minimum: 0})}
     const User = Type.Object({
         ...UserRequest.properties,
-        ...UserId.properties
+        ...UserId
     })
     const UserAPI = {
         "POST /users": {
+            operationId: "CreateUser",
             body: UserRequest,
-            res: User
+            success: User
         },
         "GET /user/{id}": {
+            operationId: "GetUser",
             path: UserId,
-            query: Type.Object({
+            query: {
                 name: Type.Optional(UserRequest.properties.name),
                 age: Type.Optional(UserRequest.properties.age),
-            }),
-            res: User
+            },
+            success: User
         },
         "PUT /user/{id}": {
+            operationId: "UpdateUser",
             path: UserId,
             body: UserRequest,
-            res: User
+            success: User
         }
     } as const satisfies RouteMap
 
@@ -163,23 +167,30 @@ describe("Lambda API withRoute middleware", () => {
         .parseJsonBody({checkContentType: false})
         .done(async function (req) {
             StaticAssert<typeof req.routeKey, "GET /user/{id}" | "POST /users" | "PUT /user/{id}">().is(true)
+
             switch (req.routeKey) {
                 case "GET /user/{id}": {
                     const {path: {id}, query, body} = req.parse()
                     StaticAssert<typeof id, number>().is(true);
-                    StaticAssert<typeof query, { name?: string, age?: number }>().is(true)
-                    StaticAssert<typeof body, unknown>().is(true)
+                    StaticAssert<typeof query, { readonly name?: string, readonly age?: number }>().is(true)
+                    StaticAssert<typeof body, never>().is(true)
                     return {id, ...query}
                 }
                 case "PUT /user/{id}": {
                     const {path: {id}, query, body} = req.parse()
                     StaticAssert<typeof id, number>().is(true)
-                    StaticAssert<typeof query, unknown>().is(true)
+                    StaticAssert<typeof query, never>().is(true)
                     StaticAssert<typeof body, { name: string, age: number }>().is(true)
                     return {id, ...body}
                 }
                 case "POST /users": {
-                    return {...req.validate()};
+                    const {path, cookies, query, body, headers} = req.validate();
+                    StaticAssert<typeof path, never>().is(true)
+                    StaticAssert<typeof cookies, never>().is(true)
+                    StaticAssert<typeof query, never>().is(true)
+                    StaticAssert<typeof body, ValueError[]>().is(true)
+                    StaticAssert<typeof headers, ValueError[]>().is(false)
+                    return {path, cookies, query, body, headers};
                 }
             }
         })

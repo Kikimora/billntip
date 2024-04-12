@@ -44,7 +44,7 @@ Pipeline.prototype.handleErrors = function () {
                 ...rest
             } = exception
             return {
-                "statusCode": statusCode ?? $metadata?.statusCode ?? 500,
+                "statusCode": statusCode ?? $metadata?.httpStatusCode ?? 500,
                 "body": JSON.stringify({
                     error: name,
                     message: message,

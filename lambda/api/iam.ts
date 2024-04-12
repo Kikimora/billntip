@@ -1,12 +1,12 @@
 import * as lambda from "aws-lambda";
 import {Middleware, Pipeline, Request} from "./pipeline"
-import { HttpError } from "./errors";
+import {HttpError} from "./errors";
 
 type IAM = lambda.APIGatewayEventRequestContextIAMAuthorizer
 /**
  * API Gateway v2 IAM authorized request.
  */
-export type IAMAuthorizedRequest = Request<IAM>
+export type IAMAuthorizedRequest = Request<IAM> & { user: IAM['iam'] }
 
 /**
  * Type assert for {@link IAMAuthorizedRequest}
@@ -20,7 +20,7 @@ export function isIAMAuthorizedRequest(r: Request<any>): r is IAMAuthorizedReque
  * API Gateway v2 JWT authorized request.
  */
 type JWT = lambda.APIGatewayEventRequestContextJWTAuthorizer
-export type JWTAuthorizedRequest = Request<JWT>
+export type JWTAuthorizedRequest = Request<JWT> & { user: JWT }
 
 /**
  * Type assert for {@link JWTAuthorizedRequest}
@@ -34,7 +34,7 @@ export function isJWTAuthorizedRequest(r: Request<any>): r is JWTAuthorizedReque
  * API Gateway v2 Lambda (aka custom) authorized request.
  */
 type LambdaAuth<T> = lambda.APIGatewayEventRequestContextLambdaAuthorizer<T>
-export type LambdaAuthorizedRequest<T = unknown> = Request<LambdaAuth<T>>
+export type LambdaAuthorizedRequest<T = unknown> = Request<LambdaAuth<T>> & { user: T }
 
 /**
  * Type assert for {@link LambdaAuthorizedRequest}
@@ -65,6 +65,7 @@ export class NotAuthorizedError extends Error implements HttpError {
     constructor(message?: string) {
         super(message);
     }
+
     public readonly statusCode = 401
 }
 
@@ -75,6 +76,10 @@ export function requireIAMAuth(e: Request): asserts e is IAMAuthorizedRequest {
     if (!isIAMAuthorizedRequest(e)) {
         throw new NotAuthorizedError("IAM authorizer required for the event.")
     }
+    Object.defineProperty(e, "user", {
+        value: e.requestContext.authorizer.iam,
+        configurable: true
+    })
 }
 
 /**
@@ -84,6 +89,10 @@ export function requireJWTAuth(e: Request): asserts e is JWTAuthorizedRequest {
     if (!isJWTAuthorizedRequest(e)) {
         throw new NotAuthorizedError("JWT authorizer required for the event.")
     }
+    Object.defineProperty(e, "user", {
+        value: e.requestContext.authorizer,
+        configurable: true
+    })
 }
 
 /**
@@ -93,6 +102,10 @@ export function requireLambdaAuth<T = unknown>(e: Request): asserts e is LambdaA
     if (!isLambdaAuthorizedRequest<T>(e)) {
         throw new NotAuthorizedError("Lambda authorizer required for the event.")
     }
+    Object.defineProperty(e, "user", {
+        value: e.requestContext.authorizer.lambda,
+        configurable: true
+    })
 }
 
 declare module "./pipeline" {

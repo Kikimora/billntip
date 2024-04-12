@@ -3,10 +3,9 @@ import {
     AdminCreateUserCommand,
     AdminDeleteUserCommand,
     AdminInitiateAuthCommand,
-    AdminSetUserPasswordCommand,
-    CognitoIdentityProviderClient,
+    AdminSetUserPasswordCommand, CognitoIdentityProvider,
     CreateGroupCommand, DescribeUserPoolClientCommand,
-    GetGroupCommand,
+    GetGroupCommand, GetUserCommandOutput,
     GroupType
 } from "@aws-sdk/client-cognito-identity-provider";
 import {createHmac} from 'crypto';
@@ -14,13 +13,15 @@ import {TokenEndpointResponse} from "@src/authorizer/oidc_tokens";
 import {retry} from "@app/util";
 import shortUUID from "short-uuid";
 
-const cognito = new CognitoIdentityProviderClient()
+const cognito = new CognitoIdentityProvider()
 const password = "Qweqwe_1";
 
 export interface TestUser {
     readonly username: string;
 
     login(): Promise<TokenEndpointResponse>;
+
+    data(): Promise<GetUserCommandOutput>;
 
     delete(): Promise<void>;
 }
@@ -31,9 +32,15 @@ export interface TestGroup {
 
 export interface TestCognitoModule {
     loadTestGroup(): Promise<TestGroup>
+
 }
 
 const shortUUIDGenerator = shortUUID(shortUUID.constants.flickrBase58)
+
+export default {
+    init,
+    client: cognito
+}
 
 export async function init(userPoolId: string, userPoolClientId: string): Promise<TestCognitoModule> {
 
@@ -44,6 +51,8 @@ export async function init(userPoolId: string, userPoolClientId: string): Promis
     const secret = userPoolClient!.UserPoolClient!.ClientSecret!;
 
     class TestUserImpl implements TestUser {
+
+        private tokens?: TokenEndpointResponse
 
         constructor(readonly username: string) {
         }
@@ -65,12 +74,19 @@ export async function init(userPoolId: string, userPoolClientId: string): Promis
             })
             const response = await cognito.send(loginCommand)
             const result = response.AuthenticationResult!
-            return {
+            return this.tokens = {
                 access_token: result.AccessToken!,
                 id_token: result.IdToken!,
                 refresh_token: result.RefreshToken!,
                 expires_in: result.ExpiresIn!
             }
+        }
+
+        async data(): Promise<GetUserCommandOutput> {
+            if (this.tokens === undefined) throw new Error("Call login first")
+            return await cognito.getUser({
+                AccessToken: this.tokens.access_token
+            })
         }
 
         async delete() {

@@ -1,9 +1,18 @@
-import {TSchema, StaticDecode, TUnknown, TypeBoxError} from "@sinclair/typebox";
+import {
+    TSchema,
+    StaticDecode,
+    TUnknown,
+    TypeBoxError,
+    Type,
+    TObject,
+    TProperties, Kind
+} from "@sinclair/typebox";
 import {TypeCheck, TypeCompiler} from "@sinclair/typebox/compiler";
 import {ValueError} from "@sinclair/typebox/errors";
 import {ValueOf} from "type-fest";
 import {Context} from "aws-lambda";
 import _ from "lodash";
+import {SecurityRequirementObject} from "openapi3-ts/src/model/openapi31";
 import {Middleware, Pipeline, Request} from "./pipeline"
 import {HttpError} from "./errors";
 
@@ -17,12 +26,20 @@ type HttpMethod = "GET" | "PUT" | "POST" | "DELETE" | "PATCH" | "HEAD" | "OPTION
  * @example - ANY route with a wildcard
  * ANY /user/{proxy+}
  */
-type Route = `${HttpMethod} ${string}`
+type Route = `${HttpMethod} ${string}` | '$default'
+
+interface SchemaMap extends TProperties {
+    [Kind]?: never
+}
 
 /**
  * Define request parameters and response value.
  */
-type RequestSpec = {
+export type RequestSpec = {
+    /**
+     * Operation identifier
+     */
+    operationId: string,
     /**
      * Request body schema.
      */
@@ -30,29 +47,64 @@ type RequestSpec = {
     /**
      * Request query schema.
      * @example - q=<string>&limit=<number>&page=<number>
-     * Type.Object({
+     * {
      *     q: Type.String({maxLength: 1024}),
      *     limit: Type.Number({minimum: 1, maximum: 500}),
      *     page: Type.Number({minimum: 0})
-     * })
+     * }
      */
-    query?: TSchema,
+    query?: SchemaMap,
     /**
      * Request path schema
      * @example - /users/{id}
-     * Type.Object({
-     *     id: Type.String({maxLength: 12, minLength: 12})
-     * })
+     * {
+     *     "id": Type.String({maxLength: 12, minLength: 12})
+     * }
      */
-    path?: TSchema,
+    path?: SchemaMap,
     /**
-     * Response schema
+     * Request headers schema
+     * @example - X-API-Key: <API KEY>, X-Client-Id:<Client ID>
+     * {
+     *     "X-API-Key": Type.String(),
+     *     "X-Client-Id": Type.Number(),
+     * }
      */
-    res?: TSchema,
+    headers?: SchemaMap,
     /**
-     * Operation identifier
+     * Request cookies schema
+     * @example - StickySessionID=SessionID
+     * {
+     *     "StickySessionID": Type.String()
+     * }
      */
-    operationId?: string
+    cookies?: SchemaMap,
+
+    /**
+     * Success response schema
+     */
+    success?: TSchema,
+    /**
+     * Success status code. Default: 200.
+     */
+    successStatusCode?: number
+    /**
+     * Error responses schemas
+     */
+    failures?: { [statusCode in `${number}` | 'default']?: TSchema }
+
+    security?: SecurityRequirementObject[]
+    consumes?: string | string[]
+    produces?: string | string[]
+    deprecated?: boolean
+
+    //Should I add other OpenAPI fields?
+    // tags?: string[];
+    // summary?: string;
+    // description?: string;
+    // externalDocs?: ExternalDocumentationObject;
+    // servers?: ServerObject[];
+    // callbacks?: CallbacksObject;
 } & { [key: string]: any }
 /**
  * Collection of routes. Note how typical use case adds `as const satisfies RouteMap` right after route map definition.
@@ -61,33 +113,31 @@ type RequestSpec = {
  *         name: Type.String({minLength: 3, maxLength: 100}),
  *         age: Type.Number({minimum: 0, maximum: 150})
  *     })
- *     const UserId = Type.Object({id: Type.Number({minimum: 0})})
+ *     const UserId = {id: Type.Number({minimum: 0})}
  *     const User = Type.Object({
  *         ...UserRequest.properties,
- *         ...UserId.properties
+ *         ...UserId
  *     })
  *     const UserAPI = {
  *         "POST /users": {
  *             body: UserRequest,
- *             res: User
+ *             success: User
  *         },
  *         "GET /user/{id}": {
  *             path: UserId,
- *             query: Type.Object({
+ *             query: {
  *                 name: Type.Optional(UserRequest.properties.name),
  *                 age: Type.Optional(UserRequest.properties.age),
- *             }),
- *             res: User
+ *             },
+ *             success: User
  *         },
  *         "PUT /user/{id}": {
  *             path: UserId,
- *             res: User
+ *             success: User
  *         }
  *     } as const satisfies RouteMap
  */
-export type RouteMap = {
-    [key in Route]: RequestSpec
-} & { '$default'?: RequestSpec }
+export type RouteMap = { [key in Route]?: RequestSpec }
 
 /**
  * Route event has {@link routeKey} with values from {@link RouteMap}
@@ -97,11 +147,19 @@ export type RouteEvent<T extends RouteMap> = ValueOf<{
             /**
              * {@link routeKey} with a [route]{@link Route} from a {@link RouteMap}
              */
-            routeKey: key,
+            readonly routeKey: key,
             /**
              * Collection of request part parsers.
              */
-            parsers: Parsers,
+            readonly parsers: Parsers,
+            /**
+             * Request cookies' array converted into a map
+             */
+            readonly cookiesMap?: Record<string, string>,
+            /**
+             * Route information
+             */
+            readonly route: T[key]
             /**
              * Parse all request parts, if any part does not match it's schema then throw a {@link TypeBoxError}.
              * @example
@@ -181,9 +239,11 @@ Pipeline.prototype.withRoutes = function <T extends RouteMap>(api: T, options?: 
         }
         const request = event as Request & RouteEvent<T>
         const p = parsers[event.routeKey as keyof T]
-        Object.defineProperty(request, 'parsers', {value: p, enumerable: false})
-        Object.defineProperty(request, 'parse', {value: parse, enumerable: false})
-        Object.defineProperty(request, 'validate', {value: validate, enumerable: false})
+        Object.defineProperty(request, 'parsers', {value: p, configurable: true})
+        Object.defineProperty(request, 'parse', {value: parse, configurable: true})
+        Object.defineProperty(request, 'route', {value: api[event.routeKey as keyof T], configurable: true})
+        Object.defineProperty(request, 'validate', {value: validate, configurable: true})
+        Object.defineProperty(request, 'cookieMap', {value: cookieMap, configurable: true})
         return this.next(request, context)
     })
 }
@@ -214,12 +274,20 @@ class RequestParser<T extends TSchema, P extends string> {
         return new RequestParser(schema, "json")
     }
 
-    static pathParser<Body extends TSchema>(schema: Body) {
-        return new RequestParser(schema, "pathParameters")
+    static pathParser<T extends TProperties>(schema: T) {
+        return new RequestParser(Type.Object(schema), "pathParameters")
     }
 
-    static queryParser<Body extends TSchema>(schema: Body) {
-        return new RequestParser(schema, "queryStringParameters")
+    static queryParser<T extends TProperties>(schema: T) {
+        return new RequestParser(Type.Object(schema), "queryStringParameters")
+    }
+
+    static headersParser<T extends TProperties>(schema: T) {
+        return new RequestParser(Type.Object(schema), "headers")
+    }
+
+    static cookiesParser<T extends TProperties>(schema: T) {
+        return new RequestParser(Type.Object(schema), "cookiesMap")
     }
 }
 
@@ -227,6 +295,8 @@ interface Parsers {
     body: RequestParser<TUnknown, "json">,
     query: RequestParser<TUnknown, "queryStringParameters">,
     path: RequestParser<TUnknown, "pathParameters">,
+    headers: RequestParser<TUnknown, "headers">,
+    cookies: RequestParser<TUnknown, "cookiesMap">,
 }
 
 /**
@@ -239,42 +309,66 @@ function routeParsers<T extends RouteMap>(routes: T) {
             body: route.body !== undefined ? RequestParser.jsonBodyParser(route.body) : undefined,
             query: route.query !== undefined ? RequestParser.queryParser(route.query) : undefined,
             path: route.path !== undefined ? RequestParser.pathParser(route.path) : undefined,
+            headers: route.headers !== undefined ? RequestParser.headersParser(route.headers) : undefined,
+            cookies: route.cookies !== undefined ? RequestParser.cookiesParser(route.cookies) : undefined,
         }
     }) as any
 }
 
-function parse(this: Request & RouteEvent<any>): ParseResult<any> {
+function parse(this: Request & RouteEvent<any>) {
     return {
-        body: this.parsers.body?.parse(this as any),
+        body: 'json' in this ? this.parsers.body?.parse(this) : undefined,
         path: this.parsers.path?.parse(this),
         query: this.parsers.query?.parse(this),
+        headers: this.parsers.headers?.parse(this),
+        cookies: this.parsers.cookies?.parse(this),
     }
 }
 
-function validate(this: Request & RouteEvent<any>): ParseResult<any> {
+function validate(this: Request & RouteEvent<any>) {
     return {
-        body: this.parsers.body?.errors(this as any),
+        body: 'json' in this ? this.parsers.body?.errors(this) : undefined,
         path: this.parsers.path?.errors(this),
         query: this.parsers.query?.errors(this),
+        headers: this.parsers.headers?.errors(this),
+        cookies: this.parsers.cookies?.errors(this),
     }
 }
 
-type DecodedValue<T extends TSchema | undefined> = T extends undefined
-    ? never
-    : StaticDecode<Exclude<T, undefined>>
+function cookieMap(this: Request & RouteEvent<any>): Record<string, string> | undefined {
+    if (this.cookies === undefined) return undefined
+    return _(this.cookies)
+        .map(x => {
+            const [name, value] = x.split('=');
+            return {name, value};
+        })
+        .keyBy('name')
+        .mapValues(x => x.value)
+        .value()
+}
 
-type RequestPart = "body" | "path" | "query"
+type RequestPart = "body" | "path" | "query" | "headers" | "cookies"
+
+//<!-- @formatter:off -->
+type DecodedValue<T> =
+    T extends TSchema ? StaticDecode<T>
+  : T extends TProperties ? StaticDecode<TObject<T>>
+  : never
+//<!-- @formatter:on -->
 
 type ParseResult<T extends RequestSpec> = {
     [key in RequestPart]: DecodedValue<T[key]>
 }
 
-type ValidationErrors<T extends TSchema | undefined> = T extends undefined
-    ? never
-    : ValueError[]
+//<!-- @formatter:off -->
+type ValidationError<T> =
+    T extends TSchema ? ValueError[]
+  : T extends TProperties ? ValueError[]
+  : never
+//<!-- @formatter:on -->
 
 type ValidationResult<T extends RequestSpec> = {
-    [key in RequestPart]: ValidationErrors<T[key]>
+    [key in RequestPart]: ValidationError<T[key]>
 }
 
 declare module "@sinclair/typebox" {
@@ -284,5 +378,5 @@ declare module "@sinclair/typebox" {
 }
 Object.defineProperty(TypeBoxError.prototype, 'statusCode', {
     value: 400,
-    writable: false
+    writable: true
 })

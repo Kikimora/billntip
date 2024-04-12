@@ -1,13 +1,13 @@
 import {
     CognitoIdentityProvider,
-    InitiateAuthCommandOutput,
     UnauthorizedException
 } from "@aws-sdk/client-cognito-identity-provider";
 import * as process from "process";
 import _ from "@app/util";
 import {createHmac} from "crypto";
 import {HttpError, Middleware, pipeline, requireLambdaAuth, TracedEvent, Request} from "@app/lambda";
-import Routes from "./routes";
+import Paths from "./paths";
+import * as Schemas from "./schemas";
 import SessionData, {SessionContext} from "@src/authorizer/session";
 import {userPoolDetails} from "@src/cognito";
 import {configure, withErrorContext} from "@app/diagnostics";
@@ -18,6 +18,7 @@ import {
     RespondToAuthChallengeResponse
 } from "@aws-sdk/client-cognito-identity-provider/dist-types/models/models_0";
 import {initModuleVariables} from "@src/authorizer/ctx";
+import {Static} from "@sinclair/typebox";
 
 const ClientId = process.env.OAUTH_CLIENT_ID ?? _.throw("Missing required OAUTH_CLIENT_ID env variable")
 const UserPoolId = process.env.USER_POOL_ID ?? _.throw("Missing required USER_POOL_ID env variable")
@@ -47,7 +48,7 @@ configure({triggers: {request: true}})
 export const handler = pipeline()
     .handleErrors()
     .traceRequest()
-    .withRoutes(Routes)
+    .withRoutes(Paths)
     .parseJsonBody()
     .do(async function (this: Middleware, e: TracedEvent, ctx: any) {
         const response = await this.next(e, ctx)
@@ -65,7 +66,7 @@ export const handler = pipeline()
                     idToken: session.id_token,
                     profile: session.profile,
                     expiresAt: session.expires_at
-                }
+                } satisfies Static<typeof Schemas.GetSessionResponse>
             case "POST /user": {
                 const {ClientSecret} = await __init()
                 const {body} = req.parse()
