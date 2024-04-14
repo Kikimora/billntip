@@ -32,11 +32,11 @@ const environment = {
 };
 
 const authOperation = [
-    allowCrud().on(sessionsTable, locksTable).build(),
-    newPolicy('UserPoolAccess')
+    allowCrud().on(sessionsTable, locksTable).buildRoleInlinePolicy(),
+    newPolicy('DescribeUserPoolClient')
         .allow("cognito-idp:DescribeUserPoolClient")
         .on(cognito.userPool)
-        .build()
+        .buildRoleInlinePolicy()
 ]
 
 function newAuthLambda(lambda: LambdaSource) {
@@ -66,6 +66,15 @@ const authorizer = new aws.apigatewayv2.Authorizer("cookie-authorizer", {
     authorizerResultTtlInSeconds: authorizerCacheTtl,
 });
 
+function SetCookie(statusCode: number) {
+    return {
+        statusCode: `${statusCode}`,
+        mappings: {
+            "overwrite:header.Set-Cookie": "$context.authorizer.new_cookie",
+        }
+    }
+}
+
 export default {
     id: authorizer.id,
     name: authorizer.name,
@@ -75,9 +84,7 @@ export default {
     gateway,
     environment,
     integrationArgs: {
-        requestParameters: {
-            "overwrite:header.Set-Cookie": "$context.authorizer.new_cookie",
-        }
+        responseParameters: [200, 201, 204, 206].map(SetCookie)
     },
     apiRouteArgs: {
         authorizationType: "CUSTOM",

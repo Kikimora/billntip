@@ -3,7 +3,7 @@ import _ from "lodash"
 import {Tracer} from "./diagnostics";
 import {v4} from "uuid";
 
-type TimeUnitsType  = "days" |  "hours" |  "minutes" |  "seconds"
+type TimeUnitsType = "days" | "hours" | "minutes" | "seconds"
 
 export function delay(timeout: number) {
     return new Promise(function (resolve) {
@@ -118,6 +118,10 @@ declare module "lodash" {
 
         defaults(object: any, ...sources: any[]): any;
     }
+}
+
+export function die(errorMessage: string, E?: { new(m: string): Error; }): never {
+    throw new (E ?? Error)(errorMessage);
 }
 
 declare module 'lodash' {

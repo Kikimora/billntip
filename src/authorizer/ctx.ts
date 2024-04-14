@@ -3,6 +3,7 @@ import _ from "lodash";
 import {userPoolDetails} from "../cognito";
 import {toSeconds} from "@app/util";
 import {EMF, Tracer} from "@app/diagnostics";
+import * as process from "process";
 
 export const AuthTracer = new Tracer("authorizer")
 export const Metrics = EMF.namespace("authorizer")
@@ -20,6 +21,11 @@ export const AuthModuleEnvSchema = z.object({
     issuer: z.string().min(1).readonly(),
     tokenEndpoint: z.string().url().readonly(),
     postAuthRedirectUrl: z.string().url().readonly(),
+
+    /**
+     * Session cookie SameSite: strict, none or Lax
+     */
+    sameSize: z.enum(["none", "strict", "lax"] as const).readonly(),
 
     /**
      * Authorizer cache TTL in seconds
@@ -68,7 +74,10 @@ export const Env: AuthModuleEnv = AuthModuleEnvSchema.parse({
     postAuthRedirectUrl: process.env.POST_AUTH_REDIRECT_URL,
     region: process.env.AWS_REGION,
     authorizerCacheTtl: Number(process.env.AUTHORIZER_CACHE_TTL),
+    sameSize: process.env.SAME_SIZE !== undefined ? Boolean(process.env.SAME_SIZE) : false,
 })
+
+Env.authorizerCacheTtl = 10
 
 let variables: AuthModuleVariables
 

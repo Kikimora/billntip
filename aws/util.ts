@@ -7,7 +7,10 @@ import _ from '@app/util';
 import {RouteMap} from "@app/lambda";
 import {IntegrationArgs} from "@pulumi/aws/apigatewayv2/integration";
 import {RequiredKeysOf} from "type-fest";
-import {ProviderResource} from "@pulumi/pulumi";
+import {Type} from "@sinclair/typebox";
+import fs from "fs";
+import yaml from "yaml";
+import {Principal} from "@pulumi/aws/iam/documents";
 
 /**
  * Details of an AWS service that wants to call a Lambda function.
@@ -29,7 +32,13 @@ interface StatementBuilder {
      * Adds resources to the statement and completes it
      * @param resources - resource ARNs
      */
-    on(...resources: AwsResource[]): PolicyBuilder
+    on(...resources: AwsResource[]): StatementBuilder & PolicyBuilder
+
+    /**
+     * Add principals to the policy
+     * @param principals - AWS principals
+     */
+    principals(...principals: Principal[]): StatementBuilder & PolicyBuilder
 }
 
 interface RolePolicy {
@@ -51,18 +60,20 @@ interface PolicyBuilder {
      * Starts 'Effect: "Allow"' statement. See also {@link StatementBuilder} and {@link StatementBuilder.on}.
      * @param actions - allowed actions
      */
-    allow(...actions: string[]): StatementBuilder
+    allow(...actions: string[]): StatementBuilder & PolicyBuilder
 
     /**
      * Starts 'Effect: "Deny"' statement. See also {@link StatementBuilder} and {@link StatementBuilder.on}.
      * @param actions - denied actions
      */
-    deny(...actions: string[]): StatementBuilder,
+    deny(...actions: string[]): StatementBuilder & PolicyBuilder,
 
     /**
      * Builds inline policy.
      */
-    build(): RolePolicy
+    buildRoleInlinePolicy(): RolePolicy
+
+    buildPolicy(): pulumi.Input<aws.iam.PolicyDocument>
 }
 
 /**
@@ -106,7 +117,7 @@ interface LambdaBuilder {
     build(): LambdaFunction
 }
 
-type AwsResource = { arn: pulumi.Output<string> }
+type AwsResource = { arn: pulumi.Output<string> } | pulumi.Input<string>
 
 export function grantInvoke(lambda: LambdaFunction, client: LambdaCaller): aws.lambda.Permission {
     const {id, arn} = lambda
@@ -213,18 +224,57 @@ export const newLambda: NewLambdaModule = newLambdaModule
 export function newPolicy(name: string): PolicyBuilder {
     const statements: any[] = []
 
-    function statementBuilder(effect: string, actions: string[]): StatementBuilder {
+    function statementBuilder(effect: string, actions: string[]): StatementBuilder & PolicyBuilder {
+        let _resources: AwsResource[] = []
+        let _principals: Principal[] = []
+
+        function pushStatement() {
+            const statement = pulumi.all([_resources, _principals]).apply(([resources, principals]) => {
+                const policy: any = {
+                    Effect: effect,
+                    Action: actions,
+                }
+                const arns = resources.map(x => typeof x === "object" && 'arn' in x ? x.arn : x)
+                if (arns.length == 1) {
+                    policy.Resource = arns[0]
+                } else if (resources.length > 1) {
+                    policy.Resource = arns
+                }
+                //'*' is a valid principal, "Principal: '*'" works, "Principal: ['*']" does not.
+                if (principals.length == 1) {
+                    policy.Principal = principals[0]
+                } else if (principals.length > 1) {
+                    policy.Principal = principals
+                }
+                return policy
+            })
+            statements.push(statement)
+        }
+
         return {
-            on(...resources: { arn: pulumi.Input<string> }[]) {
-                const arns = resources.map(x => x.arn);
-                statements.push(pulumi.all(arns).apply(resources => {
-                    return {
-                        Effect: effect,
-                        Action: actions,
-                        Resource: resources
-                    }
-                }))
-                return policyBuilder
+            on(...resources: AwsResource[]) {
+                _resources.push(...resources)
+                return this
+            },
+            principals(...principals: Principal[]): PolicyBuilder & StatementBuilder {
+                _principals.push(...principals)
+                return this
+            },
+            allow(...actions: string[]) {
+                pushStatement()
+                return policyBuilder.allow(...actions)
+            },
+            deny(...actions: string[]) {
+                pushStatement()
+                return policyBuilder.deny(...actions)
+            },
+            buildRoleInlinePolicy() {
+                pushStatement()
+                return policyBuilder.buildRoleInlinePolicy()
+            },
+            buildPolicy() {
+                pushStatement()
+                return policyBuilder.buildPolicy()
             }
         }
     }
@@ -236,15 +286,24 @@ export function newPolicy(name: string): PolicyBuilder {
         deny(...actions: string[]) {
             return statementBuilder("Deny", actions)
         },
-        build() {
+        buildRoleInlinePolicy() {
             return {
                 name,
                 policy: pulumi.all(statements).apply(statements =>
                     JSON.stringify({
+                        Id: name,
                         Version: "2012-10-17",
                         Statement: statements,
                     })
                 )
+            }
+        },
+
+        buildPolicy(): pulumi.Input<aws.iam.PolicyDocument> {
+            return {
+                Id: name,
+                Version: "2012-10-17",
+                Statement: statements
             }
         }
     }
@@ -304,7 +363,7 @@ export function newApiGwIntegration(gw: ApiGateway, lambda: LambdaFunction, args
         ...args,
         apiId: gw.id,
         integrationUri: lambda.arn,
-        payloadFormatVersion: "2.0",
+        payloadFormatVersion: "2.0"
     });
 
     let _default: Partial<ApiRoute>
@@ -321,7 +380,7 @@ export function newApiGwIntegration(gw: ApiGateway, lambda: LambdaFunction, args
             for (let [k, v] of Object.entries(routes)) {
                 this.addRoute({
                     routeKey: k,
-                    operationName: v.operationId,
+                    operationName: v!.operationId,
                 })
             }
             return this
@@ -367,4 +426,16 @@ function makeName(routeKey: string) {
     const [method, path, ...rest] = routeKey.split(' ')
     if (rest.length > 0) throw new Error(`Invalid routeKey ${routeKey}`)
     return `${method.toLowerCase()}-${_.trim(path, '/$').replaceAll('/', '-').replaceAll(/[}{]/g, '')}`
+}
+
+export function generateRequestResponseSchemas(routes: RouteMap, file: string) {
+    const x = _(routes).flatMap((value) =>
+        [
+            {name: `${value!.operationId}Request`, value: value!.body},
+            {name: `${value!.operationId}Response`, value: value!.success},
+        ])
+        .filter((x) => x.value !== undefined)
+        .keyBy('name')
+        .mapValues(x => Type.Strict(x.value!))
+    fs.writeFileSync(file, yaml.stringify({components: {schemas: x}}, null, 2))
 }

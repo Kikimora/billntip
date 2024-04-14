@@ -139,7 +139,7 @@ const args = {
             "cognito-idp:AdminSetUserPassword",
             "cognito-idp:AdminLinkUserAccounts",
         ).on(pool)
-        .build()
+        .buildRoleInlinePolicy()
 };
 const manageUsersPolicy = new aws.iam.Policy("cognito-manage-users-policy", args)
 

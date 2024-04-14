@@ -7,7 +7,7 @@ const apiServiceLambda = authorizer.gateway.newLambda(Lambdas['api.handler'])
         timeout: 5,
         memorySize: 512
     })
-    .inlinePolicy(allowCrud().on(dataTable).build())
+    .inlinePolicy(allowCrud().on(dataTable).buildRoleInlinePolicy())
     .build()
 
 export default authorizer.newAuthorizedIntegration(apiServiceLambda)

@@ -26,7 +26,7 @@ const cognitoApiClient = new aws.cognito.UserPoolClient("cognito-api-client", {
     //allowedOauthFlows: ["code", "client_credentials"],
     callbackUrls: [gateway.authCallback],
     allowedOauthFlowsUserPoolClient: true,
-    explicitAuthFlows: ["ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"],
+    explicitAuthFlows: ["ALLOW_ADMIN_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH", "ALLOW_USER_PASSWORD_AUTH"],
     ...tokenValidity,
     supportedIdentityProviders: [
         "COGNITO",
