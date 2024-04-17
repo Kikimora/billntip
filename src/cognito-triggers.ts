@@ -55,9 +55,11 @@ export const preSignup = pipeline<PreSignUpTriggerEvent>()
 export const postSignup = pipeline<PostConfirmationConfirmSignUpTriggerEvent>()
     .traceRequest({tracer, tag: "postSignup"})
     .done(async function (event: PostConfirmationConfirmSignUpTriggerEvent) {
-        await adminUpdateAttributes(event.userPoolId, event.userName, {
-            "email_verified": "true"
-        })
+        const {'custom:uid': uid, sub} = event.request.userAttributes
+        const attributes = {
+            'custom:uid': uid ?? sub
+        };
+        await adminUpdateAttributes(event.userPoolId, event.userName, attributes)
         return event
     })
 

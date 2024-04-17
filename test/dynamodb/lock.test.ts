@@ -1,4 +1,7 @@
 import {createLockStore, LockHandle, LockStore, makeLockStore} from "@app/dynamodb/lock";
+import {getCommand} from "@app/dynamodb";
+import {unmarshall} from "@aws-sdk/util-dynamodb";
+import {retry} from "@app/util";
 
 beforeAll(async () => {
     try {
@@ -16,11 +19,17 @@ describe("DynamoDb locks", () => {
         store = makeLockStore("Locks")
     })
 
+    afterAll(() => {
+        jest.restoreAllMocks()
+    })
+
     afterEach(async () => {
         for (const h of handles) {
             await h.unlock()
         }
+        jest.resetAllMocks()
     })
+
     it("can lock", async () => {
         handles[0] = await store.lock("1", "can lock", options)
         const concurrentLock = store.tryLock("1", "another test")
@@ -43,7 +52,7 @@ describe("DynamoDb locks", () => {
         expect(handles[0].locked).toBeTrue()
         expect(handles[1].locked).toBeTrue()
     })
-    it("can unlock same lock multiple times", async ()=>{
+    it("can unlock same lock multiple times", async () => {
         //lock and unlock
         handles[0] = await store.lock("1", "can unlock same lock multiple times 1", options)
         await handles[0].unlock()
@@ -54,4 +63,23 @@ describe("DynamoDb locks", () => {
         const actual = store.lock("1", "can unlock same lock multiple times 2", options);
         await expect(actual).toReject()
     })
+
+    async function loadLockItem(handle: LockHandle, version?: number) {
+        return await retry(async function () {
+            const {Item: dynamoItem} = await store.dynamoDb.send(getCommand(store.table, {
+                key: {pk: handle.lock.pk}
+            }))
+            const item = unmarshall(dynamoItem!);
+            if (version !== undefined && item.version < version) throw new Error("Old item")
+            return item
+        }, {maxIterations: 10, delay: 20})
+    }
+
+    it("set TTL", async () => {
+        const handle = handles[0] = await store.lock("1", "lock", options)
+        const now = Math.floor((performance.now() + performance.timeOrigin) / 1000)
+        let lockItem = await loadLockItem(handle);
+        expect(lockItem.ttl).toBeCloseTo(now + 5, 0)
+    })
 })
+

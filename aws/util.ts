@@ -7,9 +7,6 @@ import _ from '@app/util';
 import {RouteMap} from "@app/lambda";
 import {IntegrationArgs} from "@pulumi/aws/apigatewayv2/integration";
 import {RequiredKeysOf} from "type-fest";
-import {Type} from "@sinclair/typebox";
-import fs from "fs";
-import yaml from "yaml";
 import {Principal} from "@pulumi/aws/iam/documents";
 
 /**
@@ -119,7 +116,10 @@ interface LambdaBuilder {
 
 type AwsResource = { arn: pulumi.Output<string> } | pulumi.Input<string>
 
-export function grantInvoke(lambda: LambdaFunction, client: LambdaCaller): aws.lambda.Permission {
+export function grantInvoke(lambda: {
+    id: string,
+    arn: pulumi.Output<string>
+}, client: LambdaCaller): aws.lambda.Permission {
     const {id, arn} = lambda
     return new aws.lambda.Permission(`${id}-permissions`, {
         action: "lambda:invokeFunction",
@@ -426,16 +426,4 @@ function makeName(routeKey: string) {
     const [method, path, ...rest] = routeKey.split(' ')
     if (rest.length > 0) throw new Error(`Invalid routeKey ${routeKey}`)
     return `${method.toLowerCase()}-${_.trim(path, '/$').replaceAll('/', '-').replaceAll(/[}{]/g, '')}`
-}
-
-export function generateRequestResponseSchemas(routes: RouteMap, file: string) {
-    const x = _(routes).flatMap((value) =>
-        [
-            {name: `${value!.operationId}Request`, value: value!.body},
-            {name: `${value!.operationId}Response`, value: value!.success},
-        ])
-        .filter((x) => x.value !== undefined)
-        .keyBy('name')
-        .mapValues(x => Type.Strict(x.value!))
-    fs.writeFileSync(file, yaml.stringify({components: {schemas: x}}, null, 2))
 }

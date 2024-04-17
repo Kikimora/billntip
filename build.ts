@@ -7,8 +7,7 @@ import {Lambdas, makeBuilder} from "@aws/lambdas";
 dotenv.config();
 
 program
-    .option('-b, --build', 'Update lambda functions code')
-    .option('-u, --update', 'Update lambda functions code')
+    .option('-b, --build', 'Build lambda functions code')
     .option('-p, --publish', 'Publish lambda functions, implies -u')
     .option('-s, --stack <stack>', 'Deploy to stack', 'dev')
     .argument('<handlers...>', 'Lambda handlers (Ex: api.handler, api.* or all)')

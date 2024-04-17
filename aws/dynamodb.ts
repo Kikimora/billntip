@@ -16,7 +16,7 @@ const data = new aws.dynamodb.Table('data', {
         rangeKey: "sk",
         projectionType: "ALL"
     }]
-});
+}, {retainOnDelete: true});
 
 const sessions = new aws.dynamodb.Table('sessions', {
     // TODO set TTL for records in this table.

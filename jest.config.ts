@@ -1,7 +1,11 @@
 /** @type {import('ts-jest').JestConfigWithTsJest} */
 module.exports = {
     testEnvironment: 'node',
-    testRegex: "test/.*test.ts",
+    testRegex: [
+        "test/.*test.ts",
+        "src/.*test.ts",
+        "openapi/.*test.ts",
+    ],
     setupFiles: ['./jest.setup.ts'],
     setupFilesAfterEnv: ["./jest.extended.ts"],
     transform: {

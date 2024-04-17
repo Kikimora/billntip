@@ -82,7 +82,7 @@ newLambda.defaults = {
     architectures: ["arm64"],
     loggingConfig: {
         logFormat: "JSON",
-        systemLogLevel: pulumi.getStack() == "dev" ? "DEBUG" : "WARN"
+        systemLogLevel: pulumi.getStack() == "dev" ? "DEBUG" : "WARN",
     },
     environment: {
         variables: {

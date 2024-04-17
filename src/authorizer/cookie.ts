@@ -12,7 +12,7 @@ export default class SessionCookie {
             secure: true,
             httpOnly: true,
             path: "/",
-            sameSite: Env.sameSize,
+            sameSite: Env.sameSite,
         })
     }
 

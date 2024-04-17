@@ -13,6 +13,17 @@ const tracer = new Tracer("dynamodb_locks")
  * Interface to a distributed lock store.
  */
 export interface LockStore {
+
+    /**
+     * Lock table
+     */
+    readonly table: Table<typeof LockKey, typeof LockAttributes>
+
+    /**
+     * DynamoDB client
+     */
+    readonly dynamoDb: DynamoDB
+
     /**
      * Acquire a lock with a given id. If lock is taken then wait and retry given number of times.
      * @param id - lock id
@@ -96,10 +107,22 @@ export type LockOptions = {
 export type TryLockOptions = Omit<LockOptions, 'retries'>
 
 type Lock = Readonly<{
+    /**
+     * Lock identifier
+     */
     pk: string
+    /**
+     * Lock version, increase with every heartbeat
+     */
     version: number
+    /**
+     * Lock owner identifier
+     */
     owner: string
-    heartbeatInterval: number
+    /**
+     * Heartbeat internal in milliseconds
+     */
+    heartbeatInterval: number,
 }>
 
 type TryLockResult = Just<Lock, "Success"> | Just<Lock, "Failure">
@@ -151,6 +174,9 @@ export function makeLockStore(tableName: string, storeOptions?: StoreOptions): L
     const locker = new Locker(dynamoDb, Locks)
 
     return {
+        table: Locks,
+        dynamoDb,
+
         tryLock: function (id: string, owner: string, options?: TryLockOptions) {
             return this.lock(id, owner, {...options, retries: 0})
         },
@@ -188,13 +214,13 @@ export function makeLockStore(tableName: string, storeOptions?: StoreOptions): L
  */
 class LockImpl implements LockHandle {
     private _otherLock?: Lock
-    private _heartbeat: Promise<Lock>
+    private _bumpTask: Promise<Lock>
     private _ownLock: boolean
     private _lock: Lock
 
     constructor(lock: Lock, private readonly locker: Locker) {
         this._lock = lock
-        this._heartbeat = Promise.resolve<Lock>(lock)
+        this._bumpTask = Promise.resolve<Lock>(lock)
         this._ownLock = false
     }
 
@@ -208,6 +234,11 @@ class LockImpl implements LockHandle {
 
     async acquireLock(maxIterations: number) {
         const delay = () => {
+            /**
+             * Delay happens if we cannot acquire a lock because somebody else holds it.
+             * This is a race condition, other lock owner runs heartbeat on its own while we are trying to acquire it.
+             * Because we don't want to get ahead of the owner we wait twice other lock heartbeat interval.
+             */
             return this._otherLock!.heartbeatInterval * 2
         }
         const options = {delay, maxIterations};
@@ -245,8 +276,8 @@ class LockImpl implements LockHandle {
             //heartbeatTracer.info("bump", this.lock)
             const {lock, locker} = this
             try {
-                this._heartbeat = locker.bump(lock)
-                this._lock = await this._heartbeat
+                this._bumpTask = locker.bump(lock)
+                this._lock = await this._bumpTask
             } catch (e: any) {
                 heartbeatTracer.info(e.message, lock)
             }
@@ -256,28 +287,33 @@ class LockImpl implements LockHandle {
     }
 
     async unlock() {
-        const {locker, lock} = this
+        const {locker} = this
         if (!this.locked) return
         //Bump task changes lock and interfere with delete, read it after bump task finishes
-        //1. Signal to stop heartbeat
+        //1. Signal to stop heartbeat, no more bumping!
         this._ownLock = false
-        //2. Wait in background until heartbeat stops
-        this._heartbeat.then(() => {
-            return locker.deleteLock(lock)
-            //3. update lock, just in case it changed
-        }).then((lock) => {
-            this._lock = lock
-        }).catch(() => {
-            //4. ignore any errors since we don't care about the lock anymore
-        }).finally(() => {
-            //5. finally, record a trace
-            tracer.info("unlocked", this._lock)
-        })
+        //2. Wait until the most recent bump finishes
+        await this._bumpTask
+        //3. Delete lock ignoring any errors
+        this._lock = await locker.deleteLock(this._lock).catch()
+        //4. finally, record a trace
+        tracer.info("unlocked", this._lock)
     }
 
     async [Symbol.dispose]() {
         await this.unlock()
     }
+}
+
+/**
+ * Lock expires in 5 heartbeat intervals but no less than in 5 seconds from now.
+ */
+function lockExpiration(lock: Lock) {
+    const MinHeartbeats = 5
+    const MinSeconds = 5
+    const now = Math.floor((performance.now() + performance.timeOrigin) / 1000)
+    const heartbeatsMs = MinHeartbeats * lock.heartbeatInterval
+    return heartbeatsMs < MinSeconds * 1000 ? now + MinSeconds : now + Math.floor(heartbeatsMs / 1000)
 }
 
 /**
@@ -290,6 +326,7 @@ class Locker {
 
     async tryLock(lock: Lock): Promise<TryLockResult> {
         tryLock: try {
+            const expiresAt = lockExpiration(lock)
             const {Attributes: attributes} = await this.dynamoDb.send(updateCommand(this.table, {
                 key: {pk: lock.pk},
                 return: "ALL_NEW",
@@ -298,7 +335,7 @@ class Locker {
                 expression: ({attr, val}) => `SET
                             ${attr.version} = ${val.version},
                             ${attr.heartbeat_interval} = ${val.heartbeatInterval},
-                            ${attr.ttl} = ${val(Math.floor((Date.now() + lock.heartbeatInterval * 2) / 2))},
+                            ${attr.ttl} = ${val(expiresAt)},
                             ${attr.owner} = ${val.owner}`,
                 condition: ({key, attr, val}) => `
                            attribute_not_exists(${key.pk}) OR ${attr.version} < ${val.version}`
@@ -318,20 +355,22 @@ class Locker {
     }
 
     async load(pk: string): Promise<Lock | undefined> {
-        const command = getCommand(this.table, {key: {pk}});
-        const {Item: item} = await this.dynamoDb.send(command)
+        const {Item: item} = await this.dynamoDb.send(getCommand(this.table, {
+            key: {pk}
+        }))
         if (item === undefined) return undefined
         return fromDynamoDb(unmarshall(item))
     }
 
     async bump(lock: Lock): Promise<Lock> {
         const {pk, version} = lock
+        const expiresAt = lockExpiration(lock)
         const command = updateCommand(this.table, {
             key: {pk},
             return: "ALL_NEW",
             expression: ({attr, val}) => `SET 
                             ${attr.version} = ${attr.version} + ${val(1)},
-                            ${attr.ttl} = ${attr.ttl} + ${attr.heartbeat_interval}`,
+                            ${attr.ttl} = ${val(expiresAt)}`,
             condition: ({key, attr, val}) =>
                 `attribute_exists(${key.pk}) AND ${attr.version} = ${val(version)}`
         });

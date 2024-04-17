@@ -2,6 +2,8 @@ import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 import {loadAndBundleSpec} from "redoc"
 import {newPolicy} from "@aws/util";
+import makeOpenAPISpec from "../doc/main";
+import fs from "fs";
 
 const s3Bucket = new aws.s3.Bucket("bucket", {
     corsRules: [{
@@ -43,12 +45,26 @@ export const bucket = {
     policy: policy.policy,
 }
 
-const spec = loadAndBundleSpec("../src/index.yaml")
+const spec = loadAndBundleSpec(makeOpenAPISpec())
+const openApi = "public/billntip.json";
 new aws.s3.BucketObject("openapi-spec", {
     bucket: s3Bucket,
-    key: "public/billntip.json",
+    key: openApi,
     source: new pulumi.asset.StringAsset(spec.then(JSON.stringify)),
     contentType: "application/json"
+}, {dependsOn: [accessBlock]})
+
+async function makeOpenAPIHtml() {
+    const buffer = await fs.promises.readFile("../doc/openapi.html")
+    const html = buffer.toString('utf8')
+    return new pulumi.asset.StringAsset(html.replace('{{URL}}', `/${openApi}`))
+}
+
+new aws.s3.BucketObject("openapi-html", {
+    bucket: s3Bucket,
+    key: "public/openapi.html",
+    source: makeOpenAPIHtml(),
+    contentType: "text/html"
 }, {dependsOn: [accessBlock]})
 
 // const originAccessIdentity = new aws.cloudfront.OriginAccessIdentity("cdn-s3-access", {

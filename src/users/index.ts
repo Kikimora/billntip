@@ -5,7 +5,7 @@ import {
 import * as process from "process";
 import _ from "@app/util";
 import {createHmac} from "crypto";
-import {HttpError, Middleware, pipeline, requireLambdaAuth, TracedEvent, Request} from "@app/lambda";
+import {HttpError, Middleware, pipeline, requireLambdaAuth, TracedEvent, LambdaRequest} from "@app/lambda";
 import Paths from "./paths";
 import * as Schemas from "./schemas";
 import SessionData, {SessionContext} from "@src/authorizer/session";
@@ -283,7 +283,7 @@ function secretHash(username: string, clientSecret: string) {
     return hasher.digest('base64');
 }
 
-async function processAuthResponse(req: Request & TracedEvent, auth: InitiateAuthResponse | RespondToAuthChallengeResponse) {
+async function processAuthResponse(req: LambdaRequest & TracedEvent, auth: InitiateAuthResponse | RespondToAuthChallengeResponse) {
     if (auth.AuthenticationResult !== undefined) {
         const {AccessToken, IdToken, RefreshToken, ExpiresIn} = auth.AuthenticationResult
         if (AccessToken === undefined || IdToken === undefined ||

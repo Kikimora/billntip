@@ -1,5 +1,5 @@
 import { HttpError } from "./errors";
-import {Middleware, Pipeline, Request} from "./pipeline";
+import {Middleware, Pipeline, LambdaRequest} from "./pipeline";
 import {Context} from "aws-lambda";
 
 export interface JsonRequest {
@@ -37,12 +37,12 @@ Pipeline.prototype.parseJsonBody = function (options?: ParseJsonBodyOptions) {
 
     const checkHeader = options?.checkContentType ?? true
 
-    return this.do(async function (this: Middleware<JsonRequest>, event: Request, context: Context) {
+    return this.do(async function (this: Middleware<JsonRequest>, event: LambdaRequest, context: Context) {
         const {body, isBase64Encoded} = event
         if (body !== undefined && checkHeader && event.headers['content-type'] !== 'application/json') {
             throw new JsonBodyError("Missing required 'Content-Type: application/json' header")
         }
-        const request = event as Request & JsonRequest
+        const request = event as LambdaRequest & JsonRequest
         if (body !== undefined) {
             try {
                 const data = isBase64Encoded ? Buffer.from(body, 'base64').toString() : body

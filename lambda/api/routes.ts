@@ -13,10 +13,26 @@ import {ValueOf} from "type-fest";
 import {Context} from "aws-lambda";
 import _ from "lodash";
 import {SecurityRequirementObject} from "openapi3-ts/src/model/openapi31";
-import {Middleware, Pipeline, Request} from "./pipeline"
+import {Middleware, Pipeline, LambdaRequest} from "./pipeline"
 import {HttpError} from "./errors";
 
-type HttpMethod = "GET" | "PUT" | "POST" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS" | "ANY"
+
+const HttpMethods = ["GET", "PUT", "POST", "DELETE", "PATCH", "HEAD", "OPTIONS", "ANY"] as const
+type HttpMethod = typeof HttpMethods[number]
+
+export function isHttpMethod(x: any): x is HttpMethod {
+    return HttpMethods.indexOf(x) >= 0
+}
+
+export type HttpStatus = number | 'default'
+
+export function toStatusCode(x: any): HttpStatus {
+    if (typeof x === 'number') return x
+    if (typeof x === "string" && !isNaN(Number(x))) return Number(x)
+    if (x === 'default') return x
+    throw new Error(`Cannot convert ${x} to HTTP Status`)
+}
+
 /**
  * Gateway route matching API GW [spec]{@link https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-develop-routes.html}.
  * @example - simple route
@@ -26,20 +42,28 @@ type HttpMethod = "GET" | "PUT" | "POST" | "DELETE" | "PATCH" | "HEAD" | "OPTION
  * @example - ANY route with a wildcard
  * ANY /user/{proxy+}
  */
-type Route = `${HttpMethod} ${string}` | '$default'
+export type RouteKey = `${HttpMethod} ${string}` | '$default'
 
-interface SchemaMap extends TProperties {
+export interface SchemaMap extends TProperties {
     [Kind]?: never
 }
 
 /**
  * Define request parameters and response value.
  */
-export type RequestSpec = {
+export type Operation = {
     /**
      * Operation identifier
      */
-    operationId: string,
+    operationId?: string
+    /**
+     * Operation summary
+     */
+    summary?: string
+    /**
+     * Operation description
+     */
+    description?: string
     /**
      * Request body schema.
      */
@@ -79,32 +103,18 @@ export type RequestSpec = {
      * }
      */
     cookies?: SchemaMap,
-
     /**
-     * Success response schema
+     * Route responses
      */
-    success?: TSchema,
+    response?: ({ [key in HttpStatus]?: TSchema } | HttpStatus | string)[]
     /**
-     * Success status code. Default: 200.
+     * Route security requirements in OpenAPI format
      */
-    successStatusCode?: number
-    /**
-     * Error responses schemas
-     */
-    failures?: { [statusCode in `${number}` | 'default']?: TSchema }
-
     security?: SecurityRequirementObject[]
-    consumes?: string | string[]
-    produces?: string | string[]
+    /**
+     * Route deprecation status
+     */
     deprecated?: boolean
-
-    //Should I add other OpenAPI fields?
-    // tags?: string[];
-    // summary?: string;
-    // description?: string;
-    // externalDocs?: ExternalDocumentationObject;
-    // servers?: ServerObject[];
-    // callbacks?: CallbacksObject;
 } & { [key: string]: any }
 /**
  * Collection of routes. Note how typical use case adds `as const satisfies RouteMap` right after route map definition.
@@ -121,7 +131,7 @@ export type RequestSpec = {
  *     const UserAPI = {
  *         "POST /users": {
  *             body: UserRequest,
- *             success: User
+ *             responses: [{200:User}]
  *         },
  *         "GET /user/{id}": {
  *             path: UserId,
@@ -133,19 +143,19 @@ export type RequestSpec = {
  *         },
  *         "PUT /user/{id}": {
  *             path: UserId,
- *             success: User
+ *             responses: [{200:User}]
  *         }
  *     } as const satisfies RouteMap
  */
-export type RouteMap = { [key in Route]?: RequestSpec }
+export type RouteMap = { [key in RouteKey]?: Operation }
 
 /**
  * Route event has {@link routeKey} with values from {@link RouteMap}
  */
 export type RouteEvent<T extends RouteMap> = ValueOf<{
-    [key in keyof T]: T[key] extends RequestSpec ? {
+    [key in keyof T]: T[key] extends Operation ? {
             /**
-             * {@link routeKey} with a [route]{@link Route} from a {@link RouteMap}
+             * {@link routeKey} with a [route]{@link RouteKey} from a {@link RouteMap}
              */
             readonly routeKey: key,
             /**
@@ -178,13 +188,13 @@ export type RouteEvent<T extends RouteMap> = ValueOf<{
 
 interface RoutesMiddlewareOptions {
     /**
-     * Don't raise 404 if lambda receives an unknown {@link Request.routeKey}. Default - false.
+     * Don't raise 404 if lambda receives an unknown {@link LambdaRequest.routeKey}. Default - false.
      */
     allowUnknownRoutes?: boolean,
 }
 
 declare module "./pipeline" {
-    interface Pipeline<TEvent = Request> {
+    interface Pipeline<TEvent = LambdaRequest> {
         /**
          * Verifies that incoming request matches one of the routes and attaches methods to parse and validate request parameters.
          *
@@ -231,13 +241,13 @@ Pipeline.prototype.withRoutes = function <T extends RouteMap>(api: T, options?: 
     const routes = new Set<string>(Object.keys(api))
     const parsers = routeParsers(api)
 
-    return this.do(function (this: Middleware, event: Request, context: Context) {
+    return this.do(function (this: Middleware, event: LambdaRequest, context: Context) {
         const {routeKey} = event
         const knownRoute = allowUnknownRoutes || routes.has(routeKey);
         if (!knownRoute) {
             return Promise.resolve({statusCode: 404})
         }
-        const request = event as Request & RouteEvent<T>
+        const request = event as LambdaRequest & RouteEvent<T>
         const p = parsers[event.routeKey as keyof T]
         Object.defineProperty(request, 'parsers', {value: p, configurable: true})
         Object.defineProperty(request, 'parse', {value: parse, configurable: true})
@@ -315,7 +325,7 @@ function routeParsers<T extends RouteMap>(routes: T) {
     }) as any
 }
 
-function parse(this: Request & RouteEvent<any>) {
+function parse(this: LambdaRequest & RouteEvent<any>) {
     return {
         body: 'json' in this ? this.parsers.body?.parse(this) : undefined,
         path: this.parsers.path?.parse(this),
@@ -325,7 +335,7 @@ function parse(this: Request & RouteEvent<any>) {
     }
 }
 
-function validate(this: Request & RouteEvent<any>) {
+function validate(this: LambdaRequest & RouteEvent<any>) {
     return {
         body: 'json' in this ? this.parsers.body?.errors(this) : undefined,
         path: this.parsers.path?.errors(this),
@@ -335,7 +345,7 @@ function validate(this: Request & RouteEvent<any>) {
     }
 }
 
-function cookieMap(this: Request & RouteEvent<any>): Record<string, string> | undefined {
+function cookieMap(this: LambdaRequest & RouteEvent<any>): Record<string, string> | undefined {
     if (this.cookies === undefined) return undefined
     return _(this.cookies)
         .map(x => {
@@ -356,7 +366,7 @@ type DecodedValue<T> =
   : never
 //<!-- @formatter:on -->
 
-type ParseResult<T extends RequestSpec> = {
+type ParseResult<T extends Operation> = {
     [key in RequestPart]: DecodedValue<T[key]>
 }
 
@@ -367,7 +377,7 @@ type ValidationError<T> =
   : never
 //<!-- @formatter:on -->
 
-type ValidationResult<T extends RequestSpec> = {
+type ValidationResult<T extends Operation> = {
     [key in RequestPart]: ValidationError<T[key]>
 }
 

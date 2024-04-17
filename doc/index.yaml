@@ -1,0 +1,26 @@
+openapi: 3.1.0
+info:
+  title: Bill & Tip API
+  version: 0.0.1
+  license:
+    name: Bill&Tip API License
+    url: https://billntip.com/license.html
+servers:
+  - url: https://91cdkha2y8.execute-api.eu-south-1.amazonaws.com/dev
+    description: Development server
+security:
+  - Cookie: [ ]
+
+components:
+  responses:
+    401:
+      description: Authorization required
+    403:
+      description: Insufficient rights
+    404:
+      description: Resource not found
+  securitySchemes:
+    Cookie:
+      type: apiKey
+      name: "SID"
+      in: cookie

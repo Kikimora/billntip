@@ -25,7 +25,7 @@ export const AuthModuleEnvSchema = z.object({
     /**
      * Session cookie SameSite: strict, none or Lax
      */
-    sameSize: z.enum(["none", "strict", "lax"] as const).readonly(),
+    sameSite: z.enum(["none", "strict", "lax"] as const).readonly(),
 
     /**
      * Authorizer cache TTL in seconds
@@ -74,7 +74,7 @@ export const Env: AuthModuleEnv = AuthModuleEnvSchema.parse({
     postAuthRedirectUrl: process.env.POST_AUTH_REDIRECT_URL,
     region: process.env.AWS_REGION,
     authorizerCacheTtl: Number(process.env.AUTHORIZER_CACHE_TTL),
-    sameSize: process.env.SAME_SIZE !== undefined ? Boolean(process.env.SAME_SIZE) : false,
+    sameSite: process.env.SAME_SITE !== undefined ? process.env.SAME_SITE : "none",
 })
 
 Env.authorizerCacheTtl = 10

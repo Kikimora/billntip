@@ -9,7 +9,7 @@ import {
     Context
 } from "aws-lambda";
 import _ from "lodash";
-import {Request} from "@app/lambda"
+import {LambdaRequest} from "@app/lambda"
 import http from "../src/http"
 import {init as cognitoInit, TestGroup, TestUser} from "./cognito"
 import {init as dynamoDbInit} from './dynamodb'
@@ -32,7 +32,7 @@ import SessionCookie from "@src/authorizer/cookie";
 
 const ddb = dynamoDbInit(dynamodb.sessionsTable.name)
 
-const event: Request = {
+const event: LambdaRequest = {
     routeKey: "",
     rawPath: "",
     headers: {},
@@ -347,7 +347,7 @@ describe('Lambda authorizer', () => {
 describe('Tokens endpoint', () => {
     it('returns tokens when called with valid session cookie', async () => {
         const sessionId = await startSession();
-        const response = await httpReal.get(`${api.gateway.url}/auth/tokens`, {
+        const response = await httpReal.get(`${api.gateway.url}/user/session`, {
             headers: {'Cookie': `${SessionKey}=${sessionId}`},
         })
         console.log(response.data, response.headers)
@@ -355,12 +355,12 @@ describe('Tokens endpoint', () => {
     }, 10000)
 
     it('returns 401 when called without session cookie', async () => {
-        const response = await httpReal.get(`${api.gateway.url}/auth/tokens`)
+        const response = await httpReal.get(`${api.gateway.url}/user/session`)
         expect(response.status).toBe(401)
     }, 10000)
 
     it('returns 403 when called with invalid session cookie', async () => {
-        const response = await httpReal.get(`${api.gateway.url}/auth/tokens`, {
+        const response = await httpReal.get(`${api.gateway.url}/user/session`, {
             headers: {'Cookie': `${SessionKey}="Invalid session id"`},
         })
         expect(response.status).toBe(403)

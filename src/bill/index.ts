@@ -1,6 +1,6 @@
 import _ from "lodash";
 import {ConditionalCheckFailedException, DynamoDB} from "@aws-sdk/client-dynamodb";
-import {JsonRequest, LambdaAuthorizedRequest, Middleware, pipeline, Request} from '@app/lambda'
+import {JsonRequest, LambdaAuthorizedRequest, Middleware, pipeline, LambdaRequest} from '@app/lambda'
 import {configure} from "@app/diagnostics";
 import {getCommand, putCommand, queryCommand} from "@app/dynamodb";
 import {Employees, ManagersIndex} from "@src/data";

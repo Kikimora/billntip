@@ -96,9 +96,9 @@ export default class SessionData implements SessionItem {
     get info() {
         return {
             sessionId: this.sessionId,
-            accessExpiresAt: new Date(this.accessExpiresAt * 1000),
-            refreshTokenExpiresAt: new Date(this.refreshTokenExpiresAt * 1000),
-            cachedTill: this.cachedTill
+            accessExpiresAt: this.accessExpiresAt,
+            refreshTokenExpiresAt: this.refreshTokenExpiresAt,
+            cachedTill: this.cachedTill,
         }
     }
 

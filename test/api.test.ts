@@ -6,7 +6,7 @@ import {
     LambdaAuthorizedRequest,
     Middleware,
     pipeline,
-    Request,
+    LambdaRequest,
     RouteMap,
     TracedEvent
 } from "@app/lambda";
@@ -27,16 +27,16 @@ describe("Lambda API Pipeline", () => {
     it("combines multiple middlewares in a typesafe manner", async () => {
         type X = { x: string }
 
-        async function xMiddleware(this: Middleware<X>, e: Request, ctx: Context) {
-            const request = e as Request & X
+        async function xMiddleware(this: Middleware<X>, e: LambdaRequest, ctx: Context) {
+            const request = e as LambdaRequest & X
             request.x = "X Middleware"
             return this.next(request, ctx)
         }
 
         type Y = { y: string }
 
-        async function yMiddleware(this: Middleware<Y>, e: Request, ctx: Context) {
-            const request = e as Request & Y
+        async function yMiddleware(this: Middleware<Y>, e: LambdaRequest, ctx: Context) {
+            const request = e as LambdaRequest & Y
             request.y = "Y Middleware"
             return this.next(request, ctx)
         }
@@ -57,7 +57,7 @@ describe("Lambda API Pipeline", () => {
 
         const handler = pipeline()
             .do(function (this: Middleware<{ messages: string[] }>, e, c) {
-                const request = e as Request & { messages: [] }
+                const request = e as LambdaRequest & { messages: [] }
                 request.messages = []
                 return this.next(request, c)
             })
@@ -324,12 +324,12 @@ describe("Lambda API trace request middleware", () => {
         })])
     })
 
-    function injectSpy(this: Middleware, e: Request & TracedEvent, context: Context) {
+    function injectSpy(this: Middleware, e: LambdaRequest & TracedEvent, context: Context) {
         eventSpy = jest.spyOn(e.tracer as any, 'recordEvent')
         return this.next(e, context)
     }
 
-    const returnTracerEvents = async function (e: Request & TracedEvent) {
+    const returnTracerEvents = async function (e: LambdaRequest & TracedEvent) {
         return {events: Array.from(e.tracer.events)}
     }
 })

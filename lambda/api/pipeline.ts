@@ -4,7 +4,7 @@ import * as lambda from "aws-lambda";
 /**
  * AWS Lambda API gateway v2 request (aka API Gateway event).
  */
-export interface Request<TAuthorizer = unknown> {
+export interface LambdaRequest<TAuthorizer = unknown> {
     version: string;
     readonly routeKey: string;
     rawPath: string;
@@ -24,7 +24,7 @@ type Handler<I = any, O = any> = (event: I, context: Context) => Promise<O>
 /**
  * Middleware function accepting request of type `TEvent`, converting it into `T` and calling `this.next` with it.
  */
-export type MiddlewareFunction<T, TEvent = Request> = (this: Middleware<T>, event: TEvent, context: Context) => Promise<unknown>
+export type MiddlewareFunction<T, TEvent = LambdaRequest> = (this: Middleware<T>, event: TEvent, context: Context) => Promise<unknown>
 
 const PipelineNotReady: Handler = function () {
     throw new Error("Pipeline is not ready.")
@@ -51,7 +51,7 @@ type PipelineStart = MiddlewareFunction<unknown, any>
  * function and then configured with {@link Pipeline.do} and {@link Pipeline.done} methods.
  * See {@link pipeline} for examples.
  */
-export class Pipeline<TEvent = Request> {
+export class Pipeline<TEvent = LambdaRequest> {
 
     first?: PipelineStart
     last?: PipelineStep
@@ -142,6 +142,6 @@ export class Pipeline<TEvent = Request> {
  *  .handleErrors()
  *  .done(function (e) { throw new Error() })
  */
-export function pipeline<T = Request>() {
+export function pipeline<T = LambdaRequest>() {
     return new Pipeline<T>()
 }

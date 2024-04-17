@@ -152,3 +152,11 @@ export function toSeconds(value: number, units: TimeUnitsType) {
             throw new Error('Unexpected token units ' + value)
     }
 }
+//
+// export const performance = {
+//     now: global.performance.now,
+//
+//     get timeOrigin() {
+//         return global.performance.timeOrigin
+//     }
+// }
