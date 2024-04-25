@@ -11,6 +11,10 @@
     "dataTable": {
       "arn": "arn:aws:dynamodb:eu-south-1:381491945919:table/data-33df69c",
       "name": "data-33df69c"
+    },
+    "usersTable": {
+      "arn": "arn:aws:dynamodb:eu-south-1:381491945919:table/users-b979b61",
+      "name": "users-b979b61"
     }
   },
   "cognito": {
@@ -165,16 +169,48 @@
         "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
       },
       {
-        "operationName": "UpdateUserAttributes",
-        "routeKey": "PUT /user",
+        "operationName": "GetSession",
+        "routeKey": "GET /user/session",
         "authorizerId": "vwmth7",
         "target": "integrations/otah0zl",
         "src": "users/handler",
         "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
       },
       {
-        "operationName": "SignOut, 400, 401, 403",
-        "routeKey": "POST /user/signout",
+        "operationName": "RefreshSession",
+        "routeKey": "POST /user/session",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "SignOut",
+        "routeKey": "DELETE /user/session",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "GetUser",
+        "routeKey": "GET /user/attributes",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "UpdateUserAttributes",
+        "routeKey": "PUT /user/attributes",
+        "authorizerId": "vwmth7",
+        "target": "integrations/otah0zl",
+        "src": "users/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
+      },
+      {
+        "operationName": "DeleteUserAttributes",
+        "routeKey": "DELETE /user/attributes",
         "authorizerId": "vwmth7",
         "target": "integrations/otah0zl",
         "src": "users/handler",
@@ -183,14 +219,6 @@
       {
         "operationName": "ChangePassword",
         "routeKey": "POST /user/password",
-        "authorizerId": "vwmth7",
-        "target": "integrations/otah0zl",
-        "src": "users/handler",
-        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-users-handler-fn"
-      },
-      {
-        "operationName": "GetSession",
-        "routeKey": "GET /user/session",
         "authorizerId": "vwmth7",
         "target": "integrations/otah0zl",
         "src": "users/handler",

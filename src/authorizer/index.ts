@@ -73,7 +73,7 @@ export const cookie = pipeline<APIGatewayAuthorizerEvent>()
                     tracer.info("cookie header present, but invalid", {cookieHeader})
                     return Unauthorized
                 }
-                const session = await SessionData.loadAndLock(sessionCookie.id)
+                const session = await SessionData.fetchLocked(sessionCookie.id)
                 if (session == null || session.refreshTokenExpiresAt < now) {
                     tracer.info("session not found or expired", {sessionId: sessionCookie.id, ...session?.info})
                     return Unauthorized
@@ -82,7 +82,7 @@ export const cookie = pipeline<APIGatewayAuthorizerEvent>()
                 try {
                     return await authenticateSession(session)
                 } catch (e: any) {
-                    throw tracer.addContext(e, {session: session.info, sessionCookie})
+                    throw tracer.errorWithContext(e, {session: session.info, sessionCookie})
                 } finally {
                     tracer.info("cleanup")
                     await session.release()
@@ -117,7 +117,7 @@ export const cookie = pipeline<APIGatewayAuthorizerEvent>()
                 //Fail if after refresh the session still can expire while being cached.
                 if (newSession.isTimeToRefresh) {
                     const error = new Error("Configuration issue: API Gateway will cache tokens for over their lifetime.")
-                    throw tracer.addContext(error, {updatedSession: newSession.info})
+                    throw tracer.errorWithContext(error, {updatedSession: newSession.info})
                 }
 
                 tracer.info("session refreshed", {session: newSession.info})

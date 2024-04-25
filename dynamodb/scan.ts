@@ -1,7 +1,7 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
 import {KeySchema, TableType, SchemaType, ExpressionGenerator, FilterConditionGenerator} from "./schema";
-import {prepareCommand} from "./util";
+import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
 /**
@@ -76,7 +76,7 @@ export function scan<T extends TableType<T>, V>(tbl: T, command: ScanCommand<T, 
         FilterExpression: filter?.({attr, val}),
         Select: command.select,
         Limit: command.limit,
-        ExclusiveStartKey: command.exclusiveStartKey !== undefined ? marshall(command.exclusiveStartKey) : undefined,
+        ExclusiveStartKey: command.exclusiveStartKey !== undefined ? marshall(command.exclusiveStartKey, MarshalOptions) : undefined,
         Segment: command.segment,
         TotalSegments: command.totalSegments,
         ConsistentRead: command.consistentRead,

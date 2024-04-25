@@ -13,7 +13,7 @@ import {
 import {Tracer} from "@app/diagnostics";
 import _ from "lodash";
 import {Type, TypeBoxError} from "@sinclair/typebox";
-import {StaticAssert} from "./util";
+import {StaticAssert} from "@app/test/util";
 import {ValueError} from "@sinclair/typebox/errors";
 
 let request!: any, context!: any
@@ -214,7 +214,11 @@ describe("Lambda API withRoute middleware", () => {
         request.body = JSON.stringify(body)
         request.queryStringParameters = query
         await expect(async function () {
-            await handler(request, context)
+            try {
+                await handler(request, context)
+            } catch (e) {
+                throw e
+            }
         }).rejects.toThrow(TypeBoxError)
     })
 
@@ -267,7 +271,7 @@ describe("Lambda API trace request middleware", () => {
     })
 
     it("record request start and filters out authorizer details", async () => {
-        const handler = pipeline().traceRequest().done(returnTracerEvents)
+        const handler = pipeline().traceRequest({options: {}}).done(returnTracerEvents)
         const {events} = await handler(request, context)
         expect(events).toEqual(expect.objectContaining([{
             tag: "api.test.$LATEST",
@@ -315,7 +319,8 @@ describe("Lambda API trace request middleware", () => {
             tracer: new Tracer("myAPI"),
             tag: function () {
                 return "MyTag"
-            }
+            },
+            options:{},
         };
         const handler = pipeline().traceRequest(options).done(returnTracerEvents)
         const {events} = await handler(request, context)

@@ -1,11 +1,11 @@
 import {ConditionalCheckFailedException, CreateTableCommand, DynamoDB} from "@aws-sdk/client-dynamodb";
 import {unmarshall} from "@aws-sdk/util-dynamodb";
-import {D, Table, table} from "./schema";
-import {updateCommand} from "./update";
+import {Table, table, Type} from "./schema";
+import {update, updateCommand} from "./update";
 import {Just, repeat, retry} from "@app/util";
 import {deleteCommand} from "./delete";
-import {Tracer, withErrorContext} from "@app/diagnostics";
-import {getCommand} from "./get";
+import {Tracer, errorWithContext} from "@app/diagnostics";
+import {get} from "./get";
 
 const tracer = new Tracer("dynamodb_locks")
 
@@ -38,7 +38,7 @@ export interface LockStore {
      * @param owner - lock owner, this value is used for information purposes and debug, good idea to put host, lambda invocation id or request id there.
      * @param options - lock options such as lease duration and heartbeat interval.
      */
-    tryLock(id: string, owner: string, options?: TryLockOptions): Promise<LockHandle>
+    tryLock(id: string, owner: string, options?: LockOptions): Promise<LockHandle>
 
     /**
      * Loads lock from store
@@ -54,12 +54,22 @@ export interface LockHandle {
     /**
      * Remove lock
      */
-    unlock(): Promise<void>
+    unlock(): Promise<boolean>
+
+    /**
+     * Increase lease duration by another {@link options.leaseDuration}.
+     */
+    bump(): Promise<Lock>
 
     /**
      * Synonym to {@link unlock}
      */
     [Symbol.dispose](): Promise<void>
+
+    /**
+     * Lock options.
+     */
+    readonly options: Readonly<NonNullable<LockOptions>>
 
     /**
      * Lock managed by the handle
@@ -87,24 +97,20 @@ export type StoreOptions = {
  */
 export type LockOptions = {
     /**
-     * Duration of the lease. Default is 1000 ms.
+     * Duration of the lease, minimum is 100 ms, default is 1000 ms.
      */
     leaseDuration?: number,
-    /**
-     * Heartbeat interval in ms used by a leaseholder to update the lease and signal it is alive.
-     * Default is {@link leaseDuration} / 3
-     */
-    heartbeatInterval?: number
     /**
      * Maximum number of attempts to take the lock. Default is 3.
      */
     retries?: number
+    /**
+     *  Set whenever the lock should auto extend its lease before it expires. Default - true.
+     */
+    autoBump?: boolean
 }
 
-/**
- * Try lock operation options (see {@link LockStore.tryLock})
- */
-export type TryLockOptions = Omit<LockOptions, 'retries'>
+type TryLockOptions = Omit<LockOptions, 'retries'>
 
 type Lock = Readonly<{
     /**
@@ -120,22 +126,22 @@ type Lock = Readonly<{
      */
     owner: string
     /**
-     * Heartbeat internal in milliseconds
+     * Lease duration in milliseconds. The lease can be extended for another {@link leaseDuration} by {@link LockStore.bumpLock}
      */
-    heartbeatInterval: number,
+    leaseDuration: number,
 }>
 
 type TryLockResult = Just<Lock, "Success"> | Just<Lock, "Failure">
 
 export const LockKey = {
-    pk: D.String
+    pk: Type.String
 } as const
 
 export const LockAttributes = {
-    version: D.Number,
-    owner: D.String,
-    heartbeat_interval: D.Number,
-    ttl: D.Number
+    version: Type.Number,
+    owner: Type.String,
+    lease_ms: Type.Number,
+    ttl: Type.Number
 } as const
 
 /**
@@ -177,24 +183,22 @@ export function makeLockStore(tableName: string, storeOptions?: StoreOptions): L
         table: Locks,
         dynamoDb,
 
-        tryLock: function (id: string, owner: string, options?: TryLockOptions) {
-            return this.lock(id, owner, {...options, retries: 0})
+        tryLock: function (id: string, owner: string, options?: TryLockOptions): Promise<LockHandle> {
+            return this.lock(id, owner, {...options, retries: 1})
         },
 
-        async lock(id: string, owner: string, options?: LockOptions) {
+        async lock(id: string, owner: string, options?: LockOptions): Promise<LockHandle> {
             const leaseDuration = options?.leaseDuration ?? 1000
-            if (leaseDuration <= 0) throw new Error("leaseDuration cannot be less than 1")
+            if (leaseDuration < 100) throw new Error("leaseDuration cannot be less than 100")
             const retries = options?.retries ?? 3
-            if (retries < 0) throw new Error("retries cannot be less than 0")
-            const heartbeatInterval = options?.heartbeatInterval ?? leaseDuration / 3
-            if (heartbeatInterval >= leaseDuration)
-                throw new Error("heartbeatInterval cannot be less that leaseDuration")
-
-            let lock: Lock = {pk: id, owner, version: 1, heartbeatInterval}
-
-            const lockImpl = new LockImpl(lock, locker)
+            if (retries <= 0) throw new Error("retries must be greater than 0")
+            if (retries >= 1000) throw new Error("retries cannot be over 1000")
+            const autoBump = options?.autoBump ?? true
+            let lock: Lock = {pk: id, owner, version: 1, leaseDuration}
+            const lockImpl = new LockImpl(lock, locker, {leaseDuration, retries, autoBump})
             await lockImpl.acquireLock(retries)
-            lockImpl.runHeartbeat()
+            if (autoBump)
+                lockImpl.runHeartbeat()
             return lockImpl
         },
 
@@ -206,7 +210,7 @@ export function makeLockStore(tableName: string, storeOptions?: StoreOptions): L
                 return undefined
             }
         }
-    }
+    } as LockStore
 }
 
 /**
@@ -214,14 +218,14 @@ export function makeLockStore(tableName: string, storeOptions?: StoreOptions): L
  */
 class LockImpl implements LockHandle {
     private _otherLock?: Lock
-    private _bumpTask: Promise<Lock>
-    private _ownLock: boolean
+    private heartbeatTask: Promise<Lock>
+    private _isLocked: boolean
     private _lock: Lock
 
-    constructor(lock: Lock, private readonly locker: Locker) {
+    constructor(lock: Lock, private readonly locker: Locker, public readonly options: NonNullable<LockOptions>) {
         this._lock = lock
-        this._bumpTask = Promise.resolve<Lock>(lock)
-        this._ownLock = false
+        this.heartbeatTask = Promise.resolve<Lock>(lock)
+        this._isLocked = false
     }
 
     get lock() {
@@ -229,17 +233,22 @@ class LockImpl implements LockHandle {
     }
 
     get locked() {
-        return this._ownLock
+        return this._isLocked
     }
 
     async acquireLock(maxIterations: number) {
         const delay = () => {
+            const {lock} = this
             /**
              * Delay happens if we cannot acquire a lock because somebody else holds it.
              * This is a race condition, other lock owner runs heartbeat on its own while we are trying to acquire it.
-             * Because we don't want to get ahead of the owner we wait twice other lock heartbeat interval.
+             * Because we don't want to get ahead of the owner we wait for at least other lock lease duration.
              */
-            return this._otherLock!.heartbeatInterval * 2
+            if (this._otherLock === undefined) {
+                tracer.warn("Waiting for another lock is called while no other lock present.", {lock})
+                return 0
+            }
+            return this._otherLock.leaseDuration + Math.random() * this._otherLock.leaseDuration
         }
         const options = {delay, maxIterations};
         await retry(this.tryLock.bind(this), options)
@@ -252,7 +261,7 @@ class LockImpl implements LockHandle {
         switch (type) {
             case "Success": {
                 this._lock = value
-                this._ownLock = true
+                this._isLocked = true
                 tracer.info("locked", this._lock)
                 return
             }
@@ -260,44 +269,50 @@ class LockImpl implements LockHandle {
                 const otherLock = this._otherLock = value
                 const error = new LockError("Failed to take a lock.")
                 this._lock = {...lock, version: value.version + 1}
-                throw withErrorContext(error, "tryLock", {lock, otherLock})
+                throw errorWithContext(error, "tryLock", {lock, otherLock})
             }
         }
+    }
+
+    async bump() {
+        const {lock, locker} = this
+        this._lock = await locker.bump(lock)
+        return this._lock
+    }
+
+    async unlock(): Promise<boolean> {
+        const {locker} = this
+        if (!this.locked) return false
+        //Bump task changes lock and interfere with delete, read it after bump task finishes
+        //1. Signal to stop heartbeat, no more bumping!
+        this._isLocked = false
+        //2. Wait until the most recent bump finishes
+        await this.heartbeatTask
+        //3. Delete lock ignoring any errors
+        const lock = await locker.deleteLock(this._lock).catch()
+        //4. finally, record a trace
+        tracer.info("unlocked", this._lock)
+        return this._lock.version === lock.version
     }
 
     runHeartbeat() {
         const heartbeatTracer = tracer.withScope("runHeartbeat")
         const bump = async (done: (_: void) => void) => {
-            if (!this._ownLock) {
+            if (!this._isLocked) {
                 heartbeatTracer.info("done", this.lock)
                 done()
                 return
             }
             //heartbeatTracer.info("bump", this.lock)
-            const {lock, locker} = this
             try {
-                this._bumpTask = locker.bump(lock)
-                this._lock = await this._bumpTask
+                this.heartbeatTask = this.bump()
+                await this.heartbeatTask
             } catch (e: any) {
-                heartbeatTracer.info(e.message, lock)
+                heartbeatTracer.info(e.message, this.lock)
             }
         }
         // noinspection ES6MissingAwait,JSIgnoredPromiseFromCall
-        repeat(bump, {delay: this.lock.heartbeatInterval})
-    }
-
-    async unlock() {
-        const {locker} = this
-        if (!this.locked) return
-        //Bump task changes lock and interfere with delete, read it after bump task finishes
-        //1. Signal to stop heartbeat, no more bumping!
-        this._ownLock = false
-        //2. Wait until the most recent bump finishes
-        await this._bumpTask
-        //3. Delete lock ignoring any errors
-        this._lock = await locker.deleteLock(this._lock).catch()
-        //4. finally, record a trace
-        tracer.info("unlocked", this._lock)
+        repeat(bump, {delay: this.lock.leaseDuration * 0.8})
     }
 
     async [Symbol.dispose]() {
@@ -312,7 +327,7 @@ function lockExpiration(lock: Lock) {
     const MinHeartbeats = 5
     const MinSeconds = 5
     const now = Math.floor((performance.now() + performance.timeOrigin) / 1000)
-    const heartbeatsMs = MinHeartbeats * lock.heartbeatInterval
+    const heartbeatsMs = MinHeartbeats * lock.leaseDuration
     return heartbeatsMs < MinSeconds * 1000 ? now + MinSeconds : now + Math.floor(heartbeatsMs / 1000)
 }
 
@@ -327,19 +342,20 @@ class Locker {
     async tryLock(lock: Lock): Promise<TryLockResult> {
         tryLock: try {
             const expiresAt = lockExpiration(lock)
-            const {Attributes: attributes} = await this.dynamoDb.send(updateCommand(this.table, {
+            const lockItem = update(this.table, {
                 key: {pk: lock.pk},
                 return: "ALL_NEW",
                 values: lock,
                 returnOnConditionFailure: "ALL_OLD",
                 expression: ({attr, val}) => `SET
                             ${attr.version} = ${val.version},
-                            ${attr.heartbeat_interval} = ${val.heartbeatInterval},
+                            ${attr.lease_ms} = ${val.leaseDuration},
                             ${attr.ttl} = ${val(expiresAt)},
                             ${attr.owner} = ${val.owner}`,
                 condition: ({key, attr, val}) => `
                            attribute_not_exists(${key.pk}) OR ${attr.version} < ${val.version}`
-            }))
+            });
+            const {Attributes: attributes} = await this.dynamoDb.updateItem(lockItem)
             if (attributes === undefined) break tryLock;
             return {type: "Success", value: fromDynamoDb(unmarshall(attributes))}
         } catch (e) {
@@ -355,9 +371,10 @@ class Locker {
     }
 
     async load(pk: string): Promise<Lock | undefined> {
-        const {Item: item} = await this.dynamoDb.send(getCommand(this.table, {
+        const lockItem = get(this.table, {
             key: {pk}
-        }))
+        });
+        const {Item: item} = await this.dynamoDb.getItem(lockItem)
         if (item === undefined) return undefined
         return fromDynamoDb(unmarshall(item))
     }
@@ -401,6 +418,6 @@ function fromDynamoDb(lock: Record<string, any>): Lock {
         pk: lock.pk,
         version: lock.version,
         owner: lock.owner,
-        heartbeatInterval: lock.heartbeat_interval
+        leaseDuration: lock.lease_ms
     }
 }

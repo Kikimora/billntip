@@ -29,14 +29,16 @@ export default {
         body: Type.Object({
             type: UploadType
         }),
-        response: [{200: CreateEmptyImageResponse}]
+        success: CreateEmptyImageResponse,
+        responses: []
     },
     'POST /upload/{id}': {
         operationId: "FinishUpload",
         path: {
             id: Type.String()
         },
-        response: [{200: Upload}]
+        success: Upload,
+        responses: []
     },
     'DELETE /upload/{id}': {
         operationId: "DeleteUpload",

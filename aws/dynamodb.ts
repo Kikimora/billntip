@@ -45,6 +45,27 @@ const locks = new aws.dynamodb.Table('locks', {
     ttl: {attributeName: 'ttl', enabled: true}
 });
 
+const users = new aws.dynamodb.Table('users', {
+    attributes: [
+        {name: 'pk', type: 'S'},
+        {name: 'sk', type: 'S'},
+        {name: 'name', type: 'S'},
+        {name: 'value', type: 'S'}
+    ],
+    hashKey: 'pk',
+    rangeKey: 'sk',
+    billingMode: 'PAY_PER_REQUEST',
+    globalSecondaryIndexes: [
+        //Map <attr name, attr value> to a username
+        {
+            name: "user_attributes",
+            hashKey: "name",
+            rangeKey: "value",
+            projectionType: "INCLUDE",
+            nonKeyAttributes: ['pk']
+        }],
+}, {retainOnDelete: true});
+
 export const dataTable = {
     arn: data.arn,
     name: data.name
@@ -57,9 +78,13 @@ export const locksTable = {
     arn: locks.arn,
     name: locks.name
 }
+export const usersTable = {
+    arn: users.arn,
+    name: users.name
+}
 
-export function allowCrud() {
-    return newPolicy('DynamoDbAccess')
+export function allowCrud(name: string = "DynamoDbAccess") {
+    return newPolicy(name)
         .allow("dynamodb:GetItem",
             "dynamodb:DeleteItem",
             "dynamodb:PutItem",

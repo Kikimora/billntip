@@ -4,7 +4,10 @@ module.exports = {
     testRegex: [
         "test/.*test.ts",
         "src/.*test.ts",
-        "openapi/.*test.ts",
+        "diagnostics/.*test.ts",
+        "doc/.*test.ts",
+        "dynamodb/.*test.ts",
+        "lambda/.*test.ts",
     ],
     setupFiles: ['./jest.setup.ts'],
     setupFilesAfterEnv: ["./jest.extended.ts"],

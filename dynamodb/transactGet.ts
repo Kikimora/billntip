@@ -1,13 +1,13 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
 import {KeySchema, TableType, SchemaType, ProjectionGenerator} from "./schema";
-import {prepareCommand} from "./util";
+import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
 /**
  * DynamoDb {@link ddb.KeysAndAttributes} for a given {@link Table}
  */
-interface TransactionGetItem<Table> {
+interface TransactGetItem<Table> {
     /**
      * See {@link ddb.TransactGetItem.Get.Key}
      */
@@ -21,19 +21,19 @@ interface TransactionGetItem<Table> {
 /**
  * Builds batch get operation.
  */
-interface TransactionGetBuilder {
+export interface TransactGetBuilder {
     /**
      * Add batch of items to {@link ddb.TransactGetItemsInput}.
      * @param tbl - target table
      * @param item - items batch (see {@link ddb.TransactGetItemsInput.RequestItems }
      */
-    add<Table extends TableType<Table>>(tbl: Table, item: TransactionGetItem<Table>): TransactionGetBuilder
+    add<Table extends TableType<Table>>(tbl: Table, item: TransactGetItem<Table>): TransactGetBuilder
 
     /**
      * See {@link ddb.TransactGetItemsInput.ReturnConsumedCapacity}
      * @param capacity
      */
-    returnConsumedCapacity(capacity: ddb.ReturnConsumedCapacity): TransactionGetBuilder
+    returnConsumedCapacity(capacity: ddb.ReturnConsumedCapacity): TransactGetBuilder
 
     /**
      * Build {@link ddb.TransactGetItemsInput}
@@ -50,13 +50,13 @@ interface TransactionGetBuilder {
 /**
  * Create a builder for {@link ddb.TransactGetItemsInput} and {@link ddb.TransactGetItemsCommand}
  */
-export function transactGet(): TransactionGetBuilder {
+export function transactGet(): TransactGetBuilder {
     const items: ddb.TransactGetItem[] = []
     let returnConsumedCapacity: ddb.ReturnConsumedCapacity | undefined
 
-    const builder: TransactionGetBuilder = {
-        add<T extends TableType<T>>(tbl: T, item: TransactionGetItem<T>) {
-            const dynamoKey = marshall(item.key);
+    const builder: TransactGetBuilder = {
+        add<T extends TableType<T>>(tbl: T, item: TransactGetItem<T>) {
+            const dynamoKey = marshall(item.key, MarshalOptions);
             const {
                 attributeNames,
                 key,
@@ -67,7 +67,7 @@ export function transactGet(): TransactionGetBuilder {
                 Get: {
                     TableName: tbl.name,
                     Key: dynamoKey,
-                    ProjectionExpression: projection?.({key, attr}),
+                    ProjectionExpression: projection?.({key, attr})?.join(', '),
                     ExpressionAttributeNames: !_.isEmpty(attributeNames) ? attributeNames : undefined
                 }
             })

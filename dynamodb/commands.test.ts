@@ -4,20 +4,21 @@
 //4. Recipient resource (First, Last name, Birth Day, Country of Residence)
 
 import {
-    D,
+    Type,
     table,
     updateCommand,
     putCommand,
     getCommand,
     queryCommand, scanCommand, batchGet, batchWrite, deleteCommand, transactGet, transactWrite
 } from "@app/dynamodb";
+import {DynamoDB} from "@aws-sdk/client-dynamodb";
 
 const Table = table("sessions",
-    {"session_id": D.String} as const,
+    {"session_id": Type.String} as const,
     {
-        name: D.String,
-        age: D.Number,
-        lock: D.String
+        name: Type.String,
+        age: Type.Number,
+        lock: Type.String
     } as const
 )
 
@@ -207,7 +208,7 @@ describe("Get Command", () => {
             TableName: Table.name,
             Key: {session_id: {S: 'SESSION ID'}},
             ExpressionAttributeNames: undefined,
-            ProjectionExpression:undefined
+            ProjectionExpression: undefined
         }))
     })
 
@@ -215,7 +216,7 @@ describe("Get Command", () => {
         const {input} = getCommand(Table, {
                 key: {session_id: "SESSION ID"},
                 projection: ({key: {session_id}, attr: {name, age}}) =>
-                    `${session_id}, ${name}, ${age}`,
+                    [`${session_id}`, `${name}`, `${age}`],
             }
         )
         expect(input).toEqual(expect.objectContaining({
@@ -245,20 +246,20 @@ describe("Get Command", () => {
 describe("Batch Get Command", () => {
 
     it("builds batch get command", () => {
-
-        const AnotherTable = table("Another", {id: D.Number} as const, {} as const)
+        const Table1 = table("Table1", {id: Type.Number} as const, {} as const)
+        const Table2 = table("Table2", {session_id: Type.String} as const, {} as const)
         const {input} = batchGet()
             .add(Table, {
                 keys: [{session_id: "1"}, {session_id: "2"}],
-                projection: ({key, attr}) => `${key.session_id}, ${attr.name}, ${attr.age}`,
+                projection: ({key, attr}) => [`${key.session_id}`, `${attr.name}`, `${attr.age}`],
                 consistentRead: false
             })
-            .add(AnotherTable, {
+            .add(Table1, {
                 keys: [{id: 1}],
-                projection: ({key}) => `${key.id}`,
+                projection: ({key}) => [`${key.id}`],
                 consistentRead: true
             })
-            .add(Table, {
+            .add(Table2, {
                 keys: [{session_id: "1"}, {session_id: "2"}]
             })
             .returnConsumedCapacity("INDEXES")
@@ -277,7 +278,7 @@ describe("Batch Get Command", () => {
                     },
                     ConsistentRead: false,
                 },
-                [AnotherTable.name]: {
+                [Table1.name]: {
                     Keys: [{id: {N: "1"}}],
                     ProjectionExpression: "#id",
                     ExpressionAttributeNames: {
@@ -285,7 +286,7 @@ describe("Batch Get Command", () => {
                     },
                     ConsistentRead: true,
                 },
-                [Table.name]: {
+                [Table2.name]: {
                     Keys: [{session_id: {S: "1"}}, {session_id: {S: "2"}}],
                     ExpressionAttributeNames: undefined,
                     ConsistentRead: undefined,
@@ -293,19 +294,50 @@ describe("Batch Get Command", () => {
             },
         }))
     })
+
+    it("merges items coming from the same table", () => {
+        const {input} = batchGet()
+            .add(Table, {
+                keys: [{session_id: "1"}],
+                projection: ({key}) => [`${key.session_id}`],
+                consistentRead: false
+            })
+            .add(Table, {
+                keys: [{session_id: "2"}],
+                projection: ({attr}) => [`${attr.name}`, `${attr.age}`],
+                consistentRead: true
+            })
+            .command()
+
+        expect(input).toEqual(expect.objectContaining({
+            RequestItems: {
+                [Table.name]: {
+                    Keys: [{session_id: {S: "2"}}, {session_id: {S: "1"}}],
+                    ProjectionExpression: "#name, #age, #session_id",
+                    ExpressionAttributeNames: {
+                        "#session_id": "session_id",
+                        "#name": "name",
+                        "#age": "age",
+                    },
+                    ConsistentRead: true,
+                }
+            },
+        }))
+
+    })
 })
 
 describe("Transact Get Command", () => {
     it("builds transact get command", () => {
-        const AnotherTable = table("Another", {id: D.Number} as const, {} as const)
+        const AnotherTable = table("Another", {id: Type.Number} as const, {} as const)
         const {input} = transactGet()
             .add(Table, {
                 key: {session_id: "1"},
-                projection: ({key, attr}) => `${key.session_id}, ${attr.name}, ${attr.age}`,
+                projection: ({key, attr}) => [`${key.session_id}`, `${attr.name}`, `${attr.age}`],
             })
             .add(AnotherTable, {
                 key: {id: 1},
-                projection: ({key}) => `${key.id}`,
+                projection: ({key}) => [`${key.id}`],
             })
             .add(Table, {key: {session_id: "2"}})
             .returnConsumedCapacity("INDEXES")
@@ -351,7 +383,7 @@ describe("Batch Write Command", () => {
 
     it("builds batch write command", () => {
 
-        const AnotherTable = table("Another", {id: D.Number} as const, {} as const)
+        const AnotherTable = table("Another", {id: Type.Number} as const, {} as const)
         const {input} = batchWrite()
             .add(Table, [
                 {action: "put", key: {session_id: "1"}, item: {}},
@@ -383,7 +415,7 @@ describe("Transact Write Command", () => {
 
     it("builds transact write command", () => {
 
-        const AnotherTable = table("Another", {id: D.Number} as const, {} as const)
+        const AnotherTable = table("Another", {id: Type.Number} as const, {} as const)
         const {input} = transactWrite()
             .add(Table, {
                 action: "put",

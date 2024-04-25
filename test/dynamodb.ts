@@ -1,12 +1,13 @@
 import {DynamoDBClient} from "@aws-sdk/client-dynamodb";
 import {unmarshall} from '@aws-sdk/util-dynamodb';
-import {D, TableSchema, getCommand, SchemaType, table, updateCommand} from "@app/dynamodb";
+import {Type, TableSchema, getCommand, SchemaType, table, updateCommand, TableSchemaType} from "@app/dynamodb";
+import _ from "lodash";
 
 const dynamodb = new DynamoDBClient()
 
 export function init(sessionsTable: string) {
 
-    const Sessions = table(sessionsTable, {session_id: D.String} as const, {expires_at: D.Number} as const)
+    const Sessions = table(sessionsTable, {session_id: Type.String} as const, {expires_at: Type.Number} as const)
 
     return {
         async getSession(key: string) {
@@ -16,11 +17,16 @@ export function init(sessionsTable: string) {
             return response.Item != null ? unmarshall(response.Item) : null
         },
 
-        async updateSession(key: string, data: Partial<SchemaType<TableSchema<typeof Sessions>>>) {
+        async updateSession(key: string, data: Partial<TableSchemaType<typeof Sessions>>) {
             const response = await dynamodb.send(updateCommand(Sessions, {
                 key: {session_id: key},
                 return: "ALL_NEW",
-                expression: (ctx) => ctx.set(data)
+                expression: ({attr, val}) => ({
+                    set: _(data)
+                        .mapKeys((_1, key) => attr(key))
+                        .mapValues(x => val(x))
+                        .value()
+                })
             }))
             return unmarshall(response.Attributes!)
 

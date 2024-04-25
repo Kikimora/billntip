@@ -8,7 +8,7 @@ import {
     FilterConditionGenerator,
     KeyConditionGenerator
 } from "./schema";
-import {prepareCommand} from "./util";
+import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
 /**
@@ -85,7 +85,7 @@ export function query<T extends TableType<T>, V>(tbl: T, command: QueryCommand<T
         FilterExpression: filter?.({attr, val}),
         Select: command.select,
         Limit: command.limit,
-        ExclusiveStartKey: command.exclusiveStartKey !== undefined ? marshall(command.exclusiveStartKey) : undefined,
+        ExclusiveStartKey: command.exclusiveStartKey !== undefined ? marshall(command.exclusiveStartKey, MarshalOptions) : undefined,
         ScanIndexForward: command.scanIndexForward,
         ConsistentRead: command.consistentRead,
         ReturnConsumedCapacity: command.returnConsumedCapacity,

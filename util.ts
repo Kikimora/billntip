@@ -80,7 +80,7 @@ export async function repeat(action: PollerFunction, options: PollerOptions): Pr
             const now = performance.now();
             if (maxIteration >= 0 && iterations >= maxIteration ||
                 deadline != null && deadline > now) {
-                throw tracer.addContext(e, {options, iterations, now, deadline})
+                throw tracer.errorWithContext(e, {options, iterations, now, deadline})
             }
         }
 
@@ -94,7 +94,7 @@ export async function repeat(action: PollerFunction, options: PollerOptions): Pr
             }
         } catch (e) {
             const now = performance.now();
-            throw tracer.addContext(e, {options, iterations, deadline, now, lastError})
+            throw tracer.errorWithContext(e, {options, iterations, deadline, now, lastError})
         }
     } while (true)
 }
@@ -149,14 +149,88 @@ export function toSeconds(value: number, units: TimeUnitsType) {
         case 'days':
             return value * 3600 * 24
         default:
-            throw new Error('Unexpected token units ' + value)
+            throw new Error('Unexpected token units ' + units)
     }
 }
-//
-// export const performance = {
-//     now: global.performance.now,
-//
-//     get timeOrigin() {
-//         return global.performance.timeOrigin
-//     }
-// }
+
+export function cyrb53(str: string, seed: number = 0) {
+    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0, ch; i < str.length; i++) {
+        ch = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+    h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+    h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+
+    return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+
+type SortOption<L, R> = L extends R
+    ? {
+        sortLeft?: (x: L, y: L) => number,
+        sortRight?: (x: R, y: R) => number,
+        sortBoth?: (x: R, y: R) => number,
+    }
+    : {
+        sortLeft?: (x: L, y: L) => number,
+        sortRight?: (x: R, y: R) => number
+    }
+
+interface OnlyLeft<T> {
+    type: 'left'
+    left: T
+}
+
+interface OnlyRight<T> {
+    type: 'right'
+    right: T
+}
+
+interface Both<L, R> {
+    type: 'both'
+    left: L
+    right: R
+}
+
+export type MergePair<L, R = L> = OnlyLeft<L> | OnlyRight<R> | Both<L, R>
+
+export function mergeJoin<L, R = L>(left: Readonly<L[]>,
+                                    right: Readonly<R[]>,
+                                    cmp: (x: L, y: R) => number): Generator<MergePair<L, R>>
+export function mergeJoin<L, R = L>(left: Iterable<L>,
+                                    right: Iterable<R>,
+                                    cmp: (x: L, y: R) => number): Generator<MergePair<L, R>>
+export function* mergeJoin<L, R = L>(left: any,
+                                     right: any,
+                                     cmp: (x: L, y: R) => number): Generator<MergePair<L, R>> {
+    const leftI = left[Symbol.iterator]()
+    const rightI = right[Symbol.iterator]()
+    let l = leftI.next()
+    let r = rightI.next()
+    while (!l.done && !r.done) {
+        const c = cmp(l.value, r.value)
+        if (c < 0) {
+            yield {type: 'left', left: l.value}
+            l = leftI.next()
+        } else if (c == 0) {
+            yield {type: 'both', left: l.value, right: r.value}
+            l = leftI.next()
+            r = rightI.next()
+        } else {
+            yield {type: 'right', right: r.value}
+            r = rightI.next()
+        }
+    }
+    while (!l.done) {
+        yield {type: 'left', left: l.value}
+        l = leftI.next()
+    }
+    while (!r.done) {
+        yield {type: 'right', right: r.value}
+        r = rightI.next()
+    }
+}

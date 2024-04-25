@@ -104,9 +104,17 @@ export type Operation = {
      */
     cookies?: SchemaMap,
     /**
-     * Route responses
+     * Successful response schema.
      */
-    response?: ({ [key in HttpStatus]?: TSchema } | HttpStatus | string)[]
+    success?: TSchema
+    /**
+     * Successful response status code, default - 200
+     */
+    successStatusCode?: HttpStatus
+    /**
+     * Route responses, override {@link success} if status codes matches.
+     */
+    responses?: ({ [key in HttpStatus]?: TSchema } | HttpStatus)[]
     /**
      * Route security requirements in OpenAPI format
      */
@@ -115,6 +123,10 @@ export type Operation = {
      * Route deprecation status
      */
     deprecated?: boolean
+    /**
+     * Operation tags
+     */
+    tags?: string[],
 } & { [key: string]: any }
 /**
  * Collection of routes. Note how typical use case adds `as const satisfies RouteMap` right after route map definition.
@@ -383,10 +395,10 @@ type ValidationResult<T extends Operation> = {
 
 declare module "@sinclair/typebox" {
     interface TypeBoxError extends HttpError {
-        readonly statusCode: number
+        readonly statusCode: string
     }
 }
 Object.defineProperty(TypeBoxError.prototype, 'statusCode', {
-    value: 400,
+    value: '400',
     writable: true
 })

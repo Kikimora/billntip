@@ -1,6 +1,6 @@
 import {TokenEndpointResponse} from "@src/authorizer/oidc_tokens";
 
-jest.mock('../src/http');
+jest.mock('@src/http');
 
 import 'jest-extended';
 import {
@@ -10,14 +10,14 @@ import {
 } from "aws-lambda";
 import _ from "lodash";
 import {LambdaRequest} from "@app/lambda"
-import http from "../src/http"
-import {init as cognitoInit, TestGroup, TestUser} from "./cognito"
-import {init as dynamoDbInit} from './dynamodb'
+import http from "@src/http"
+import {init as cognitoInit, TestGroup, TestUser} from "@app/test/cognito"
+import {init as dynamoDbInit} from '@app/test/dynamodb'
 
 const httpMock = http as jest.Mocked<typeof http>;
-const {default: httpReal} = jest.requireActual('../src/http');
+const {default: httpReal} = jest.requireActual('@src/http');
 const SessionKey = 'SID';
-import {resources} from "./util";
+import {resources} from "@app/test/util";
 import {AxiosResponse} from "axios";
 import {makeLockStore} from "@app/dynamodb";
 import {configure} from "@app/diagnostics";
@@ -303,6 +303,7 @@ describe('Lambda authorizer', () => {
             expect(response).toEqual({
                 isAuthorized: true,
                 context: {
+                    "id": newSession['session_id'],
                     'new_cookie': expect.any(String),
                     'access_token': newSession['access_token'],
                     'access': jwtDecode(newSession['access_token']),

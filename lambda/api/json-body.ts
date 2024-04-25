@@ -30,7 +30,7 @@ export class JsonBodyError extends Error implements HttpError {
         super(message);
     }
 
-    public readonly statusCode = 400
+    public readonly statusCode = '400'
 }
 
 Pipeline.prototype.parseJsonBody = function (options?: ParseJsonBodyOptions) {

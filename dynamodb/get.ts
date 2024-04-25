@@ -1,13 +1,13 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
 import {KeySchema, TableType, SchemaType, ExpressionGenerator, ProjectionGenerator} from "./schema";
-import {prepareCommand} from "./util";
+import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
 /**
  * DynamoDb {@link ddb.GetItemCommandInput} for a given {@link Table}
  */
-interface GetCommand<Table> {
+export interface GetCommand<Table> {
     /**
      * See {@link ddb.GetItemInput.Key}
      */
@@ -32,7 +32,7 @@ interface GetCommand<Table> {
  * @param command - command parameters
  */
 export function get<T extends TableType<T>>(tbl: T, command: GetCommand<T>): ddb.GetItemCommandInput {
-    const dynamoKey = marshall(command.key);
+    const dynamoKey = marshall(command.key, MarshalOptions);
     const {
         attributeNames,
         key,
@@ -43,7 +43,7 @@ export function get<T extends TableType<T>>(tbl: T, command: GetCommand<T>): ddb
     return {
         TableName: tbl.name,
         Key: dynamoKey,
-        ProjectionExpression: projection?.({key, attr}),
+        ProjectionExpression: projection?.({key, attr})?.join(', '),
         ExpressionAttributeNames: !_.isEmpty(attributeNames) ? attributeNames : undefined,
         ConsistentRead: command.consistentRead,
         ReturnConsumedCapacity: command.returnConsumedCapacity,

@@ -1,16 +1,16 @@
 
-export {D, SchemaType, table, TableSchema} from "./schema"
+export {Type, SchemaType, table, TableSchema, TableSchemaType, AttributesSchemaType} from "./schema"
 
-export {get, getCommand} from "./get"
-export {transactGet} from "./transactGet"
-export {batchGet} from "./batchGet"
+export {get, getCommand, GetCommand} from "./get"
+export {transactGet, TransactGetBuilder} from "./transactGet"
+export {batchGet, BatchGetBuilder, BatchGetItem} from "./batchGet"
 export {query, queryCommand} from "./query"
 export {scan, scanCommand} from "./scan"
 
 export {put, putCommand} from "./put"
 export {update, updateCommand} from "./update"
-export {transactWrite} from "./transactWrite"
-export {batchWrite} from "./batchWrite"
+export {transactWrite, TransactWriteBuilder, TransactWriteItem} from "./transactWrite"
+export {batchWrite, BatchWriteBuilder, BatchWriteItem} from "./batchWrite"
 
 export {deleteItem, deleteCommand} from "./delete"
 

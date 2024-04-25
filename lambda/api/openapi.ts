@@ -10,7 +10,8 @@ import {
     Operation as ApiOperation,
     RouteKey,
     RouteMap,
-    SchemaMap, toStatusCode
+    SchemaMap,
+    toStatusCode
 } from "./routes";
 import {die} from "@app/util";
 
@@ -153,48 +154,67 @@ class Builder {
             _.merge(op, makeOperationFromRoute(route, routeKey))
         }
         return {
-            set spec(spec: PathsSpec<T>) {
+            set spec(overrides: PathsSpec<T>) {
                 //Merge provided and generated specs.
-                _.mergeWith(self._paths, spec, function (generatedValue, providedValue, key) {
-                        if (key === 'response' && _.isArray(generatedValue) && _.isArray(providedValue)) {
+                _.mergeWith(self._paths, overrides, function (spec, overrides, key) {
+                        if (key === 'responses' && _.isArray(spec) && _.isArray(overrides)) {
                             //Merging responses is tricky because of the following rules:
-                            //generated           + provided      = sum
+                            //from spec        + override      = sum
                             //----------------------------------------------------------------------------------
-                            //[{200: TSchema}] + [200]            = [{200: TSchema}] - default spec wins
+                            //[{200: TSchema}] + [200]            = [{200: TSchema}] - spec wins
                             //[{200: TSchema}] + [400]            = [{200: TSchema}, 400]
                             //[{200: TSchema}] + [{400: TSchema}] = [{200: TSchema}, {400: TSchema}]
-                            //[{200: TSchema}] + [{200: TSchema}] = [{200: TSchema}] - merge default and provided
-                            //below cases aren't possible because default spec always has form {statusCode:xyz}
+                            //[{200: TSchema}] + [{200: TSchema}] = [{200: TSchema}] - merge spec and override
                             //[400]            + [400]            = [400]
                             //[200]            + [400]            = [200, 400]
+                            //[200]            + [{200: TSchema}] = [{200: TSchema}]
                             //
-                            //These rules basically say:
-                            // 1. if reference (number or 'default') provided, then use generated definition if available
-                            // 2. if definition provided then use it
+                            //Keep in mind that following inputs are possible from both spec and overrides:
+                            // [{200: XYX}, {400: XYZ}, 500]
+                            // [{200: XYX, 400: XYZ}, 500]
+                            // [{200: XYX, 400: XYZ}, 400, 500] -- this is a mistake to put 400: XYZ and 400 but still
+                            const overrideResponse: Response[] = overrides
+                            const specResponses: Response[] = spec
 
-                            const merged: any[] = []
-                            for (const x of generatedValue) {
-                                if (typeof x === "object") {
-                                    for (const statusCode of Object.keys(x)) {
-                                        const matchIdx = providedValue.findIndex(x =>
-                                            x === statusCode
-                                            || x === Number(statusCode)
-                                            || typeof x === 'object' && statusCode in x)
-                                        if (matchIdx < 0) {
-                                            merged.push(x)
-                                            continue
-                                        }
-                                        const match = providedValue[matchIdx]
-                                        if (typeof match === "number") {
-                                            merged.push(x)
-                                        } else {
-                                            merged.push(_.merge(x, match))
-                                        }
-                                        providedValue.splice(matchIdx, 1)
+                            type NormalisedResponse = { statusCode: HttpStatus, value?: ResponseVariants }
+
+                            /**
+                             * Convert [{200: XYX, 400: XYZ}, 400, 500] to
+                             * [{statusCode:200, value:XYX}, {statusCode:400, value:XYZ}, {statusCode:400, value:undefined}, {statusCode:500, value:undefined}]
+                             */
+                            function normalize(responses: Response[]): NormalisedResponse[] {
+                                return responses.flatMap(response => {
+                                    if (typeof response === 'object') {
+                                        return Object.entries(response).map(([key, value]) => ({
+                                            statusCode: toStatusCode(key),
+                                            value
+                                        }))
                                     }
+                                    return [{statusCode: toStatusCode(response), value: undefined}]
+                                })
+                            }
+
+                            const responses: { [key in HttpStatus]: ResponseVariants | undefined } = {default: undefined}
+                            for (const response of normalize(specResponses)) {
+                                responses[response.statusCode] = responses[response.statusCode] ?? response.value
+                            }
+                            for (const override of normalize(overrideResponse)) {
+                                const responseValue = responses[override.statusCode]
+                                const overrideValue = override.value
+                                if (responseValue !== undefined && overrideValue !== undefined) {
+                                    responses[override.statusCode] = _.merge(responseValue, overrideValue)
+                                } else if (responseValue === undefined && overrideValue !== undefined) {
+                                    responses[override.statusCode] = overrideValue
                                 }
                             }
-                            return merged.concat(providedValue)
+
+                            if (responses.default === undefined)
+                                delete responses.default
+
+                            return _.map(responses, function (value, key) {
+                                if (value === undefined) return toStatusCode(key)
+                                return {[toStatusCode(key)]: value}
+                            })
                         }
 
                         return undefined
@@ -249,30 +269,30 @@ class Builder {
 
         let responses: oas31.ResponsesObject | undefined = undefined
         responses: {
-            if (op.response === undefined) break responses
+            if (op.responses === undefined) break responses
 
-            responses = _(op.response)
+            responses = _(op.responses)
                 .flatMap((response: Response) => {
                     if (typeof response === "number" || response === 'default') {
-                        return {statusCode: response, response: {$ref: `#/components/responses/${response}`}}
+                        return {statusCode: response, responses: {$ref: `#/components/responses/${response}`}}
                     }
                     return _.map(response, (response, key) => {
                         if (response === undefined) return undefined
                         const statusCode = toStatusCode(key)
                         if (typeof response === "string") {
-                            return {statusCode, response: {$ref: `#/components/responses/${response}`}}
+                            return {statusCode, responses: {$ref: `#/components/responses/${response}`}}
                         }
                         if ('$ref' in response) {
-                            return {statusCode, response}
+                            return {statusCode, response: responses}
                         }
                         return {
                             statusCode,
-                            response: this.makeOpenAPIResponse(response, statusCode, routeKey)
+                            responses: this.makeOpenAPIResponse(response, statusCode, routeKey)
                         }
                     })
                 })
                 .keyBy('statusCode')
-                .mapValues('response')
+                .mapValues('responses')
                 .value()
         }
 
@@ -490,7 +510,8 @@ function responseContentOverrides<T extends TSchema>(x: ResponseBody<T>) {
     return rest
 }
 
-type Response = { [statusCode in HttpStatus]?: oas31.ReferenceObject | string | ResponseBody<any> } | HttpStatus;
+type ResponseVariants = oas31.ReferenceObject | 'default' | ResponseBody<any>
+type Response = { [statusCode in HttpStatus]?: ResponseVariants } | HttpStatus;
 
 interface Operation<O extends ApiOperation> {
     //Request details
@@ -510,7 +531,7 @@ interface Operation<O extends ApiOperation> {
     cookies?: Parameters<O['cookies']>
     body?: Body<O['body']>
     //Response
-    response?: Response[]
+    responses?: Response[]
 }
 
 export type PathsSpec<T extends RouteMap> = {
@@ -649,6 +670,9 @@ function makeOperationFromRoute(route: ApiOperation, routeKey: RouteKey) {
             case 'deprecated':
                 op[prop] = route[prop]
                 break;
+            case 'tags':
+                op[prop] = route[prop]
+                break;
             case 'path':
             case 'query':
             case 'headers':
@@ -667,18 +691,34 @@ function makeOperationFromRoute(route: ApiOperation, routeKey: RouteKey) {
                     schema: route.body
                 }
                 break;
-            case 'response':
-                op.response = _.map(route.response, function (response) {
-                    if (typeof response === 'number' || typeof response === "string") {
-                        return response
-                    }
-                    return _.mapValues(response, function (schema, key) {
-                        const statusCode = toStatusCode(key)
-                        return {
-                            schema,
-                            description: schema?.description ?? httpStatusDescription(statusCode, routeKey),
+            case 'responses':
+                const successStatusCode = toStatusCode(route.successStatusCode ?? 200)
+                const success = route.success
+                const responses = route.responses !== undefined ? [...route.responses] : []
+                if (success !== undefined) {
+                    const successfulResponse = responses.find(x => {
+                        if (typeof x === "object") {
+                            return successStatusCode in x
                         }
+                        return toStatusCode(x) === successStatusCode
                     })
+                    if (successfulResponse === undefined) {
+                        responses.push({[successStatusCode]: success})
+                    }
+                }
+
+                op.responses = _.map(responses, function (response) {
+                    if (typeof response === 'object') {
+                        return _.mapValues(response, function (schema, key) {
+                            const statusCode = toStatusCode(key)
+                            return {
+                                schema,
+                                description: schema?.description ?? httpStatusDescription(statusCode, routeKey),
+                            }
+                        })
+
+                    }
+                    return toStatusCode(response)
                 })
                 break;
         }

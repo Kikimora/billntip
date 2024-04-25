@@ -1,4 +1,4 @@
-import {Tracer} from "@app/diagnostics";
+import {Tracer, TracingOptions} from "@app/diagnostics";
 import {Context} from "aws-lambda";
 import {Middleware, MiddlewareFunction, Pipeline} from "./pipeline";
 
@@ -12,7 +12,11 @@ interface RequestTracingOptions {
     /**
      * Request tracing tag or tag generating function (see {@link startSession}. Default is `${context.functionName}.${context.functionVersion}`.
      */
-    tag?: string | ((event: any, context: Context) => string)
+    tag?: string | ((event: any, context: Context) => string),
+    /**
+     * Request tracing options
+     */
+    options?: TracingOptions
 }
 
 const defaultApiTracer = new Tracer("api");
@@ -22,7 +26,7 @@ const defaultApiTracer = new Tracer("api");
  */
 export function traceRequest(options: RequestTracingOptions = {}): MiddlewareFunction<TracedEvent> {
     const requestTracer = options.tracer ?? defaultApiTracer
-    let {tag} = options
+    let {tag, options:tracingOptions} = options
     if (tag === undefined) {
         tag = function (_, ctx) {
             return `${ctx.functionName}.${ctx.functionVersion}`
@@ -36,7 +40,7 @@ export function traceRequest(options: RequestTracingOptions = {}): MiddlewareFun
     }
 
     return async function (this: Middleware<TracedEvent>, e: any, ctx: Context) {
-        const tracer = e.tracer ?? requestTracer.startSession(tag(e, ctx), e, ctx)
+        const tracer = e.tracer ?? requestTracer.startSession(tag(e, ctx), e, ctx, tracingOptions)
         try {
             tracer.info("Started", {event: eventData(e), context: {...ctx}})
             const event = e as TracedEvent

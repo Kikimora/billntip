@@ -1,7 +1,7 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
 import {KeySchema, TableType, SchemaType, ExpressionGenerator} from "./schema";
-import {prepareCommand} from "./util";
+import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
 /**
@@ -45,7 +45,7 @@ interface DeleteCommand<Table, V> {
  */
 export function deleteItem<T extends TableType<T>, V>(tbl: T, command: DeleteCommand<T, V>): ddb.DeleteItemCommandInput {
     const context = {...command.key, ...command.values} as SchemaType<KeySchema<T>> & V
-    const dynamoKey = marshall(command.key)
+    const dynamoKey = marshall(command.key, MarshalOptions)
     const {
         attributeNames,
         attributeValues,
@@ -57,7 +57,7 @@ export function deleteItem<T extends TableType<T>, V>(tbl: T, command: DeleteCom
 
     return {
         TableName: tbl.name,
-        Key: marshall(command.key),
+        Key: marshall(command.key, MarshalOptions),
         ConditionExpression: condition?.({key, attr, val}),
         ReturnValues: command.return,
         ReturnValuesOnConditionCheckFailure: command.returnOnConditionFailure,

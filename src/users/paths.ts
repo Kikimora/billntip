@@ -9,98 +9,140 @@ export default {
     "POST /user": {
         operationId: "SignUp",
         body: schemas.SignUpBody,
-        response: [{200: schemas.SignUpResponse}, 400],
+        success: schemas.SignUpResponse,
+        responses: [400],
         security: publicEndpoint,
-    },
-    "PUT /user": {
-        operationId: "UpdateUserAttributes",
-        body: schemas.UpdateUserAttributesBody,
-        response: [{200: schemas.UpdateUserAttributesResponse}, 400, 401, 403],
-        security: authenticated,
-        failures: [400]
+        tags: ['SignUp']
     },
     "POST /user/confirm": {
         operationId: "ConfirmSignUp",
         body: schemas.ConfirmSignUpBody,
-        response: [{200: schemas.ConfirmSignUpResponse}, 400],
-        security: publicEndpoint
+        responses: [{200: schemas.ConfirmSignUpResponse}, 400],
+        security: publicEndpoint,
+        tags: ['SignUp']
     },
     "POST /user/resend_confirmation_code": {
         operationId: "ResendConfirmationCode",
         body: schemas.ResendConfirmationCodeBody,
-        response: [{200: schemas.ResendConfirmationCodeResponse}, 400],
-        security: publicEndpoint
+        responses: [{200: schemas.ResendConfirmationCodeResponse}, 400],
+        security: publicEndpoint,
+        tags: ['SignUp']
     },
+
     "POST /user/signin": {
         operationId: "InitiateAuth",
         body: schemas.InitiateAuthBody,
-        response: [{200: schemas.InitiateAuthResponse}, 400],
-        security: publicEndpoint
+        responses: [{200: schemas.InitiateAuthResponse}, 400],
+        security: publicEndpoint,
+        tags: ['Session']
     },
     "POST /user/signin/challenge": {
         operationId: "RespondToAuthChallenge",
         body: schemas.RespondToAuthChallengeBody,
-        response: [{200: schemas.RespondToAuthChallengeResponse}, 400],
-        security: publicEndpoint
+        responses: [{200: schemas.RespondToAuthChallengeResponse}, 400],
+        security: publicEndpoint,
+        tags: ['Session']
     },
-    "POST /user/signout": {
-        operationId: "SignOut, 400, 401, 403",
-        security: authenticated
+    "GET /user/session": {
+        operationId: "GetSession",
+        responses: [{200: schemas.GetSessionResponse}, 401, 403],
+        security: authenticated,
+        tags: ['Session']
     },
+    "POST /user/session": {
+        operationId: "RefreshSession",
+        responses: [{200: schemas.GetSessionResponse}, 401, 403],
+        security: authenticated,
+        tags: ['Session']
+    },
+    "DELETE /user/session": {
+        operationId: "SignOut",
+        security: authenticated,
+        responses: [401, 403],
+        tags: ['Session']
+    },
+
+    "GET /user/attributes": {
+        operationId: "GetUser",
+        success: schemas.UserAttributes,
+        responses: [401, 403],
+        security: authenticated,
+        tags: ['Attributes']
+    },
+    "PUT /user/attributes": {
+        operationId: "UpdateUserAttributes",
+        body: schemas.UpdateUserAttributesBody,
+        success: schemas.UpdateUserAttributesResponse,
+        responses: [400, 401, 403],
+        security: authenticated,
+        tags: ['Attributes']
+    },
+    "DELETE /user/attributes": {
+        operationId: "DeleteUserAttributes",
+        body: schemas.DeleteUserAttributesBody,
+        success: schemas.DeleteUserAttributesResponse,
+        responses: [400, 401, 403],
+        security: authenticated,
+        tags: ['Attributes']
+    },
+
     "POST /user/password": {
         operationId: "ChangePassword",
         body: schemas.ChangePasswordBody,
-        response: [{200: schemas.ChangePasswordResponse}, 400, 401, 403],
-        security: authenticated
+        responses: [{200: schemas.ChangePasswordResponse}, 400, 401, 403],
+        security: authenticated,
+        tags: ['Password']
     },
     "POST /user/password/forgot": {
         operationId: "ForgotPassword",
         body: schemas.ForgotPasswordBody,
-        response: [{200: schemas.ForgotPasswordResponse}, 400],
-        security: publicEndpoint
+        responses: [{200: schemas.ForgotPasswordResponse}, 400],
+        security: publicEndpoint,
+        tags: ['Password']
     },
     "POST /user/password/confirm": {
         operationId: "ConfirmForgotPassword",
         body: schemas.ConfirmForgotPasswordBody,
-        response: [{200: schemas.ConfirmForgotPasswordResponse}, 400],
-        security: publicEndpoint
+        responses: [{200: schemas.ConfirmForgotPasswordResponse}, 400],
+        security: publicEndpoint,
+        tags: ['Password']
     },
-    "GET /user/session": {
-        operationId: "GetSession",
-        body: schemas.GetSessionBody,
-        response: [{200: schemas.GetSessionResponse}, 400, 401, 403],
-        security: authenticated,
-    },
+
     "GET /user/devices": {
         operationId: "GetDevices",
         body: schemas.GetDevicesBody,
-        response: [{200: schemas.GetDevicesResponse}, 400, 401, 403],
-        security: authenticated
+        responses: [{200: schemas.GetDevicesResponse}, 400, 401, 403],
+        security: authenticated,
+        tags: ['Devices']
     },
     "GET /user/device/{id}": {
         operationId: "GetDevice",
         path: {id: schemas.DeviceId},
-        response: [{200: schemas.GetDeviceBody}, 400, 401, 403],
-        security: authenticated
+        responses: [{200: schemas.GetDeviceBody}, 400, 401, 403],
+        security: authenticated,
+        tags: ['Devices']
     },
     "PUT /user/device/{id}": {
         operationId: "UpdateDeviceStatus",
         path: {id: schemas.DeviceId},
         body: schemas.UpdateDeviceStatusBody,
-        response: [{200: schemas.UpdateDeviceStatusResponse}, 400, 401, 403],
-        security: authenticated
+        responses: [{200: schemas.UpdateDeviceStatusResponse}, 400, 401, 403],
+        security: authenticated,
+        tags: ['Devices']
     },
     "PUT /user/device/{id}/confirm": {
         operationId: "ConfirmDevice",
         path: {id: schemas.DeviceId},
         body: schemas.ConfirmDeviceBody,
-        response: [{200: schemas.ConfirmDeviceResponse}, 400, 401, 403],
-        security: authenticated
+        responses: [{200: schemas.ConfirmDeviceResponse}, 400, 401, 403],
+        security: authenticated,
+        tags: ['Devices']
     },
     "DELETE /user/device/{id}": {
         operationId: "ForgetDevice",
         path: {id: schemas.DeviceId},
-        response: [{200: schemas.ForgetDeviceResponse}, 400, 401, 403],
-        security: authenticated
+        responses: [{200: schemas.ForgetDeviceResponse}, 400, 401, 403],
+        security: authenticated,
+        tags: ['Devices']
     },
 } as const satisfies RouteMap

@@ -30,7 +30,7 @@ export const handler = pipeline()
                     uploadUrl: post.url,
                     uploadFields: post.fields,
                     expires: new Date(Date.now() + expires * 1000)
-                } satisfies CreateUploadResponse
+                } satisfies Static<typeof req.route.success>
             }
             case 'POST /upload/{id}': {
                 const {path: {id}} = req.parse()
@@ -55,7 +55,7 @@ export const handler = pipeline()
                     id: id,
                     contentType: contentType,
                     image: {url, height, width},
-                } satisfies Static<typeof req.route.response[0][200]>
+                } satisfies Static<typeof req.route.success>
             }
             case 'DELETE /upload/{id}': {
                 const {path: {id}} = req.parse()

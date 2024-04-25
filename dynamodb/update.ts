@@ -1,7 +1,15 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
-import {ExpressionGenerator, KeySchema, SchemaType, TableType, UpdateContext, UpdateGenerator} from "./schema";
-import {prepareCommand} from "./util";
+import {
+    ExpressionGenerator,
+    KeySchema,
+    SchemaType,
+    TableType,
+    UpdateContext,
+    updateExpression,
+    UpdateGenerator
+} from "./schema";
+import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
 /**
@@ -48,7 +56,7 @@ interface UpdateCommand<Table, V> {
  * @param command - command parameters
  */
 export function update<T extends TableType<T>, V>(tbl: T, command: UpdateCommand<T, V>): ddb.UpdateItemCommandInput {
-    const dynamoKey = marshall(command.key)
+    const dynamoKey = marshall(command.key, MarshalOptions)
     const context = {...command.values, ...command.key} as SchemaType<KeySchema<T>> & V
     const {
         attributeNames,
@@ -58,10 +66,11 @@ export function update<T extends TableType<T>, V>(tbl: T, command: UpdateCommand
         val
     } = prepareCommand(tbl, context, dynamoKey);
     const {expression, condition} = command
+    const update = expression?.(new UpdateContext(val, key, attr))
     return {
         TableName: tbl.name,
         Key: dynamoKey,
-        UpdateExpression: expression?.(new UpdateContext(val, key, attr)) ?? undefined,
+        UpdateExpression: update !== undefined ? updateExpression(update) : undefined,
         ConditionExpression: condition?.({key, attr, val}) ?? undefined,
         ExpressionAttributeValues: !_.isEmpty(attributeValues) ? attributeValues : undefined,
         ExpressionAttributeNames: !_.isEmpty(attributeNames) ? attributeNames : undefined,

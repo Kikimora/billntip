@@ -1,7 +1,7 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
 import {KeySchema, TableType, SchemaType, ExpressionGenerator, AttributesSchema, TableSchema} from "./schema";
-import {prepareCommand} from "./util";
+import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
 /**
@@ -48,7 +48,7 @@ interface PutCommand<Table, V> {
  * @param command - command parameters
  */
 export function put<T extends TableType<T>, V>(tbl: T, command: PutCommand<T, V>): ddb.PutItemCommandInput {
-    const dynamoItem = marshall({...command.item, ...command.key})
+    const dynamoItem = marshall({...command.item, ...command.key}, MarshalOptions)
     const context = {...command.values, ...command.item, ...command.key} as SchemaType<TableSchema<T>> & V;
     const {
         attributeNames,

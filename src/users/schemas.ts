@@ -1,11 +1,42 @@
 import {Type as T} from "@sinclair/typebox";
 
-const ClientMetadata = T.Optional(T.Record(T.String(), T.String()));
-const UserAttributes = T.Array(
+const ClientMetadata = T.Optional(T.Record(
+    T.String({maxLength: 20}),
+    T.String({maxLength: 2048}))
+);
+
+const UserAttributeNames = T.Union([
+    T.Literal("phone_number", {description: "Phone number as defined by E.164 - The international public telecommunication numbering plan."}),
+    T.Literal("given_name", {description: "Given name(s) or first name(s)."}),
+    T.Literal("family_name", {description: "Surname(s) or last name(s)."}),
+    T.Literal("birthdate", {description: "Birthday, represented as an ISO 8601-1 YYYY-MM-DD format."}),
+    T.Literal("address", {description: "Preferred postal address, in the format defined by section 5.1.1 of OpenID Connect Core 1.0 incorporating errata set 2."}),
+    T.Literal("picture", {description: "URL of the profile picture."}),
+    T.Literal("custom:tos", {description: "JSON with two field {general: boolean, privacy: boolean}"}),
+    T.Literal("custom:data", {description: "User data in any suitable format."}),
+    T.Literal("custom:nationality", {description: "Nationality as a country code according to ISO 3166."}),
+    T.String({maxLength: 20})
+])
+
+//Cognito no username attributes at all.
+//Add user to recipients group.
+//Required and Optional fields, Emails with templates.
+//Send invites.
+
+//Cognito - no username attributes and aliases
+//Store user attributes in DynamoDb
+//At login - map username to userid, don't use 'sub'
+//At token generation - put user attributes into the token.
+
+export const MaxAttributes = 50
+export const UserAttributes = T.Array(
     T.Object({
-        name: T.String(),
-        value: T.String()
-    }))
+        name: UserAttributeNames,
+        value: T.String({maxLength: 2048}),
+        verified: T.Optional(T.Boolean({
+            description: "Indicate that user has confirmed the attribute (e.g. validated email with a code)."
+        }))
+    }), {maxItems: MaxAttributes})
 
 export const SignUpBody = T.Object({
     username: T.String(),
@@ -25,7 +56,9 @@ export const SignUpResponse = T.Object({
         attributeName: T.Optional(T.String())
     })),
     userSub: T.Optional(T.String())
-}, {$id: 'SignUpResponse'});
+}, {
+    $id: 'SignUpResponse'
+});
 
 export const UpdateUserAttributesBody = T.Object({
     clientMetadata: ClientMetadata,
@@ -40,6 +73,13 @@ export const UpdateUserAttributesResponse = T.Object({
         attributeName: T.Optional(T.String())
     })))
 }, {$id: 'UpdateUserAttributesResponse'});
+export const DeleteUserAttributesBody = T.Object({
+        userAttributesNames: T.Array(UserAttributeNames)
+    },
+    {$id: 'DeleteUserAttributesBody'});
+export const DeleteUserAttributesResponse = T.Object({}, {$id: 'DeleteUserAttributesResponse'});
+
+
 export const ConfirmSignUpBody = T.Object({
     username: T.String(),
     confirmationCode: T.String(),
@@ -134,13 +174,15 @@ export const ConfirmForgotPasswordBody = T.Object({
     confirmationCode: T.String(),
 }, {$id: 'ConfirmForgotPasswordBody'});
 export const ConfirmForgotPasswordResponse = T.Null();
-export const GetSessionBody = T.Null();
+
 export const GetSessionResponse = T.Object({
     accessToken: T.String(),
     idToken: T.String(),
     profile: T.Object({}),
     expiresAt: T.Number()
 }, {$id: 'GetSessionResponse'});
+
+export const Cookie = T.String({pattern: 'SID=.*'})
 
 export const DeviceId = T.String({description: "Device Key"})
 export const GetDevicesBody = T.Object({

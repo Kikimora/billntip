@@ -10,6 +10,17 @@ servers:
     description: Development server
 security:
   - Cookie: [ ]
+x-tagGroups:
+  - name: User
+    tags:
+    - SignUp
+    - Session
+    - Attributes
+    - Password
+    - Devices
+  - name: Files
+    tags:
+      - Images
 
 components:
   responses:

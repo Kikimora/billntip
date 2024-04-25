@@ -3,7 +3,7 @@ import {Conditions as PolicyEntry} from "@aws-sdk/s3-presigned-post/dist-types/t
 import sharp, {FormatEnum} from "sharp";
 import {createPresignedPost} from "@aws-sdk/s3-presigned-post";
 import {GetObjectCommandOutput, S3} from "@aws-sdk/client-s3";
-import {withErrorContext} from "@app/diagnostics";
+import {errorWithContext} from "@app/diagnostics";
 import {die} from "@app/util";
 
 const Bucket = process.env.BUCKET ?? die("BUCKET required")
@@ -81,7 +81,7 @@ async function prepareUpload(sub: string, type: UploadType) {
         return {post: url, expires, id}
 
     } catch (e: any) {
-        throw withErrorContext(e, "prepareUpload", {Bucket, key, config: UploadConfigs[type]})
+        throw errorWithContext(e, "prepareUpload", {Bucket, key, config: UploadConfigs[type]})
     }
 }
 
@@ -94,7 +94,7 @@ async function readUpload(sub: string, id: string) {
         if (type !== "profile_pic") throw new Error("Unexpected upload type")
         return {uploadObject, type}
     } catch (e: any) {
-        throw withErrorContext(e, "readUpload", {key})
+        throw errorWithContext(e, "readUpload", {key})
     }
 }
 
@@ -108,7 +108,7 @@ async function processUpload(type: UploadType, s3Object: GetObjectCommandOutput)
         return {contentType, buffer, width: targetWidth, height: targetHeight}
     } catch (e: any) {
         const {Body, ...rest} = s3Object
-        throw withErrorContext(e, "processImage", {type, s3Object: rest})
+        throw errorWithContext(e, "processImage", {type, s3Object: rest})
     }
 }
 
@@ -127,7 +127,7 @@ async function saveUpload(buffer: Buffer, sub: string, type: UploadType) {
         })
         return target
     } catch (e: any) {
-        throw withErrorContext(e, "saveTransformedImage", {
+        throw errorWithContext(e, "saveTransformedImage", {
             buffer: buffer?.subarray(0, 32).toString('hex'),
             length: buffer?.length,
             target,
@@ -144,6 +144,6 @@ async function deleteUpload(sub: string, id: string) {
             Key: key
         })
     } catch (e: any) {
-        throw withErrorContext(e, "deleteUpload", {key})
+        throw errorWithContext(e, "deleteUpload", {key})
     }
 }

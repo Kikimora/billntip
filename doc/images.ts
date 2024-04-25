@@ -4,10 +4,10 @@ import Paths from "../src/images/paths";
 export default function (api: OpenAPIBuilder) {
     api.paths(Paths).spec = {
         'DELETE /upload/{id}': {
-            tags: ['images']
+            tags: ['Images']
         },
         'POST /upload/{id}': {
-            tags: ['images']
+            tags: ['Images']
         },
         'POST /uploads': {
             description: `
@@ -40,7 +40,7 @@ async function uploadImage(response: CreateUploadResponse) {
 }
 \`\`\`
             `,
-            tags: ['images']
+            tags: ['Images']
         }
     }
 }

@@ -1,12 +1,12 @@
-import {D, SchemaType, table, TableSchema} from "@app/dynamodb";
+import {Type, SchemaType, table, TableSchema} from "@app/dynamodb";
 import _ from "lodash";
 import {KeySchema, Table} from "@app/dynamodb/schema";
 
 const DataTable = process.env.TABLE ?? _.throw("TABLE required")
 
 const key = {
-    pk: D.String,
-    sk: D.String, //TODO template literal type here e.g. `business#${id}`,
+    pk: Type.String,
+    sk: Type.String, //TODO template literal type here e.g. `business#${id}`,
 } as const;
 
 type XXX = SchemaType<{
@@ -24,76 +24,76 @@ const xxx1: XXX = {
 }
 
 export const Business = table(DataTable, {
-    pk: D.String as `b_${string}`,
-    sk: D.String as "business"
+    pk: Type.String as `b_${string}`,
+    sk: Type.String as "business"
 }, {
     //business cannot spam invites
-    maxInvites: D.Number,
-    remainingInvites: D.Number, // remainingInvites = MIN(maxInvites, (now - lastInviteTs)/recharge speed - 1)
-    lastInviteTs: D.Number
+    maxInvites: Type.Number,
+    remainingInvites: Type.Number, // remainingInvites = MIN(maxInvites, (now - lastInviteTs)/recharge speed - 1)
+    lastInviteTs: Type.Number
 })
 
 export const Managers = table(DataTable, {
-    pk: D.String as `b_${string}`,
-    sk: D.String as `manager_${string}`
+    pk: Type.String as `b_${string}`,
+    sk: Type.String as `manager_${string}`
 }, {
-    uid: D.String,  //uid, trigger item addition into the business_users GSI
-    role: D.String,
+    uid: Type.String,  //uid, trigger item addition into the business_users GSI
+    role: Type.String,
 })
 
 export const ManagersIndex = table(DataTable, {
-    uid: D.String as `u_${string}`,
-    sk: D.String as `manager_${string}`
+    uid: Type.String as `u_${string}`,
+    sk: Type.String as `manager_${string}`
 }, {
-    pk: D.String as `b_${string}`,
-    role: D.String,
+    pk: Type.String as `b_${string}`,
+    role: Type.String,
 })
 
 export const Invites = table(DataTable, {
-    pk: D.String as `b_${string}`,
-    sk: D.String as `i_${string}`
+    pk: Type.String as `b_${string}`,
+    sk: Type.String as `i_${string}`
 }, {
-    uid: D.String,       //uid, trigger item addition into the business_users GSI
-    invited_at: D.Number,
-    accepted_at: D.Number,
-    team: D.String
+    uid: Type.String,       //uid, trigger item addition into the business_users GSI
+    invited_at: Type.Number,
+    accepted_at: Type.Number,
+    team: Type.String
 })
 
 // b_${id}, emp_${uid}
 // u_{uid}, emp_${uid} - business_users GSI
 export const Employees = table(DataTable, {
-    pk: D.String as `b_${string}`,
-    sk: D.String as `emp_${string}`
+    pk: Type.String as `b_${string}`,
+    sk: Type.String as `emp_${string}`
 }, {
-    uid: D.String,       //uid, trigger item addition into the business_users GSI
-    invited_at: D.Number,
-    accepted_at: D.Number,
-    team: D.String
+    uid: Type.String,       //uid, trigger item addition into the business_users GSI
+    invited_at: Type.Number,
+    accepted_at: Type.Number,
+    team: Type.String
 })
 
 // b_${id}, p_${ulid}
 export const Payouts = table(DataTable, key, {
-    team: D.String,
-    ts: D.Number,
-    totalAmount: D.Number,
-    currency: D.String,
+    team: Type.String,
+    ts: Type.Number,
+    totalAmount: Type.Number,
+    currency: Type.String,
 })
 
 // b_${id}, e_{type}_{ulid}
 // type - emp, p
 // u_{uid}, e_{type}_{ulid} - business_users GSI
 export const BusinessEvents = table(DataTable, key, {
-    uid: D.String,    //uid, trigger item addition into the business_users GSI
-    ts: D.Number,
+    uid: Type.String,    //uid, trigger item addition into the business_users GSI
+    ts: Type.Number,
     //emp - Employee
-    status: D.String, //Accepted, Terminated
+    status: Type.String, //Accepted, Terminated
     //p - Payout
-    amount: D.Number
+    amount: Type.Number
 })
 
 // u_#{id}, 'user'
 export const Users = table(DataTable, key, {
-    mangoPayUid: D.String
+    mangoPayUid: Type.String
 })
 // u_#{id}, 'settings'
 // u_#{id}, 'profile'

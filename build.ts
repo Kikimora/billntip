@@ -39,7 +39,7 @@ function buildAndUpdate(options: any) {
         }
         await Promise.all(_.values(builder.buildTasks))
 
-        if (options.update || options.publish) {
+        if (options.create || options.publish) {
             console.log("Updating AWS Lambda: ", lambda)
             await builder.update(lambda, options.publish)
         }

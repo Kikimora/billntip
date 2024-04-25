@@ -5,7 +5,8 @@ import {Context, APIGatewayProxyEvent} from "aws-lambda"
 import _ from "lodash";
 import {CompiledSchema, compileSchema, Schema} from "./matcher";
 
-type TraceAttributes = { [k: string]: Serializable | undefined | null }
+export type TraceAttributes = { [k: string]: Serializable | undefined | null }
+export type ErrorContext = { name: string, value?: TraceAttributes }
 
 /**
  * Metric measurement units
@@ -245,7 +246,7 @@ export class EMF<Metrics extends string = never, Dimensions extends string = nev
             EMFTracer.info("reportMetrics", {reason, events})
 
             if (dimensionValues == undefined && cloudWatch.Dimensions.length > 0) {
-                throw EMFTracer.addContext(
+                throw EMFTracer.errorWithContext(
                     new Error("cannot report metrics without dimensions"), {
                         dimensions: cloudWatch.Dimensions,
                         reason
@@ -586,21 +587,7 @@ export class EventRecorder {
     }
 }
 
-/**
- * Default tracing options overrides for a request.
- */
-interface TracingSessionOptions extends TracingOptions {
-    /**
-     * Request event
-     */
-    event: any,
-    /**
-     * AWS Lambda context
-     */
-    context?: Context
-}
-
-export const ErrorContext = Symbol('error_context')
+const ErrorContext = Symbol('error_context')
 
 /**
  * Adds error context to the error and returns it
@@ -638,8 +625,30 @@ export function errorContext(e: any, tag: string, value?: TraceAttributes): Reco
  * @param name - error context name
  * @param value - error context value
  */
-export function withErrorContext(e: any, name: string, value?: TraceAttributes): any {
-    errorContext(e, name, value)
+export function errorWithContext(e: any, name: string, value?: TraceAttributes): any
+/**
+ * Adds context to the error and then returns it.
+ * @example - mapping internal error into app specific errors while reusing context information.
+ * const context = { name: "MyOperation", value: { param1: 1, param2: "username" } }
+ * try {
+ *     someOperation(param)
+ * } catch (e: any) {
+ *     id (e instanceof X) { throw withErrorContext(new ErrorX(), context) }
+ *     id (e instanceof Y) { throw withErrorContext(new ErrorY(), context) }
+ *     throw withErrorContext(e, context)
+ * }
+ * @param e - error
+ * @param context - error context
+ * @param value - additional error context, merged with {@link context.value}.
+ */
+export function errorWithContext(e: any, context: ErrorContext, value?: TraceAttributes): any
+
+export function errorWithContext(e: any, context: ErrorContext | string, value?: TraceAttributes): any {
+    if (typeof context === 'string') {
+        errorContext(e, context, value)
+    } else {
+        errorContext(e, context.name, {...context.value, ...value})
+    }
     return e
 }
 
@@ -793,9 +802,10 @@ export class Tracer {
      * @param tag - tracer session tag
      * @param event - AWS lambda event
      * @param context - AWS Lambda context
+     * @param options - override default options
      */
-    startSession(tag: string, event: any, context?: Context): TracingSession {
-        return new TracingSession(`${this.tag}.${tag}`, event, context)
+    startSession(tag: string, event: any, context?: Context, options?: TracingOptions): TracingSession {
+        return new TracingSession(`${this.tag}.${tag}`, event, context, options)
     }
 
     /**
@@ -811,8 +821,8 @@ export class Tracer {
      *     throw trace.addContext(e, {param})
      * }
      */
-    addContext(error: any, context?: TraceAttributes): ReturnType<typeof withErrorContext> {
-        return withErrorContext(error, this.tag, context)
+    errorWithContext(error: any, context?: TraceAttributes): ReturnType<typeof errorWithContext> {
+        return errorWithContext(error, this.tag, context)
     }
 
     /**
@@ -898,11 +908,11 @@ export class Tracer {
 class TracingSession extends Tracer {
     private readonly flushEvents: () => void;
 
-    constructor(tag: string, event: any, context?: Context) {
+    constructor(tag: string, event: any, context?: Context, options?: TracingOptions) {
         super(tag);
         if (RecorderStore.getStore() !== undefined)
             throw new Error("Cannot start session when another session is in progress")
-        const sessionRecorder = new EventRecorder(DefaultOptions)
+        const sessionRecorder = new EventRecorder(options ?? DefaultOptions)
         const isImmediate = sessionRecorder.config.triggers.request({event, context});
         sessionRecorder.reset(isImmediate ? "immediate" : "accumulating")
         RecorderStore.enterWith(sessionRecorder)

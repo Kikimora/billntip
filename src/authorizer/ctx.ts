@@ -1,6 +1,6 @@
 import {z} from "zod";
 import _ from "lodash";
-import {userPoolDetails} from "../cognito";
+import {userPoolClientDetails} from "../cognito";
 import {toSeconds} from "@app/util";
 import {EMF, Tracer} from "@app/diagnostics";
 import * as process from "process";
@@ -97,7 +97,7 @@ export function useVariables() {
  */
 export async function initModuleVariables(requestId?: string) {
     const {userPoolId, clientId} = Env
-    const userPoolClient = await userPoolDetails(userPoolId, clientId)
+    const userPoolClient = await userPoolClientDetails(userPoolId, clientId)
     const units = userPoolClient.TokenValidityUnits ?? _.throw("User pool must have tokens validity setting.")
     const accessTokenTtl = userPoolClient.AccessTokenValidity ?? _.throw("User pool must have access token validity setting.");
     const accessTokenUnits = units.AccessToken ?? _.throw("User pool must have access token validity setting.")

@@ -1,13 +1,23 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
-import {KeySchema, TableType, SchemaType, ExpressionGenerator, AttributesSchema, TableSchema} from "./schema";
-import {prepareCommand} from "./util";
+import {
+    AttributesSchema,
+    ExpressionGenerator,
+    KeySchema,
+    SchemaType,
+    TableSchema,
+    TableType,
+    UpdateContext,
+    updateExpression,
+    UpdateGenerator
+} from "./schema";
+import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
 /**
  * Defines {@link ddb.TransactWriteItem} for a {@link ddb.TransactWriteItemsCommand}
  */
-type TransactWriteItem<T, V> =
+export type TransactWriteItem<T, V = unknown> =
     TransactPutItem<T, V>
     | TransactUpdateItem<T, V>
     | TransactDeleteItem<T, V>
@@ -62,7 +72,7 @@ interface TransactUpdateItem<T, V> {
     /**
      * Function generating {@link ddb.Update.UpdateExpression}
      */
-    expression: ExpressionGenerator<T, SchemaType<KeySchema<T>> & V>
+    expression: UpdateGenerator<T, SchemaType<KeySchema<T>> & V>
     /**
      * Function generating {@link ddb.Update.ConditionExpression}
      */
@@ -128,7 +138,7 @@ interface TransactCheckItem<T, V> {
 /**
  * Builds batch write operation.
  */
-interface TransactWriteBuilder {
+export interface TransactWriteBuilder {
     /**
      * Add batch of items to {@link ddb.TransactWriteItemsCommandInput}.
      * @param tbl - target table
@@ -175,10 +185,15 @@ export function transactWrite(): TransactWriteBuilder {
     let clientRequestToken: string | undefined
 
     return {
+        /**
+         * Add transaction operation. Operations with the same key replace each other, the last one wins.
+         * @param tbl - target table
+         * @param txItem - operation item
+         */
         add<Table extends TableType<Table>, V>(tbl: Table, txItem: TransactWriteItem<Table, V>) {
             switch (txItem.action) {
                 case "put": {
-                    const dynamoItem = marshall({...txItem.item, ...txItem.key})
+                    const dynamoItem = marshall({...txItem.item, ...txItem.key}, MarshalOptions)
                     const context = {...txItem.values, ...txItem.item, ...txItem.key} as SchemaType<TableSchema<Table>> & V;
                     const {
                         attributeNames,
@@ -188,7 +203,6 @@ export function transactWrite(): TransactWriteBuilder {
                         val
                     } = prepareCommand(tbl, context, dynamoItem);
                     const {condition} = txItem
-
                     items.push({
                         Put: {
                             TableName: tbl.name,
@@ -202,7 +216,7 @@ export function transactWrite(): TransactWriteBuilder {
                     break;
                 }
                 case "update": {
-                    const dynamoKey = marshall(txItem.key)
+                    const dynamoKey = marshall(txItem.key, MarshalOptions)
                     const context = {...txItem.values, ...txItem.key} as SchemaType<KeySchema<Table>> & V;
                     const {
                         attributeNames,
@@ -212,12 +226,13 @@ export function transactWrite(): TransactWriteBuilder {
                         val
                     } = prepareCommand(tbl, context, dynamoKey);
                     const {expression, condition} = txItem
-
+                    const update = updateExpression(expression(new UpdateContext(val, key, attr)))
+                    if (_.isEmpty(update)) break
                     items.push({
                         Update: {
                             TableName: tbl.name,
                             Key: dynamoKey,
-                            UpdateExpression: expression?.({key, attr, val}),
+                            UpdateExpression: update,
                             ConditionExpression: condition?.({key, attr, val}),
                             ReturnValuesOnConditionCheckFailure: txItem.returnOnConditionFailure,
                             ExpressionAttributeNames: !_.isEmpty(attributeNames) ? attributeNames : undefined,
@@ -228,7 +243,7 @@ export function transactWrite(): TransactWriteBuilder {
                 }
                 case "delete": {
                     const context = {...txItem.values, ...txItem.key} as SchemaType<KeySchema<Table>> & V;
-                    const dynamoKey = marshall(txItem.key)
+                    const dynamoKey = marshall(txItem.key, MarshalOptions)
                     const {
                         attributeNames,
                         attributeValues,
@@ -252,7 +267,7 @@ export function transactWrite(): TransactWriteBuilder {
                 }
                 case "check": {
                     const context = {...txItem.values, ...txItem.key} as SchemaType<TableSchema<Table>> & V;
-                    const dynamoKey = marshall(txItem.key)
+                    const dynamoKey = marshall(txItem.key, MarshalOptions)
                     const {
                         attributeNames,
                         attributeValues,

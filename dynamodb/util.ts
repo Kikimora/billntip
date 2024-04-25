@@ -17,7 +17,9 @@ export function prepareCommand<T extends TableType<T>, V>(tbl: T,
     }
 
     function addToValues(key: string, val: any) {
-        attributeValues[key] = marshalledValues?.[key.slice(1)] ?? convertToAttr(val)
+        attributeValues[key] = marshalledValues?.[key.slice(1)] ?? (
+            val === undefined ? {NULL: true} : convertToAttr(val, MarshalOptions)
+        )
     }
 
     return {
@@ -27,4 +29,8 @@ export function prepareCommand<T extends TableType<T>, V>(tbl: T,
         attr: attributeGenerator(tbl.attributes, addToAttributes),
         val: valueGenerator(context, addToValues)
     };
+}
+
+export const MarshalOptions = {
+    removeUndefinedValues: true
 }

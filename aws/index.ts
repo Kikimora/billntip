@@ -7,11 +7,11 @@ import * as pulumi from "@pulumi/pulumi";
 dotenv.config();
 
 // Outputs
-import {locksTable, sessionsTable, dataTable} from "./dynamodb"
+import {locksTable, sessionsTable, dataTable, usersTable} from "./dynamodb"
 import Cognito from "./cognito"
 import {cognitoClients} from "./api"
 
-export const dynamodb = {locksTable, sessionsTable, dataTable}
+export const dynamodb = {locksTable, sessionsTable, dataTable, usersTable}
 export const cognito = {
     ...Cognito,
     clients: cognitoClients

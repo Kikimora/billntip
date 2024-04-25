@@ -1,32 +1,25 @@
 import {
-    AdminAddUserToGroupCommand,
-    AdminCreateUserCommand,
-    AdminLinkProviderForUserCommand,
-    AdminSetUserPasswordCommand, AdminUpdateUserAttributesCommand,
-    CognitoIdentityProviderClient, DescribeUserPoolClientCommand,
-    DescribeUserPoolCommand,
-    ListUsersCommand
+    CognitoIdentityProvider
 } from "@aws-sdk/client-cognito-identity-provider";
 import _ from "lodash";
 import {generate} from "generate-password";
 import {LRUCache} from "lru-cache";
 import {PreSignUpTriggerEvent} from "aws-lambda";
 
-const cognito = new CognitoIdentityProviderClient()
+const defaultCognito = new CognitoIdentityProvider()
 
-export async function findUserByEmail(userPoolId: string, email: string) {
-    const command = new ListUsersCommand({
+export async function findUserByEmail(userPoolId: string, email: string, cognito: CognitoIdentityProvider = defaultCognito) {
+    const result = await cognito.listUsers({
         UserPoolId: userPoolId,
         AttributesToGet: ['email'],
         Filter: `email = "${email}"`,
         Limit: 1
     });
-    const result = await cognito.send(command);
     return result.Users?.[0]
 }
 
-export async function adminLinkUserAccounts(userPoolId: string, username: string, providerName: string, providerUserId: string) {
-    const command = new AdminLinkProviderForUserCommand({
+export async function adminLinkUserAccounts(userPoolId: string, username: string, providerName: string, providerUserId: string, cognito: CognitoIdentityProvider = defaultCognito) {
+    await cognito.adminLinkProviderForUser({
         DestinationUser: {
             ProviderAttributeValue: username,
             ProviderName: 'Cognito',
@@ -38,10 +31,11 @@ export async function adminLinkUserAccounts(userPoolId: string, username: string
         },
         UserPoolId: userPoolId,
     })
-    await cognito.send(command)
 }
 
-export async function adminCreateUser(userPoolId: string, email: string, attrs?: { [name: string]: string }) {
+export async function adminCreateUser(userPoolId: string, email: string, attrs?: {
+    [name: string]: string
+}, cognito: CognitoIdentityProvider = defaultCognito) {
 
     function* attributes() {
         yield {Name: 'email', Value: email}
@@ -53,20 +47,18 @@ export async function adminCreateUser(userPoolId: string, email: string, attrs?:
         }
     }
 
-    const command = new AdminCreateUserCommand({
+    const result = await cognito.adminCreateUser({
         UserPoolId: userPoolId,
         // SUPRESS prevents sending an email with the temporary password
         // to the user on account creation
         MessageAction: 'SUPPRESS',
         Username: email,
         UserAttributes: Array.from(attributes()),
-    });
-
-    const result = await cognito.send(command)
+    })
     return result.User!
 }
 
-export async function adminSetUserPassword(userPoolId: string, username: string, password?: string) {
+export async function adminSetUserPassword(userPoolId: string, username: string, password?: string, cognito: CognitoIdentityProvider = defaultCognito) {
 
     if (password === undefined) {
         const userPool = await getOrFetchUserPoolById(userPoolId)
@@ -80,48 +72,43 @@ export async function adminSetUserPassword(userPoolId: string, username: string,
         })
     }
 
-    const command = new AdminSetUserPasswordCommand({
+    await cognito.adminSetUserPassword({
         Password: password,
         UserPoolId: userPoolId,
         Username: username,
         Permanent: true,
-    });
-    await cognito.send(command)
+    })
 }
 
-export async function adminAddUserToGroup(userPoolId: string, username: string, groupName: string) {
-    const command = new AdminAddUserToGroupCommand({
+export async function adminAddUserToGroup(userPoolId: string, username: string, groupName: string, cognito: CognitoIdentityProvider = defaultCognito) {
+    await cognito.adminAddUserToGroup({
         GroupName: groupName,
         UserPoolId: userPoolId,
         Username: username,
-    });
-    await cognito.send(command)
+    })
 }
 
-export async function adminUpdateAttributes(userPoolId: string, username: string, attributes: Record<string, string>) {
-    const command = new AdminUpdateUserAttributesCommand({
+export async function adminUpdateAttributes(userPoolId: string, username: string, attributes: Record<string, string>, cognito: CognitoIdentityProvider = defaultCognito) {
+    return await cognito.adminUpdateUserAttributes({
         UserPoolId: userPoolId,
         Username: username,
         UserAttributes: Object.entries(attributes).map(([k, v]) => ({
             Name: k, Value: v
         }))
-    });
-    return await cognito.send(command)
+    })
 }
 
-export async function describeUserPool(userPoolId: string) {
-    const command = new DescribeUserPoolCommand({UserPoolId: userPoolId})
-    const r = await cognito.send(command)
+export async function describeUserPool(userPoolId: string, cognito: CognitoIdentityProvider = defaultCognito) {
+    const r = await cognito.describeUserPool({UserPoolId: userPoolId})
     if (_.isNull(r?.UserPool)) throw new Error(`UserPool ${userPoolId} not found`)
     return r.UserPool!
 }
 
-export async function describeUserPoolClient(userPoolId: string, clientId: string) {
-    const command = new DescribeUserPoolClientCommand({
+export async function describeUserPoolClient(userPoolId: string, clientId: string, cognito: CognitoIdentityProvider = defaultCognito) {
+    const r = await cognito.describeUserPoolClient({
         UserPoolId: userPoolId,
         ClientId: clientId
     })
-    const r = await cognito.send(command)
     if (_.isNull(r?.UserPoolClient))
         throw new Error(`Cannot read Cognito user pool client (${userPoolId}, ${clientId}) parameters. Might be a permission issue.`)
     return r.UserPoolClient!
@@ -130,11 +117,11 @@ export async function describeUserPoolClient(userPoolId: string, clientId: strin
 /**
  * Load and cache user pool details, keep details in memory for several minutes.
  */
-export const userPoolDetails = _.memoize((userPoolId: string, clientId: string) => {
-    return describeUserPoolClient(userPoolId, clientId)
+export const userPoolClientDetails = _.memoize((userPoolId: string, clientId: string, cognito: CognitoIdentityProvider = defaultCognito) => {
+    return describeUserPoolClient(userPoolId, clientId, cognito)
 })
 const cache = new LRUCache({ttl: 300, max: 1});
-userPoolDetails.cache = cache
+userPoolClientDetails.cache = cache
 
 export const getOrFetchUserPoolById = _.memoize(describeUserPool)
 getOrFetchUserPoolById.cache = new LRUCache({max: 10, ttl: 1000 * 60 * 5})

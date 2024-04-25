@@ -1,28 +1,28 @@
 
 import {
-    D,
+    Type,
     attributeGenerator,
     SchemaType,
 } from "@app/dynamodb/schema";
 
 const SampleSchema = {
-    numberArray: D.Array(D.Number),
-    arrayOfArrays: D.Array(D.Array(D.Number)),
-    arrayOfArraysOfObjects: D.Array(D.Array({s: D.String, n: D.Number})),
-    arrayOfNumberMaps: D.Array(D.Map(D.Number)),
-    arrayOfObjectMaps: D.Array(D.Map({s: D.String, n: D.Number})),
-    numberMap: D.Map(D.Number),
-    mapOfMaps: D.Map(D.Map({s: D.String, n: D.Number})),
-    mapOfArrays: D.Map(D.Array(D.Number)),
-    mapOfObjects: D.Map({s: D.String, n: D.Number}),
-    mapOfObjectArrays: D.Map(D.Array({s: D.String, n: D.Number})),
-    basic: D.Number,
+    numberArray: Type.Array(Type.Number),
+    arrayOfArrays: Type.Array(Type.Array(Type.Number)),
+    arrayOfArraysOfObjects: Type.Array(Type.Array({s: Type.String, n: Type.Number})),
+    arrayOfNumberMaps: Type.Array(Type.Map(Type.Number)),
+    arrayOfObjectMaps: Type.Array(Type.Map({s: Type.String, n: Type.Number})),
+    numberMap: Type.Map(Type.Number),
+    mapOfMaps: Type.Map(Type.Map({s: Type.String, n: Type.Number})),
+    mapOfArrays: Type.Map(Type.Array(Type.Number)),
+    mapOfObjects: Type.Map({s: Type.String, n: Type.Number}),
+    mapOfObjectArrays: Type.Map(Type.Array({s: Type.String, n: Type.Number})),
+    basic: Type.Number,
     obj: {
-        s1: D.String,
-        n1: D.Number,
+        s1: Type.String,
+        n1: Type.Number,
         obj: {
-            s2: D.String,
-            n2: D.Number
+            s2: Type.String,
+            n2: Type.Number
         }
     }
 } as const
@@ -63,6 +63,11 @@ describe("Attribute generator", () => {
     })
 
     const schema = attributeGenerator(SampleSchema, addToExpressionAttributes);
+
+    it("Attributes", () => {
+        expect(`${schema("key")}`).toBe("#key")
+        expect(attrs()).toContainAllValues(["#key"])
+    })
 
     it("Scalars", () => {
         expect(`${schema.basic}`).toBe("#basic")

@@ -30,9 +30,12 @@
   "include": [
     "*.ts",
     "src/**/*",
-    "doc/**/*",
     "test/**/*",
-    "aws/**/*"
+    "aws/**/*",
+    "diagnostics/**/*",
+    "doc/**/*",
+    "dynamodb/**/*",
+    "lambda/**/*",
   ],
   "ts-node": {
     "require": ["./tsconfig-paths"]

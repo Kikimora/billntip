@@ -66,7 +66,7 @@ export class NotAuthorizedError extends Error implements HttpError {
         super(message);
     }
 
-    public readonly statusCode = 401
+    public readonly statusCode = '401'
 }
 
 /**

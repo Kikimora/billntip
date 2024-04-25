@@ -1,11 +1,12 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
 import {KeySchema, TableType, SchemaType, AttributesSchema,} from "./schema";
+import {MarshalOptions} from "@app/dynamodb/util";
 
 /**
  * DynamoDb {@link ddb.WriteRequest} for a given {@link Table}
  */
-type BatchWriteItem<T> = BatchPutItem<T> | BatchDeleteItem<T>
+export type BatchWriteItem<T> = BatchPutItem<T> | BatchDeleteItem<T>
 
 /**
  * Request to put an item into the table (see {@link ddb.PutRequest}).
@@ -42,7 +43,7 @@ interface BatchDeleteItem<T> {
 /**
  * Builds batch write operation.
  */
-interface BatchWriteBuilder {
+export interface BatchWriteBuilder {
     /**
      * Add batch of items to {@link ddb.BatchWriteItemCommandInput}.
      * @param tbl - target table
@@ -83,22 +84,23 @@ export function batchWrite(): BatchWriteBuilder {
 
     return {
         add<Table extends TableType<Table>>(tbl: Table, items: BatchWriteItem<Table>[]) {
-            requests[tbl.name] = items.map(x => {
+            const batch = requests[tbl.name] ?? (requests[tbl.name] = [])
+            batch.push(...items.map(x => {
                 switch (x.action) {
                     case "put":
                         return {
                             PutRequest: {
-                                Item: marshall({...x.key, ...x.item})
+                                Item: marshall({...x.key, ...x.item}, MarshalOptions)
                             }
                         }
                     case "delete":
                         return {
                             DeleteRequest: {
-                                Key: marshall(x.key)
+                                Key: marshall(x.key, MarshalOptions)
                             }
                         }
                 }
-            })
+            }))
             return this
         },
         returnConsumedCapacity(capacity: ddb.ReturnConsumedCapacity) {

@@ -1,5 +1,5 @@
-import * as ddb from "@aws-sdk/client-dynamodb"
-import {convertToAttr} from "@aws-sdk/util-dynamodb";
+import * as ddb from "@aws-sdk/client-dynamodb";
+import _ from "lodash";
 
 /**
  * Describes structure of a DynamoDB record. That is, any entries except [`x:{$array:...}`]{@link DynamoDbArraySchema} or [`x:{$map:...}`]{@link DynamoDbMapSchema}.
@@ -74,7 +74,10 @@ export type SchemaType<T> = (
 /**
  * Anything with `toString()` method.
  */
-interface StringBuilder { toString(): string }
+interface StringBuilder {
+    toString(): string,
+    valueOf():any
+}
 
 type KeyOf<T> = Exclude<keyof T, symbol>
 
@@ -87,19 +90,21 @@ type KeyOf<T> = Exclude<keyof T, symbol>
  * console.log(user.recentTransactions(1).amount) //logs #recentTransactions[1].#amount
  * console.log(user.pictures('50x50')) //logs #pictures.#50x50
  */
-export type AttributeGenerator<T> =
-      T extends DynamoDbBasicType ? StringBuilder
+export type AttributeGenerator<T> = (
+      T extends DynamoDbBasicType ? string
     : T extends DynamoDbArraySchema ? (idx:number)=>AttributeGenerator<T['$array']> & StringBuilder
     : T extends DynamoDbMapSchema ? (idx:string)=>AttributeGenerator<T['$map']> & StringBuilder
     : T extends DynamoDbSchema ? { [k in KeyOf<T>]: AttributeGenerator<T[k]> & StringBuilder; }
     : T extends string ? T
     : never
+    )
+    & ((val: string) => string)
 //<!-- @formatter:on -->
 
 /**
  * {@link DynamoDbSchema} building blocks.
  */
-export namespace D {
+export namespace Type {
     /**
      * DynamoDb string.
      */
@@ -149,19 +154,22 @@ export namespace D {
  * @param callback - callback function to call each time an attribute generated.
  */
 export function attributeGenerator<T>(schema: T, callback?: (path: string[]) => void): AttributeGenerator<T> {
-    const attr = Object.create({
-        toString(this: BuilderHolder) {
-            return this[__builder]?.toString() ?? ""
-        }
-    })
+    const attr = function (attributeName: string) {
+        return new Builder(attributeName, undefined, callback)
+    }
+    attr.toString = function (this: BuilderHolder) {
+        return this[__builder]?.toString() ?? ""
+    }
 
-    if (typeof schema !== "object") return attr
+    if (schema === null || typeof schema !== "object")
+        return attr as any
 
-    for (const [key, type] of Object.entries(schema as object)) {
+    for (const [key, type] of Object.entries(schema)) {
         if (isBasicDynamoType(type)) {
             Object.defineProperty(attr, key, {
                 get: function (this: BuilderHolder) {
-                    return new Builder(key, this[__builder], callback)
+                    const builder = new Builder(key, this[__builder], callback);
+                    return builder.toString()
                 }
             })
         }
@@ -187,7 +195,7 @@ export function attributeGenerator<T>(schema: T, callback?: (path: string[]) => 
             })
         }
     }
-    return attr
+    return attr as any
 }
 
 /**
@@ -206,34 +214,43 @@ export type ValuesGenerator<T> = {
  * Update expression context provides normal context variables (e.g. key, attr, val) as well as helper methods to
  * generate common update expression such as SET #x1=:x1, #x2=:x2 and REMOVE #x1, #x2
  */
-export class UpdateContext<T, V> {
+export class UpdateContext<T, V = unknown> {
+
+    public readonly ctx: UpdateContext<T, V>
 
     constructor(readonly val: ValuesGenerator<V>,
                 readonly key: AttributeGenerator<KeySchema<T>>,
                 readonly attr: AttributeGenerator<AttributesSchema<T>>) {
+        this.ctx = this
     }
 
-    set(data: Partial<SchemaType<TableSchema<T>>>) {
-        const attr = this.attr as any
-        const key = this.key as any
-        return "SET " + Object.entries(data).map(([name, value]) => {
-            const dynamoKey = ":" + name
-            if (name in attr) {
-                return `${attr[name]} = ${this.val(value, dynamoKey)}`
-            }
-            return `${key[name]} = ${this.val(value, dynamoKey)}`
-        }).join(", ")
+    updateMap(mode: 'create' | 'update',
+              key: keyof AttributeGenerator<AttributesSchema<T>>,
+              values: Record<string, unknown>) {
+        return mode == 'update'
+            ? _(values)
+                .mapKeys((_1, name) => this.attr[key](name))
+                .mapValues((value) => this.val(value))
+                .value()
+            : `${this.attr[key]} = ${this.val(values)}`;
     }
 
-    remove(...keys: KeyOf<TableSchema<T>>[]) {
-        const a = this.attr as any
-        const k = this.key as any
-        return "REMOVE " + keys.map((key) => {
-            if (key in this.attr) {
-                return a[key].toString()
-            }
-            return k[key].toString()
-        }).join(", ")
+    set(collection: Partial<SchemaType<TableSchema<T>>>): string
+    set(collection: unknown[], expressionGenerator: (value: any, index: number) => string): string
+    set(collection: object, expressionGenerator: (value: any, key: string) => string): string
+    set(collection: any, x?: (value: any, key?: any) => string): string {
+        let expressions: string[]
+        if (x === undefined) {
+            expressions = _.map(collection, (value, name) => {
+                if (name in this.attr) {
+                    return `${this.attr[name]} = ${this.val(value)}`
+                }
+                return `${this.key[name]} = ${this.val(value)}`
+            })
+        } else {
+            expressions = _.map(collection, x)
+        }
+        return 'SET ' + expressions.join(', ')
     }
 }
 
@@ -337,6 +354,10 @@ class Builder implements StringBuilder {
                 readonly callback?: (path: string[]) => void) {
     }
 
+    valueOf() {
+        return this.toString()
+    }
+
     toString() {
         const path = []
         let builder: Builder
@@ -431,6 +452,10 @@ export type AttributesSchema<T> = T extends Table<any, any> ? T['attributes'] : 
  */
 export type TableSchema<T> = T extends Table<any, any> ? (T['key'] & T['attributes']) : never
 
+export type TableSchemaType<T> = KeySchemaType<T> & AttributesSchemaType<T>
+export type AttributesSchemaType<T> = T extends Table<any, any> ? Partial<SchemaType<T['attributes']>> : never
+export type KeySchemaType<T> = T extends Table<any, any> ? SchemaType<T['key']> : never
+
 /**
  * Make DynamoDB table definition.
  * @param name - DynamoDB table name
@@ -486,14 +511,62 @@ export type ExpressionGenerator<Table, V> = (context: {
 export type ProjectionGenerator<Table> = (context: {
     key: AttributeGenerator<KeySchema<Table>>,
     attr: AttributeGenerator<AttributesSchema<Table>>
-}) => string
+}) => string[]
+
+type SetExpression = string | Record<string, string> | (string | Record<string, string>)[];
+/**
+ * DynamoDB update expression
+ */
+type UpdateExpression = {
+    set?: SetExpression,
+    add?: string | string[],
+    remove?: string | string[],
+    delete?: string | string[],
+}
+
+export function updateExpression(exp: string | string[] | UpdateExpression) {
+    if (exp === undefined) return undefined
+    if (typeof exp === "string") return exp
+    if (Array.isArray(exp))
+        return _.compact(exp).join(", ")
+
+    //deal with UpdateExpression
+    const expression = []
+    for (let [op, value] of Object.entries(exp)) {
+        if (value === undefined) continue
+        //op is SET, ADD, REMOVE or DELETE
+        const statement = []
+        if (typeof value === "string") {
+            statement.push(value)
+        } else if (Array.isArray(value)) {
+            //(string | Record<string, string>)[]
+            statement.push(..._.compact(value).map(value => {
+                if (typeof value === "string") {
+                    return value
+                } else {
+                    return processObject(value)
+                }
+            }))
+        } else {
+            //Record<string, string>
+            statement.push(...processObject(value))
+        }
+        if (statement.length > 0)
+            expression.push(op.toUpperCase() + " " + statement.join(", "))
+    }
+    return expression.join(' ')
+
+    function processObject(exp: Record<string, string>) {
+        return _(exp).map((value, attr) => `${attr} = ${value}`).value()
+    }
+}
 
 /**
  * Function generating a DynamoDB update expression (see {@link ddb.UpdateItemCommandInput.UpdateExpression}).
  * @param builder - update expression builder
  * @return string - generated expression
  */
-export type UpdateGenerator<Table, V> = (context: UpdateContext<Table, V>) => string
+export type UpdateGenerator<Table, V> = (context: UpdateContext<Table, V>) => string | string[] | UpdateExpression
 
 
 /**

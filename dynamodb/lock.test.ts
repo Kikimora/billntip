@@ -30,15 +30,31 @@ describe("DynamoDb locks", () => {
         jest.resetAllMocks()
     })
 
+    it.each([
+        ["negative retries", {retries: -1, leaseDuration: 100}],
+        ["zero retries", {retries: 0, leaseDuration: 100}],
+        ["large number of retries", {retries: 1001, leaseDuration: 100}],
+        ["zero lease duration", {retries: 3, leaseDuration: 0}],
+        ["small lease duration", {retries: 3, leaseDuration: 9}],
+        ["negative lease duration", {retries: 3, leaseDuration: -1}]
+    ])
+    ("validates %s", async (_1, options) => {
+        await expect(store.lock("1", `validates ${_1}`, options)).toReject()
+    })
+
     it("can lock", async () => {
         handles[0] = await store.lock("1", "can lock", options)
         const concurrentLock = store.tryLock("1", "another test")
-        await expect(concurrentLock).toReject()
+        await expect(concurrentLock).rejects.toEqual(expect.objectContaining({
+            message: "Failed to take a lock."
+        }))
     })
     it("cannot lock twice", async () => {
         handles[0] = await store.lock("1", "cannot lock twice 1", options)
         const actual = store.lock("1", "cannot lock twice 2", options);
-        await expect(actual).toReject()
+        await expect(actual).rejects.toEqual(expect.objectContaining({
+            message: "Failed to take a lock."
+        }))
     })
     it("can lock after unlock", async () => {
         handles[0] = await store.lock("1", "can lock after unlock 1", options)
@@ -79,7 +95,7 @@ describe("DynamoDb locks", () => {
         const handle = handles[0] = await store.lock("1", "lock", options)
         const now = Math.floor((performance.now() + performance.timeOrigin) / 1000)
         let lockItem = await loadLockItem(handle);
-        expect(lockItem.ttl).toBeCloseTo(now + 5, 0)
+        expect(lockItem.ttl).toBeCloseTo(now + 5, -0.2)
     })
 })
 

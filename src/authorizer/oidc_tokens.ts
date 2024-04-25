@@ -4,7 +4,7 @@ import http from "../http";
 import {Env, useVariables} from "./ctx";
 import {CognitoJwtVerifier} from "aws-jwt-verify";
 import {CognitoAccessTokenPayload, CognitoIdTokenPayload} from "aws-jwt-verify/jwt-model";
-import {errorContext, withErrorContext} from "@app/diagnostics";
+import {errorContext, errorWithContext} from "@app/diagnostics";
 
 export const accessTokenVerifier = CognitoJwtVerifier.create({
     userPoolId: Env.userPoolId,
@@ -139,7 +139,7 @@ export default class OidcTokens {
                 const error = Error('OIDC server failed with unexpected error')
                 const {client_secret, code, ...request} = params
                 const {data, headers, status} = response
-                throw withErrorContext(error, "authorisationCode", {
+                throw errorWithContext(error, "authorisationCode", {
                     response: {data, headers, status},
                     request
                 })

@@ -212,7 +212,8 @@ describe("Tracer", () => {
             attributes: [
                 {"tag": "test", "attr": "value"},
                 {"tag": "library", "param": "faultyParameter"}
-            ]
+            ],
+            ts: expect.any(Number)
         }))
 
         function faultyFunction(param: string) {
@@ -220,7 +221,7 @@ describe("Tracer", () => {
                 // noinspection ExceptionCaughtLocallyJS
                 throw new Error("Something wrong")
             } catch (e: any) {
-                throw libraryTracer.addContext(e, {param})
+                throw libraryTracer.errorWithContext(e, {param})
             }
         }
     })

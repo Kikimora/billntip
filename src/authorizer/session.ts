@@ -4,7 +4,16 @@ import shortUUID from "short-uuid"
 import {Env, useVariables, AuthTracer} from "./ctx";
 import OidcTokens from "./oidc_tokens";
 import SessionCookie from "./cookie";
-import {D, deleteCommand, getCommand, LockHandle, makeLockStore, putCommand, table, updateCommand} from "@app/dynamodb";
+import {
+    Type,
+    deleteCommand,
+    getCommand,
+    LockHandle,
+    makeLockStore,
+    putCommand,
+    table,
+    updateCommand
+} from "@app/dynamodb";
 import {jwtDecode} from "jwt-decode";
 
 const dynamoDb = new DynamoDB({region: Env.region})
@@ -32,22 +41,42 @@ interface IdToken {
 }
 
 export type SessionContext<Id = IdToken> = {
+    /**
+     * Session identifier.
+     */
+    id: string,
+    /**
+     * Access Token from OIDC provider initiated the session.
+     */
     access_token: string,
+    /**
+     * Parsed Access token.
+     */
     access: object,
+    /**
+     * ID Token from OIDC provider initiated the session.
+     */
     id_token: string,
+    /**
+     * Parsed ID Token
+     */
     profile: Id,
+    /**
+     * Access token expiration time as **seconds** since the [epoch]{@link https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date#the_epoch_timestamps_and_invalid_date}.
+     * Calculated at tokens arrival as "{@link now} + {@link OidcTokens.expiresIn}".
+     */
     expires_at: number
 }
 
 export const Sessions = table(Env.sessionTable,
-    {session_id: D.String} as const,
+    {session_id: Type.String} as const,
     {
-        access_token: D.String,
-        id_token: D.String,
-        refresh_token: D.String,
-        expires_at: D.Number,
-        refresh_token_expires_at: D.Number,
-        cached_till: D.Number
+        access_token: Type.String,
+        id_token: Type.String,
+        refresh_token: Type.String,
+        expires_at: Type.Number,
+        refresh_token_expires_at: Type.Number,
+        cached_till: Type.Number
     } as const)
 
 /**
@@ -123,10 +152,25 @@ export default class SessionData implements SessionItem {
      * Load a session record while placing a lock on it. Use {@link SessionData#release} or
      * {@link SessionData#remove} to release the lock.
      */
-    public static async loadAndLock(sessionId: string) {
+    public static async fetchLocked(sessionId: string) {
+        async function lock() {
+            try {
+                const {requestId} = useVariables()
+                return await store.lock(sessionId, requestId, {retries: 5, leaseDuration: 100, autoBump: true})
+            } catch (e: any) {
+                throw tracer.errorWithContext(e, {sessionId})
+            }
+        }
+
+        return SessionData._fetch(sessionId, await lock())
+    }
+
+    public static async fetch(sessionId: string) {
+        return SessionData._fetch(sessionId)
+    }
+
+    private static async _fetch(sessionId: string, sessionLock?: LockHandle) {
         try {
-            const {requestId} = useVariables()
-            const sessionLock = await store.lock(sessionId, requestId, {retries: 5, heartbeatInterval: 100})
             const command = getCommand(Sessions, {key: {session_id: sessionId}});
             const {Item: attrs} = await dynamoDb.send(command)
             if (attrs == null) return null
@@ -141,9 +185,10 @@ export default class SessionData implements SessionItem {
             });
             return new SessionData(item, false, sessionLock)
         } catch (e) {
-            throw tracer.addContext(e, {sessionId})
+            throw tracer.errorWithContext(e, {sessionId})
         }
     }
+
 
     /**
      * Release session data lock. This should be the last method to call on a session data instance.
@@ -154,7 +199,7 @@ export default class SessionData implements SessionItem {
         try {
             await lock.unlock()
         } catch (e) {
-            throw tracer.addContext(e, {sessionId, lock})
+            throw tracer.errorWithContext(e, {sessionId, lock})
         }
     }
 
@@ -216,7 +261,7 @@ export default class SessionData implements SessionItem {
         try {
             await dynamoDb.send(command)
         } catch (e) {
-            throw tracer.addContext(e, {command: command.input})
+            throw tracer.errorWithContext(e, {command: command.input})
         }
     }
 
@@ -240,7 +285,7 @@ export default class SessionData implements SessionItem {
         try {
             await dynamoDb.send(command)
         } catch (e) {
-            throw tracer.addContext(e, {sessionId})
+            throw tracer.errorWithContext(e, {sessionId})
         }
     }
 
@@ -272,7 +317,7 @@ export default class SessionData implements SessionItem {
         try {
             await dynamoDb.send(command)
         } catch (e) {
-            throw tracer.addContext(e, {sessionId})
+            throw tracer.errorWithContext(e, {sessionId})
         }
     }
 
@@ -289,6 +334,7 @@ export default class SessionData implements SessionItem {
      */
     context(): SessionContext {
         return {
+            'id': this.sessionId,
             'access': jwtDecode(this.accessToken),
             'access_token': this.accessToken,
             'profile': jwtDecode(this.idToken),
@@ -313,7 +359,7 @@ function parseSessionItem(x: Partial<SessionItem>): SessionItem {
     try {
         return SessionItemSchema.parse(x)
     } catch (e) {
-        throw tracer.addContext(e, {sessionItem: x})
+        throw tracer.errorWithContext(e, {sessionItem: x})
     }
 }
 
