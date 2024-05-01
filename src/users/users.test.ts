@@ -7,6 +7,7 @@ import {SessionContext} from "@src/authorizer/session";
 import * as users from "./index"
 import UserRepo from "@src/users/user";
 import {Tracer} from "@app/diagnostics";
+import FunctionPropertyNames = jest.FunctionPropertyNames;
 
 jest.mock('@aws-sdk/client-cognito-identity-provider')
 
@@ -81,10 +82,12 @@ afterEach(async () => {
 })
 
 describe("Signup process", () => {
+    let signupMock!: jest.SpyInstance
+
+    beforeEach(() => ({signupMock} = setupSignup()))
+
     describe("POST /user", () => {
         it("creates user in Cognito and Dynamo, returns cognito response", async () => {
-            //arrange
-            const signUpMock = setupSignup()
             //act
             const response = await signUp({
                 userAttributes: [
@@ -96,7 +99,7 @@ describe("Signup process", () => {
                 clientMetadata: {'metadataKey': 'metadataValue'}
             })
             //assert
-            expect(signUpMock).toHaveBeenCalledWith(expect.objectContaining({
+            expect(signupMock).toHaveBeenCalledWith(expect.objectContaining({
                 Username: username,
                 Password: "Qweqwe_1",
                 UserAttributes: [{"Name": "email", "Value": `${email}`}],
@@ -120,8 +123,6 @@ describe("Signup process", () => {
             ])
         })
         it("fails if user exists", async () => {
-            //arrange
-            setupSignup()
             //act
             const successfulResponse = await signUp()
             const failedResponse = await signUp()
@@ -135,8 +136,6 @@ describe("Signup process", () => {
             }))
         })
         it("fails if too many attributes provided by the user", async () => {
-            //arrange
-            setupSignup()
             const userAttributes = [
                 ...Array.from({length: 60}, (_1, i) => ({name: `attr${i}`, value: `attr${i} value`}))
             ];
@@ -154,15 +153,12 @@ describe("Signup process", () => {
     })
 
     describe("POST /user/confirm", () => {
-        beforeEach(async () => {
-            setupSignup()
-            const response = await signUp()
-            expect(response).toBeObject()
-        })
+        beforeEach(setupSignup)
+        beforeEach(signUp)
 
         it("confirm user in cognito", async () => {
             //arrange
-            const {confirm} = setupConfirmSignup({
+            const {confirmSignupMock} = setupConfirmSignup({
                 UserAttributes: [{Name: 'email', Value: email}, {Name: 'email_verified', Value: 'true'}]
             })
             //act
@@ -173,7 +169,7 @@ describe("Signup process", () => {
 
             //assert
             expect(confirmResponse).toEqual({})
-            expect(confirm).toHaveBeenCalledWith({
+            expect(confirmSignupMock).toHaveBeenCalledWith({
                 Username: username,
                 ConfirmationCode: "123456",
                 ClientMetadata: {'metadataKey': 'metadataValue'},
@@ -188,6 +184,55 @@ describe("Signup process", () => {
     })
 })
 
+function setupSignup() {
+    const signupMock = jest.spyOn(CognitoIdentityProvider.prototype, 'signUp')
+        .mockReturnValue({
+            UserConfirmed: false,
+            CodeDeliveryDetails: {
+                Destination: `${email}`,
+                DeliveryMedium: "EMAIL",
+                AttributeName: 'email'
+            },
+            UserSub: username
+        } as any)
+    return {signupMock}
+}
+
+async function signUp(request?: any) {
+    return await handler({
+        routeKey: "POST /user",
+        body: {
+            username: username,
+            password: "Qweqwe_1",
+            ...request
+        }
+    })
+}
+
+function setupConfirmSignup(userAfterSignup?: any) {
+    const confirmSignupMock = jest
+        .spyOn(CognitoIdentityProvider.prototype, 'confirmSignUp')
+        .mockReturnValue({} as any)
+    const adminGetUserMock = jest.spyOn(CognitoIdentityProvider.prototype, 'adminGetUser')
+        .mockReturnValue({
+            UserAttributes: [],
+            ...userAfterSignup
+        })
+    return {confirmSignupMock, adminGetUserMock}
+}
+
+function confirmSignup(request: any) {
+    const confirmRequest = {
+        routeKey: "POST /user/confirm",
+        body: {
+            username,
+            ...request
+        }
+    }
+    return handler(confirmRequest)
+}
+
+
 //Alternative
 //GET  /user/attributes - get user attributes and prefill the form
 //PUT  /user/attributes - update user attributes
@@ -195,17 +240,114 @@ describe("Signup process", () => {
 //POST /user/session - get new tokens and cookie
 
 describe("Session", () => {
+
+    beforeEach(async () => {
+        setupSignup()
+        await signUp()
+        setupConfirmSignup()
+        await confirmSignup({
+            UserAttributes: [{Name: 'email', Value: email}, {Name: 'email_verified', Value: 'true'}]
+        })
+    })
+
     describe("POST /user/signin", () => {
         it("generates access tokens", async () => {
+            const {mock: initiateAuthMock} = setupAuthResponse('initiateAuth', {
+                "cognito:groups": ["admin"],
+                "email_verified": true
+            })
+            const response = await initiateAuth()
+
+            expect(initiateAuthMock).toBeCalled()
+            expect(response).toEqual(expect.objectContaining({
+                statusCode: 200,
+                headers: {
+                    'set-Cookie': expect.stringMatching(/SID=.*; Path=\/; Expires=.*; HttpOnly; Secure; SameSite=None/)
+                },
+                body: {
+                    authenticationResult: {
+                        accessToken: expect.toBeString(),
+                        idToken: expect.toBeString(),
+                        profile: {
+                            'cognito:username': expect.toBeString(),
+                            email: email,
+                            sub: expect.toBeString(),
+                            token_use: 'id',
+                            'cognito:groups': ["admin"],
+                            email_verified: true,
+                            iat: expect.toBeNumber()
+                        }
+                    },
+                    challengeParameters: {}
+                }
+            }))
         })
-        it("sets cookie", async () => {
-        })
-        it("fails if user does not exist", async () => {
+        it("can respond with a challenge", async () => {
+            setupAuthChallengeResponse('initiateAuth')
+            const response = await initiateAuth()
+            expect(response).toEqual(expect.objectContaining({
+                challengeName: 'SMS_MFA',
+                session: 'CHALLENGE SESSION',
+                challengeParameters: {}
+            }))
         })
     })
 
     describe("POST /user/signin/challenge", () => {
+        beforeEach(async ()=>{
+            setupAuthResponse('initiateAuth')
+            await initiateAuth()
+        })
+        it("generates access tokens", async () => {
+            const {mock: respondToAuthChallengeMock} = setupAuthResponse('respondToAuthChallenge')
+            const response = await respondToAuthChallenge({
+                session: "XYZ",
+                challengeName: "SMS_MFA",
+                challengeResponses: {
+                    "USERNAME": username,
+                    "SMS_MFA_CODE": "12345"
+                },
+                clientMetadata: {"a": "b"}
+            })
+            expect(respondToAuthChallengeMock).toBeCalledWith(expect.objectContaining({
+                Session: "XYZ",
+                ChallengeName: "SMS_MFA",
+                ChallengeResponses: expect.objectContaining({
+                    "USERNAME": username,
+                    "SMS_MFA_CODE": "12345"
+                }),
+                ClientMetadata: {"a": "b"}
+            }))
 
+            expect(response).toEqual(expect.objectContaining({
+                statusCode: 200,
+                headers: {
+                    'set-Cookie': expect.stringMatching(/SID=.*; Path=\/; Expires=.*; HttpOnly; Secure; SameSite=None/)
+                },
+                body: {
+                    authenticationResult: {
+                        accessToken: expect.toBeString(),
+                        idToken: expect.toBeString(),
+                        profile: {
+                            'cognito:username': expect.toBeString(),
+                            email: email,
+                            sub: expect.toBeString(),
+                            token_use: 'id',
+                            iat: expect.toBeNumber()
+                        }
+                    },
+                    challengeParameters: {}
+                }
+            }))
+        })
+    })
+
+    describe("GET /user/session", () => {
+        it("require session", () => {
+
+        })
+        it("returns session", () => {
+        })
     })
 
     describe("POST /user/session", () => {
@@ -214,13 +356,6 @@ describe("Session", () => {
         it("refresh session using refresh token", () => {
         })
         it("refresh session cookie", () => {
-        })
-        it("returns session", () => {
-        })
-    })
-
-    describe("GET /user/session", () => {
-        it("require session", () => {
         })
         it("returns session", () => {
         })
@@ -239,6 +374,72 @@ describe("Session", () => {
 
 })
 
+function setupAuthResponse(method: FunctionPropertyNames<Required<CognitoIdentityProvider>> = 'initiateAuth',
+                           authResponse?: any) {
+    const private_key = 'private_key';
+    const access = {};
+    const accessToken = jwt.sign(access, private_key, {algorithm: 'HS256'});
+    const expiresIn = 3600;
+    const profile = {
+        "cognito:username": username,
+        "email": email,
+        "sub": username,
+        "token_use": "id",
+        ...authResponse
+    };
+    const idToken = jwt.sign(profile, private_key, {algorithm: 'HS256'});
+    const mock = jest.spyOn(CognitoIdentityProvider.prototype, method)
+        .mockReturnValue({
+            AuthenticationResult: {
+                AccessToken: accessToken,
+                ExpiresIn: expiresIn,
+                RefreshToken: "Cognito Refresh Token",
+                IdToken: idToken
+            }
+        } as any)
+    const session = {
+        id: "SessionId:123",
+        access,
+        access_token: accessToken,
+        profile,
+        id_token: idToken,
+        expires_at: Date.now() / 1000 + expiresIn,
+    };
+    return {session, mock}
+}
+
+function setupAuthChallengeResponse(method: FunctionPropertyNames<Required<CognitoIdentityProvider>> = 'respondToAuthChallenge',
+                                    authResponse?: any) {
+    return jest.spyOn(CognitoIdentityProvider.prototype, method)
+        .mockReturnValue({
+            ChallengeName: "SMS_MFA",
+            Session: "CHALLENGE SESSION",
+            ChallengeParameters: {},
+            ...authResponse
+        } as any)
+}
+
+function initiateAuth(body?: any) {
+    return handler({
+        routeKey: "POST /user/signin",
+        body: {
+            authFlow: "USER_PASSWORD_AUTH",
+            authParameters: {
+                'USERNAME': username,
+                password: "Qweqwe_1"
+            },
+            ...body
+        }
+    })
+}
+
+function respondToAuthChallenge(body?: any) {
+    return handler({
+        routeKey: "POST /user/signin/challenge",
+        body
+    })
+}
+
 describe("Attributes", () => {
 
     let auth!: SessionContext
@@ -247,7 +448,8 @@ describe("Attributes", () => {
         await signUp({userAttributes: [{name: "attr", value: "value"}, {name: "email", value: email}]})
         setupConfirmSignup({UserAttributes: []})
         await confirmSignup({confirmationCode: "123456"})
-        auth = setupInitiateAuth({"cognito:groups": [], "email_verified": true})
+        const {session} = setupAuthResponse('initiateAuth', {"cognito:groups": [], "email_verified": true})
+        auth = session
         await initiateAuth()
     })
 
@@ -335,99 +537,6 @@ describe("Attributes", () => {
     })
 })
 
-function setupSignup() {
-    return jest.spyOn(CognitoIdentityProvider.prototype, 'signUp')
-        .mockReturnValue({
-            UserConfirmed: false,
-            CodeDeliveryDetails: {
-                Destination: `${email}`,
-                DeliveryMedium: "EMAIL",
-                AttributeName: 'email'
-            },
-            UserSub: username
-        } as any)
-}
-
-function signUp(request?: any) {
-    return handler({
-        routeKey: "POST /user",
-        body: {
-            username: username,
-            password: "Qweqwe_1",
-            ...request
-        }
-    })
-}
-
-function setupConfirmSignup(userAfterSignup?: any) {
-    const confirm = jest
-        .spyOn(CognitoIdentityProvider.prototype, 'confirmSignUp')
-        .mockReturnValue({} as any)
-    const adminGetUser = jest.spyOn(CognitoIdentityProvider.prototype, 'adminGetUser')
-        .mockReturnValue({
-            UserAttributes: [],
-            ...userAfterSignup
-        })
-    return {confirm, adminGetUser}
-}
-
-function confirmSignup(request?: any) {
-    const confirmRequest = {
-        routeKey: "POST /user/confirm",
-        body: {
-            username,
-            ...request
-        }
-    }
-    return handler(confirmRequest)
-}
-
-function setupInitiateAuth(authResponse?: any): SessionContext {
-    const private_key = 'private_key';
-    const access = {};
-    const accessToken = jwt.sign(access, private_key, {algorithm: 'HS256'});
-    const expiresIn = 3600;
-    const profile = {
-        "cognito:username": username,
-        "email": email,
-        "sub": username,
-        "token_use": "id",
-        ...authResponse
-    };
-    const idToken = jwt.sign(profile, private_key, {algorithm: 'HS256'});
-    jest.spyOn(CognitoIdentityProvider.prototype, 'initiateAuth')
-        .mockReturnValue({
-            AuthenticationResult: {
-                AccessToken: accessToken,
-                ExpiresIn: expiresIn,
-                RefreshToken: "Cognito Refresh Token",
-                IdToken: idToken
-            }
-        } as any)
-    return {
-        id: "SessionId:123",
-        access,
-        access_token: accessToken,
-        profile,
-        id_token: idToken,
-        expires_at: Date.now() / 1000 + expiresIn,
-    }
-}
-
-function initiateAuth(body?: any) {
-    return handler({
-        routeKey: "POST /user/signin",
-        body: {
-            authFlow: "USER_PASSWORD_AUTH",
-            authParameters: {
-                'USERNAME': username,
-                password: "Qweqwe_1"
-            },
-            ...body
-        }
-    })
-}
-
 function putUserAttributes(attrs?: any, auth?: any) {
     return handler({
         routeKey: "PUT /user/attributes",
@@ -440,3 +549,4 @@ function getUserAttributes(auth?: any) {
         routeKey: "GET /user/attributes",
     }, auth)
 }
+

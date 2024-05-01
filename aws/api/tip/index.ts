@@ -1,14 +1,36 @@
 import {Lambdas} from "@aws/lambdas";
-import {dataTable, allowCrud} from "@aws/dynamodb";
-import Routes from "@src/tip/routes";
+import {dataTable, allowCrud, locksTable, usersTable} from "@aws/dynamodb";
+import Paths from "@src/tip/paths";
 import authorizer from "../authorizer";
+import {newPolicy} from "@aws/util";
+import _ from "lodash";
+import cognito from "@aws/cognito";
 
-const lambda = authorizer.gateway.newLambda(Lambdas['tip.invite'])
-    .inlinePolicy(allowCrud().on(dataTable).buildRoleInlinePolicy())
+const lambda = authorizer.gateway.newLambda(Lambdas['tip.handler'])
+    .args({
+        environment: {
+            variables: {
+                USER_POOL_ID: cognito.userPool.id,
+                LOCKS_TABLE: locksTable.name,
+                USERS_TABLE: usersTable.name
+            }
+        },
+        timeout: 10
+    })
+    .inlinePolicy(allowCrud().on(usersTable, locksTable).buildRoleInlinePolicy())
+    .inlinePolicy(
+        newPolicy('UserPoolAccess')
+            .allow(
+                "cognito-idp:AdminAddUserToGroup",
+                "cognito-idp:AdminCreateUser"
+            )
+            .on(cognito.userPool)
+            .buildRoleInlinePolicy()
+    )
     .build()
 
 export default authorizer.newAuthorizedIntegration(lambda)
-    .addRoutes(Routes)
+    .addRoutes(Paths)
     .done()
 
 

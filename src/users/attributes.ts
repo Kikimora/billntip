@@ -16,9 +16,3 @@ export type UserAttribute = {
      */
     readonly verified?: boolean
 }
-
-export type AliasAttribute = Required<UserAttribute>
-
-export function isAlias(attribute: UserAttribute): attribute is AliasAttribute {
-    return attribute.verified !== undefined
-}

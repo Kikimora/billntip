@@ -234,3 +234,29 @@ export function* mergeJoin<L, R = L>(left: any,
         r = rightI.next()
     }
 }
+
+export function mapKeysDeep<T>(value: T, rename: (name: string) => string): T {
+    if (Array.isArray(value)) {
+        return value.map(function (item) {
+            return mapKeysDeep(item, rename)
+        }) as any
+    } else if (typeof value === "object" && value !== null) {
+        const item: any = {}
+        const val: any = value
+        for (const prop of Object.keys(val)) {
+            const newKey = rename(prop)
+            item[newKey] = mapKeysDeep(val[prop], rename)
+        }
+        return item
+    } else {
+        return value
+    }
+}
+
+export function toCamel(o: any) {
+    return mapKeysDeep(o, origKey => (origKey.charAt(0).toLowerCase() + origKey.slice(1) || origKey).toString())
+}
+
+export function toPascal(o: any) {
+    return mapKeysDeep(o, origKey => (origKey.charAt(0).toUpperCase() + origKey.slice(1) || origKey).toString())
+}

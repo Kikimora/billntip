@@ -164,6 +164,14 @@ export function badRequestError(message: string, details?: object) {
     })
 }
 
+export function accessDeniedError(message: string = "Access denied.", details?: object) {
+    return new AppError(message, {
+        ...details,
+        statusCode: '403',
+        name: 'AccessDenied',
+    })
+}
+
 export function conflictError(message: string, details?: object) {
     return new AppError(message, {
         ...details,

@@ -1,6 +1,7 @@
 import {RouteMap} from "@app/lambda";
 import * as schemas from './schemas';
 import {SecurityRequirementObject} from "openapi3-ts/src/model/openapi31";
+import {AuthResponse} from "./schemas";
 
 const authenticated: SecurityRequirementObject[] = [{"Cookie": []}]
 const publicEndpoint: SecurityRequirementObject[] = []
@@ -32,14 +33,14 @@ export default {
     "POST /user/signin": {
         operationId: "InitiateAuth",
         body: schemas.InitiateAuthBody,
-        responses: [{200: schemas.InitiateAuthResponse}, 400],
+        responses: [{200: schemas.AuthResponse}, 400],
         security: publicEndpoint,
         tags: ['Session']
     },
     "POST /user/signin/challenge": {
         operationId: "RespondToAuthChallenge",
         body: schemas.RespondToAuthChallengeBody,
-        responses: [{200: schemas.RespondToAuthChallengeResponse}, 400],
+        responses: [{200: schemas.AuthResponse}, 400],
         security: publicEndpoint,
         tags: ['Session']
     },

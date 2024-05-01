@@ -61,7 +61,7 @@ export async function adminCreateUser(userPoolId: string, email: string, attrs?:
 export async function adminSetUserPassword(userPoolId: string, username: string, password?: string, cognito: CognitoIdentityProvider = defaultCognito) {
 
     if (password === undefined) {
-        const userPool = await getOrFetchUserPoolById(userPoolId)
+        const userPool = await userPoolDetails(userPoolId)
         const passwordPolicy = userPool.Policies?.PasswordPolicy!
         password = generate({
             length: passwordPolicy.MinimumLength ?? 6,
@@ -123,8 +123,8 @@ export const userPoolClientDetails = _.memoize((userPoolId: string, clientId: st
 const cache = new LRUCache({ttl: 300, max: 1});
 userPoolClientDetails.cache = cache
 
-export const getOrFetchUserPoolById = _.memoize(describeUserPool)
-getOrFetchUserPoolById.cache = new LRUCache({max: 10, ttl: 1000 * 60 * 5})
+export const userPoolDetails = _.memoize(describeUserPool)
+userPoolDetails.cache = new LRUCache({max: 10, ttl: 1000 * 60 * 5})
 
 type SocialProfileLink = { username: string, providerName: string, providerUserId: string }
 

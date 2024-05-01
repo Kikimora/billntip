@@ -1,6 +1,14 @@
 import _ from "lodash";
 import {ConditionalCheckFailedException, DynamoDB} from "@aws-sdk/client-dynamodb";
-import {JsonRequest, LambdaAuthorizedRequest, Middleware, pipeline, LambdaRequest} from '@app/lambda'
+import {
+    JsonRequest,
+    LambdaAuthorizedRequest,
+    Middleware,
+    pipeline,
+    LambdaRequest,
+    accessDeniedError,
+    TracedEvent, internalServerError
+} from '@app/lambda'
 import {configure} from "@app/diagnostics";
 import {getCommand, putCommand, queryCommand} from "@app/dynamodb";
 import {Employees, ManagersIndex} from "@src/data";
@@ -12,102 +20,81 @@ import {SessionContext} from "@src/authorizer/session";
 import {Context} from "aws-lambda";
 import {unmarshall} from "@aws-sdk/util-dynamodb";
 import Routes from "./routes";
+import {die, toCamel} from "@app/util";
+import UserRepo, {invalidAliasException} from "../users/user";
+import {__init} from "@src/users";
+import {userPoolClientDetails, userPoolDetails} from "@src/cognito";
 
-const UserPool = process.env.USER_POOL ?? _.throw("USER_POOL env variable is required")
+const UserPoolId = process.env.USER_POOL_ID ?? die("USER_POOL_ID env variable is required")
 
 const dynamo = new DynamoDB()
 const cognito = new CognitoIdentityProvider()
 
 configure({triggers: {request: true}})
 
-interface BusinessRequest {
-    business?: string
-}
-
-interface InviteRequest extends BusinessRequest {
-    email: string
-}
-
-export const invite = pipeline()
+export const handler = pipeline()
+    .handleErrors()
     .traceRequest()
-    .withRoutes(Routes)
     .requireLambdaAuth<SessionContext>()
+    .withRoutes(Routes)
     .parseJsonBody()
-    .do(async function (this: Middleware, req: JsonRequest & LambdaAuthorizedRequest<SessionContext>, ctx: Context) {
-        const business = 'business' in req && String(req['business']) || undefined
-
-        const businesses = await dynamo.send(queryCommand(ManagersIndex, {
-            indexName: "business_users",
-            values: {
-                userId: `u_${req.requestContext.authorizer.lambda.profile.sub}`,
-            },
-            keyCondition: ({key, val}) => `${key.uid} = ${val.userId}`
-        }))
-
-        let businessRecord
-        if (business === undefined) {
-            if (businesses.Count === 1)
-                businessRecord = businesses.Items?.[0]
-        } else {
-            businessRecord = businesses.Items?.find(x => x['pk'].S === business)
-        }
-
-        if (businessRecord === undefined) {
-            throw new Error()
-        }
-
-        const x = unmarshall(businessRecord)
-
-        return await this.next(req as any, ctx)
+    .do(async function (this: Middleware, e: TracedEvent, ctx: any) {
+        const response = await this.next(e, ctx)
+        //cleanup AWS noise
+        delete response?.$metadata
+        return toCamel(response)
     })
-    .done(async function (e) {
-        switch (e.routeKey) {
+    .do(async function (this: Middleware, req: TracedEvent & LambdaAuthorizedRequest<SessionContext>, ctx: Context) {
+        const user = req.user.profile
+        const groups = user['cognito:groups']
+        const isBusiness = _.includes(groups, 'business');
+        const isAdmin = _.includes(groups, 'admin');
+        req.tracer.info("Groups", {groups, isBusiness, isAdmin})
+        if (isBusiness || isAdmin) {
+            return await this.next(req as any, ctx)
+        }
+        throw accessDeniedError()
+    })
+    .done(async function (req) {
+        switch (req.routeKey) {
             case 'GET /bill/invites': {
                 return {"operation": "GetInvites"}
             }
-            case 'POST /bill/invites': {
-                //validate JSON using Zod?
-                //how to map user to business?
-                //
-                // const {email, business} = e.json as InviteRequest
-                // const userId = await getOrCreateUser(email)
-                //
-                // const businesses = await dynamo.send(queryCommand(ManagersIndex, {
-                //     values: {
-                //         userId: `u_${e.requestContext.authorizer.lambda.id_token.sub}`,
-                //     },
-                //     keyCondition: ({key, val}) => `${key.uid} = ${val.userId}`
-                // }))
-                // if (business === undefined && businesses.Count === 1) {
-                //
-                // } else if ()
-                //
-                //     //either no business in request and one business in db
-                //     //OR business in request and matching business in DB
-                //
-                //     businesses.Items?.find(x => x['pk'] === business)
-                //
-                // await dynamo.send(putCommand(Employees, {
-                //     key: {
-                //         pk: `b_12`,
-                //         sk: `emp_${userId}`
-                //     },
-                //     item: {
-                //         invited_at: Date.now(),
-                //         team: "Unknown",
-                //         uid: userId,
-                //         accepted_at: 0
-                //     }
-                // }))
+            case 'POST /bill/invite': {
+                const {body} = req.parse()
+                const userRepo = new UserRepo(req, dynamo)
 
-                return {"operation": "CreateInvite"}
+                const response = await cognito.adminCreateUser({
+                    UserPoolId,
+                    Username: body.email,
+                    MessageAction: body.resend ? "RESEND" : undefined,
+                    UserAttributes: [{
+                        Name: 'email',
+                        Value: body.email
+                    }, {
+                        Name: 'email_verified',
+                        Value: 'true'
+                    }]
+                })
+
+                const userId = response.User?.Username
+                if (userId === undefined) {
+                    throw internalServerError("Cognito did't create user id")
+                        .withContext("POST /bill/invite", {
+                            response
+                        })
+                }
+
+                await userRepo.create(userId, "trusted", [{name: "email", value: body.email}])
+
+                return response
             }
             case 'GET /bill/invite/{id}': {
-                const {path} = e.parse()
+                const {path} = req.parse()
                 return {id: path.id}
             }
             case 'DELETE /bill/invite/{id}': {
-                const {path} = e.parse()
+                const {path} = req.parse()
                 return {id: path.id}
             }
             case "PUT /bill/invite/{id}": {
@@ -119,7 +106,7 @@ export const invite = pipeline()
 async function getOrCreateUser(email: string) {
     createUser: try {
         const {User: user} = await cognito.adminCreateUser({
-            UserPoolId: UserPool,
+            UserPoolId: UserPoolId,
             MessageAction: 'RESEND',
             Username: email,
             UserAttributes: [
@@ -140,7 +127,7 @@ async function getOrCreateUser(email: string) {
     } catch (e: any) {
         if ('name' in e && e.name == 'UsernameExistsException') {
             const command = new ListUsersCommand({
-                UserPoolId: UserPool,
+                UserPoolId: UserPoolId,
                 AttributesToGet: ['email', 'sub'],
                 Filter: `email = "${email}"`,
                 Limit: 1

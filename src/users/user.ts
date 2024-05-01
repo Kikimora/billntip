@@ -5,8 +5,7 @@ import _, {mergeJoin, MergePair} from "@app/util";
 import {ErrorContext, errorWithContext} from "@app/diagnostics";
 import * as Schemas from "./schemas";
 import UserStore, {UserAttributeItem, UserStoreOptions} from "./store";
-import {isAlias, UserAttribute} from "./attributes";
-import {AttributesSchemaType} from "@app/dynamodb";
+import {UserAttribute} from "./attributes";
 
 export const LocksTableName = process.env.LOCKS_TABLE ?? _.throw("Missing required LOCKS_TABLE env variable")
 
@@ -326,7 +325,7 @@ export class User {
     /**
      * Update user attributes.
      *
-     * For each alias attribute this method tries to book it, that is, create an unconfirmed alias record in the storage.
+     * For each alias attribute this method tries to book it, that is create an unconfirmed alias record in the storage.
      * If booking fails then entire update fails. Different alias attributes cannot have same value or be equal to the username.
      *
      * If {@link source} is 'trusted' then method trusts verifier attributes and automatically confirm corresponding aliases.
@@ -620,7 +619,7 @@ function tooManyUserAttributes() {
     })
 }
 
-function invalidAliasException(attr?: UserAttribute, details?: any) {
+export function invalidAliasException(attr?: UserAttribute, details?: any) {
     return new AppError("Invalid alias attribute.", {
         ...details,
         value: attr,

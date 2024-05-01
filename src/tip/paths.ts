@@ -1,11 +1,16 @@
 import {Type as T} from '@sinclair/typebox';
 import {RouteMap} from "@app/lambda";
+import {SecurityRequirementObject} from "openapi3-ts/src/model/openapi31";
 
 const Id = {
     id: T.String()
 }
-
+const authenticated: SecurityRequirementObject[] = [{"Cookie": []}]
 export default {
+    "POST /tip/registration": {
+        operationId: "Register",
+        security: authenticated
+    },
     "GET /tip/invites": {
         operationId: "ListInvites",
         body: T.Null(),

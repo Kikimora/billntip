@@ -18,12 +18,12 @@ export const Api = {
 
 export const Bill = {
     name: "bill",
-    handlers: ["invite"]
+    handlers: ["handler"]
 } as const
 
 export const Tip = {
     name: "tip",
-    handlers: ["invite"]
+    handlers: ["handler"]
 } as const
 
 export const Users = {

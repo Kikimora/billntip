@@ -3,7 +3,13 @@ import {Type} from "@sinclair/typebox";
 
 export default {
     "GET /bill/invites": {operationId: "ListInvites"},
-    "POST /bill/invites": {operationId: "CreateInvite"},
+    "POST /bill/invite": {
+        body: Type.Object({
+            email: Type.String(),
+            resend: Type.Optional(Type.Boolean({default: false}))
+        }),
+        operationId: "CreateInvite"
+    },
     "GET /bill/invite/{id}": {
         operationId: "GetInvite",
         path: {

@@ -65,6 +65,7 @@ export const UpdateUserAttributesBody = T.Object({
     userAttributes: UserAttributes
 }, {$id: 'UpdateUserAttributesBody'});
 export const UpdateUserAttributesResponse = T.Object({
+    attributes: UserAttributes,
     codeDeliveryDetailsList: T.Optional(T.Array(T.Object({
         destination: T.Optional(T.String()),
         deliveryMedium: T.Optional(T.Union([
@@ -118,7 +119,24 @@ export const InitiateAuthBody = T.Object({
         )]),
     clientMetadata: ClientMetadata,
 }, {$id: 'InitiateAuthBody'});
-export const InitiateAuthResponse = T.Null();
+export const AuthResponse = T.Union([
+    T.Object({
+        authenticationResult: T.Object({
+            accessToken: T.String(),
+            idToken: T.String(),
+            profile: T.Record(T.String(), T.Any())
+        })
+    }),
+    T.Object({
+        challengeName: T.String(),
+        session: T.String(),
+        challengeParameters: T.Record(T.String(), T.String())
+    })
+], {
+    $id: "AuthResponse",
+    description: "Authentication operation (SignIn, RespondToAuthChallenge) response."
+})
+
 export const RespondToAuthChallengeBody = T.Object({
     challengeName: T.Union([
         T.Literal("SMS_MFA"),
@@ -156,7 +174,6 @@ export const RespondToAuthChallengeBody = T.Object({
     clientMetadata: ClientMetadata,
     session: T.Optional(T.String())
 }, {$id: 'RespondToAuthChallengeBody'});
-export const RespondToAuthChallengeResponse = T.Null();
 export const ChangePasswordBody = T.Object({
     previousPassword: T.String(),
     proposedPassword: T.String(),

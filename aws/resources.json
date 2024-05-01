@@ -97,76 +97,84 @@
         "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-authorizer-code-fn"
       },
       {
+        "operationName": "Register",
+        "routeKey": "POST /tip/registration",
+        "authorizerId": "vwmth7",
+        "target": "integrations/azqja7l",
+        "src": "tip/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-handler-fn"
+      },
+      {
         "operationName": "ListInvites",
         "routeKey": "GET /tip/invites",
         "authorizerId": "vwmth7",
-        "target": "integrations/vq81yt2",
-        "src": "tip/invite",
-        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-invite-fn"
+        "target": "integrations/azqja7l",
+        "src": "tip/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-handler-fn"
       },
       {
         "operationName": "GetInvite",
         "routeKey": "GET /tip/invite/{id}",
         "authorizerId": "vwmth7",
-        "target": "integrations/vq81yt2",
-        "src": "tip/invite",
-        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-invite-fn"
+        "target": "integrations/azqja7l",
+        "src": "tip/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-handler-fn"
       },
       {
         "operationName": "AcceptInvite",
         "routeKey": "PUT /tip/invite/{id}",
         "authorizerId": "vwmth7",
-        "target": "integrations/vq81yt2",
-        "src": "tip/invite",
-        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-invite-fn"
+        "target": "integrations/azqja7l",
+        "src": "tip/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-handler-fn"
       },
       {
         "operationName": "RejectInvite",
         "routeKey": "DELETE /tip/invite/{id}",
         "authorizerId": "vwmth7",
-        "target": "integrations/vq81yt2",
-        "src": "tip/invite",
-        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-invite-fn"
+        "target": "integrations/azqja7l",
+        "src": "tip/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-tip-handler-fn"
       },
       {
         "operationName": "ListInvites",
         "routeKey": "GET /bill/invites",
         "authorizerId": "vwmth7",
-        "target": "integrations/21wfazd",
-        "src": "bill/invite",
-        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
+        "target": "integrations/aawhzwb",
+        "src": "bill/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-handler-fn"
       },
       {
         "operationName": "CreateInvite",
-        "routeKey": "POST /bill/invites",
+        "routeKey": "POST /bill/invite",
         "authorizerId": "vwmth7",
-        "target": "integrations/21wfazd",
-        "src": "bill/invite",
-        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
+        "target": "integrations/aawhzwb",
+        "src": "bill/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-handler-fn"
       },
       {
         "operationName": "GetInvite",
         "routeKey": "GET /bill/invite/{id}",
         "authorizerId": "vwmth7",
-        "target": "integrations/21wfazd",
-        "src": "bill/invite",
-        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
+        "target": "integrations/aawhzwb",
+        "src": "bill/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-handler-fn"
       },
       {
         "operationName": "UpdateInvite",
         "routeKey": "PUT /bill/invite/{id}",
         "authorizerId": "vwmth7",
-        "target": "integrations/21wfazd",
-        "src": "bill/invite",
-        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
+        "target": "integrations/aawhzwb",
+        "src": "bill/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-handler-fn"
       },
       {
         "operationName": "DeleteInvite",
         "routeKey": "DELETE /bill/invite/{id}",
         "authorizerId": "vwmth7",
-        "target": "integrations/21wfazd",
-        "src": "bill/invite",
-        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-invite-fn"
+        "target": "integrations/aawhzwb",
+        "src": "bill/handler",
+        "lambdaArn": "arn:aws:lambda:eu-south-1:381491945919:function:billntip-dev-bill-handler-fn"
       },
       {
         "operationName": "GetSession",

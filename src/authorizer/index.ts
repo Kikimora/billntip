@@ -60,6 +60,7 @@ export const cookie = pipeline<APIGatewayAuthorizerEvent>()
     .traceRequest({tracer, tag: "cookie"})
     .done(async function (event, context): Promise<AuthResult> {
         const {tracer} = event
+
         const {now} = await initModuleVariables(context.awsRequestId)
         switch (event.type) {
             case "REQUEST": {

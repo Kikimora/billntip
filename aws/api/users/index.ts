@@ -20,6 +20,10 @@ const users = authorizer.newAuthLambda(Lambdas["users.handler"])
         newPolicy('UserPoolAccess')
             .allow(
                 ..._.map(Paths, 'operationId').map(x => `cognito-idp:${x}`)
+                    .concat([
+                        "cognito-idp:AdminGetUser",
+                        "cognito-idp:DescribeUserPool",
+                    ])
             )
             .on(cognito.userPool)
             .buildRoleInlinePolicy(),
