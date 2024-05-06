@@ -12,7 +12,7 @@ const images = authorizer.newAuthLambda({module: "images", handler: "handler"})
             }
         }
     })
-    .inlinePolicy(newPolicy('S3Access')
+    .inlinePolicy(newPolicy()
         .allow(
             "s3:PutObject",
             "s3:GetObject",
@@ -22,7 +22,7 @@ const images = authorizer.newAuthLambda({module: "images", handler: "handler"})
             pulumi.interpolate`${s3.bucket.arn}/public/*`,
             pulumi.interpolate`${s3.bucket.arn}/uploads/*`,
         )
-        .buildRoleInlinePolicy())
+        .buildRoleInlinePolicy('S3Access'))
     .build()
 
 export default authorizer.newAuthorizedIntegration(images)

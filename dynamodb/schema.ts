@@ -1,4 +1,3 @@
-import * as ddb from "@aws-sdk/client-dynamodb";
 import _ from "lodash";
 
 /**
@@ -390,7 +389,7 @@ interface BuilderHolder {
  *      {pk: D.String, sk:D.Number} as const,
  *      {name:D.String, age:D.Number} as const)
  */
-export interface Table<Key, Attributes> {
+export interface Table<Key = any, Attributes = any> {
     /**
      * DynamoDB table name
      */
@@ -452,7 +451,7 @@ export type AttributesSchema<T> = T extends Table<any, any> ? T['attributes'] : 
  */
 export type TableSchema<T> = T extends Table<any, any> ? (T['key'] & T['attributes']) : never
 
-export type TableSchemaType<T> = KeySchemaType<T> & AttributesSchemaType<T>
+export type TableSchemaType<T extends Table<any, any>> = SchemaType<T['key']> & Partial<SchemaType<T['attributes']>>
 export type AttributesSchemaType<T> = T extends Table<any, any> ? Partial<SchemaType<T['attributes']>> : never
 export type KeySchemaType<T> = T extends Table<any, any> ? SchemaType<T['key']> : never
 

@@ -17,7 +17,7 @@ const users = authorizer.newAuthLambda(Lambdas["users.handler"])
         }
     })
     .inlinePolicy(
-        newPolicy('UserPoolAccess')
+        newPolicy()
             .allow(
                 ..._.map(Paths, 'operationId').map(x => `cognito-idp:${x}`)
                     .concat([
@@ -26,8 +26,8 @@ const users = authorizer.newAuthLambda(Lambdas["users.handler"])
                     ])
             )
             .on(cognito.userPool)
-            .buildRoleInlinePolicy(),
-        allowCrud("UsersTableAccess").on(usersTable).buildRoleInlinePolicy())
+            .buildRoleInlinePolicy('UserPoolAccess'),
+        allowCrud().on(usersTable).buildRoleInlinePolicy("UsersTableAccess"))
     .build()
 const publicRoutes = _.pickBy(Paths, function (value) {
     return value.security?.length === 0;

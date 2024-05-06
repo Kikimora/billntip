@@ -32,11 +32,11 @@ export const Users = {
 } as const
 
 export const Cognito = {
-    name: "cognito-triggers",
-    handlers: ["preSignup", "postSignup", "info", "preTokenGeneration", "postAuthentication", ]
+    name: "users/cognito-triggers",
+    handlers: ["handler"]
 } as const
 
-export const Lambdas = lambdaSet().add(Authorizer).add(Api).add(Cognito).add(Users).add(Bill).add(Tip).build()
+export const Lambdas = lambdaSet().add(Authorizer).add(Api).add(Users).add(Cognito).add(Bill).add(Tip).build()
 
 function makeLambdaNamer(stack: string) {
     return function (lambda: LambdaSource) {

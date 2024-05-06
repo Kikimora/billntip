@@ -10,7 +10,7 @@ import _, {toCamel} from "@app/util";
 import {
     badRequestError,
     HttpError,
-    internalServerError,
+    internalServerError, LambdaRequest,
     Middleware,
     pipeline,
     requireLambdaAuth,
@@ -26,10 +26,14 @@ import {jwtDecode} from "jwt-decode";
 import {initModuleVariables} from "@src/authorizer/ctx";
 import {Static} from "@sinclair/typebox";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
-import UserRepo, {invalidAliasException, UserAttribute} from "./user"
+import UserRepo, {UserAttribute} from "./user"
+import {toUserAttributes} from "./cognito"
+import SessionCookie from "@src/authorizer/cookie";
 
 const ClientId = process.env.OAUTH_CLIENT_ID ?? _.throw("Missing required OAUTH_CLIENT_ID env variable")
-const UserPoolId = process.env.USER_POOL_ID ?? _.throw("Missing required USER_POOL_ID env variable")
+export const UserPoolId = process.env.USER_POOL_ID ?? _.throw("Missing required USER_POOL_ID env variable")
+
+const cognito = new CognitoIdentityProvider()
 
 /**
  * Static initialisation loads user pool details.
@@ -53,7 +57,6 @@ Object.defineProperty(UnauthorizedException.prototype, 'statusCode', {
 configure({triggers: {request: true}})
 
 const dynamo = new DynamoDB()
-const cognito = new CognitoIdentityProvider()
 
 export const handler = pipeline()
     .handleErrors()
@@ -67,13 +70,14 @@ export const handler = pipeline()
         return toCamel(response)
     })
     .done(async function (req) {
+
         switch (req.routeKey) {
 //#region Session
             case "POST /user/signin": {
                 const {ClientSecret, UsernameAttributes} = await __init()
                 const {body} = req.parse()
                 const {USERNAME: usernameOrAlias} = body.authParameters
-                const userRepo = new UserRepo(req, dynamo)
+                const userRepo = createUserRepo(req)
                 const poolUseUsernameAttributes = (UsernameAttributes?.length ?? 0) > 0;
                 const user = await userRepo.fetchLocked(usernameOrAlias, {
                     allowUnverifiedAlias: poolUseUsernameAttributes
@@ -104,7 +108,7 @@ export const handler = pipeline()
                 const {ClientSecret, UsernameAttributes} = await __init()
                 const {body} = req.parse()
                 const {USERNAME: usernameOrAlias} = body.challengeResponses
-                const userRepo = new UserRepo(req, dynamo)
+                const userRepo = createUserRepo(req)
                 const poolUseUsernameAttributes = (UsernameAttributes?.length ?? 0) > 0;
                 const user = await userRepo.fetchLocked(usernameOrAlias, {
                     allowUnverifiedAlias: poolUseUsernameAttributes
@@ -147,86 +151,53 @@ export const handler = pipeline()
                 }
                 const newSession = session.withTokens(tokens)
                 await Promise.all([newSession.create(), session.remove()])
-                return newSessionResponse(newSession)
+                return refreshSessionResponse(newSession)
             }
             case "DELETE /user/session": {
                 requireLambdaAuth<SessionContext>(req)
-                const session = req.user;
-                return await cognito.globalSignOut({
-                    AccessToken: session.access_token
+                const user = req.user;
+                await cognito.globalSignOut({
+                    AccessToken: user.access_token
                 })
+                await initModuleVariables()
+                const session = await SessionData.fetch(req.user.id)
+                if (session !== null) {
+                    await session.remove()
+                }
+                const cookie = new SessionCookie(user.id, new Date(0))
+                return {
+                    statusCode: 200,
+                    headers: {'Set-Cookie': cookie.makeHeaderValue()},
+                }
             }
 //#endregion
 //#region SignUp
             case "POST /user": {
-                const {ClientSecret, UsernameAttributes} = await __init()
+                const {ClientSecret} = await __init()
                 const {body} = req.parse()
-
-                const userDataRepo = new UserRepo(req, dynamo)
-
-                async function signUp(username: string) {
-                    const aliases = userDataRepo.aliases(body.userAttributes ?? [])
-                    return await cognito.signUp({
-                        Username: username,
-                        Password: body.password,
-                        UserAttributes: aliases?.map(x => ({Name: x.name, Value: x.value})),
-                        ClientMetadata: body.clientMetadata,
-                        ValidationData: body.validationData?.map(x => ({Name: x.name, Value: x.value})),
-                        ClientId,
-                        SecretHash: secretHash(username, ClientSecret)
-                    })
+                const userDataRepo = createUserRepo(req)
+                const attributes = body.userAttributes ?? [];
+                const aliases = userDataRepo.aliases(attributes)
+                const normalAttributes = userDataRepo.normalAttributes(attributes)
+                const metadata = {
+                    ...body.clientMetadata,
+                    '_attributes': JSON.stringify(normalAttributes)
                 }
-
-                const poolUseUsernameAttributes = (UsernameAttributes?.length ?? 0) > 0;
-                if (poolUseUsernameAttributes) {
-
-                    /**
-                     * When User Pool use 'username attributes' it
-                     * 1. accept username and put it into either email or phone_number
-                     * 2. generates username.
-                     * 3. allows duplicate alias attributes in users until they are not used as a username
-                     * 4. allows change of the username attribute value
-                     *
-                     * This is a problem because fpr multiple reasons
-                     * 1. We need to know username before creating a user
-                     * 2. We want to create user before interacting with cognito to guarantee alias uniqueness.
-                     *
-                     * Solution:
-                     * 1. SignUp user first to get user id. Cognito guarantee username attribute uniqueness.
-                     * 2. Do not allow alias attributes to guarantee cognito does not create duplicates.
-                     * 3. Read cognito right after signup and create aliases in Dynamo.
-                     *
-                     * We are guaranteed to read just one alias from Cognito. Resulting DB state is
-                     * 1. Username guid which is different from any alias attribute.
-                     * 2. Username attribute mapping to the username guid
-                     * 3. No other alias attributes.
-                     */
-
-                    const aliases = userDataRepo.aliases(body.userAttributes ?? [])
-                    if (aliases.length > 0) {
-                        throw invalidAliasException()
-                    }
-
-                    const response = await signUp(body.username)
-                    const userId = response.UserSub
-                    if (userId === undefined)
-                        throw internalServerError("Unexpected error - Cognito didn't generate user id")
-                    const cognitoAliases = await fetchCognitoAttributes(userId)
-                    const attributes = userDataRepo.normalAttributes(body.userAttributes ?? [])
-                    await userDataRepo.create(userId, 'trusted', attributes.concat(cognitoAliases))
-                    return response
-                } else {
-                    /**
-                     * In this mode username cannot be equal to any of alias attributes which is guaranteed by the user repo.
-                     */
-                    await userDataRepo.create(body.username, 'user', body.userAttributes)
-                    return await signUp(body.username)
-                }
+                //Cognito trigger create user in dynamodb using
+                return await cognito.signUp({
+                    Username: body.username,
+                    Password: body.password,
+                    UserAttributes: aliases?.map(x => ({Name: x.name, Value: x.value})),
+                    ClientMetadata: metadata,
+                    ValidationData: body.validationData?.map(x => ({Name: x.name, Value: x.value})),
+                    ClientId,
+                    SecretHash: secretHash(body.username, ClientSecret)
+                })
             }
             case "POST /user/confirm": {
                 const {ClientSecret, UsernameAttributes} = await __init()
                 const {body} = req.parse()
-                const userDataRepo = new UserRepo(req, dynamo)
+                const userDataRepo = createUserRepo(req)
                 const poolUseUsernameAttributes = (UsernameAttributes?.length ?? 0) > 0;
                 const user = await userDataRepo.fetchLocked(body.username, {
                     allowUnverifiedAlias: poolUseUsernameAttributes
@@ -249,7 +220,7 @@ export const handler = pipeline()
             case "POST /user/resend_confirmation_code": {
                 const {ClientSecret} = await __init()
                 const {body} = req.parse()
-                const repo = new UserRepo(req, dynamo)
+                const repo = createUserRepo(req)
                 const {username} = await repo.lookupAlias(body.username)
                 return await cognito.resendConfirmationCode({
                     Username: username,
@@ -263,7 +234,7 @@ export const handler = pipeline()
             case 'GET /user/attributes': {
                 requireLambdaAuth<SessionContext>(req)
                 const username = req.user.profile['cognito:username']
-                const userRepo = new UserRepo(req, dynamo)
+                const userRepo = createUserRepo(req)
                 const user = await userRepo.fetch(username)
                 return user.attributes satisfies Readonly<Static<typeof req.route.success>>
             }
@@ -273,17 +244,10 @@ export const handler = pipeline()
                 const username = req.user.profile['cognito:username']
                 let codeDeliveryDetailsList
 
-                const userRepo = new UserRepo(req, dynamo)
+                const userRepo = createUserRepo(req)
                 const user = await userRepo.fetchLocked(username)
                 try {
-                    const bodyAttributes = body.userAttributes.map(x => {
-                        if (x.name === 'phone_number')
-                            return {
-                                ...x,
-                                name: 'phone'
-                            }
-                        return x
-                    });
+                    const bodyAttributes = body.userAttributes
                     const aliasAttributes = userRepo.aliases(bodyAttributes)
                     req.tracer.info("Update Cognito attributes", {attributes: aliasAttributes})
                     if (aliasAttributes.length > 0) {
@@ -310,7 +274,7 @@ export const handler = pipeline()
                 requireLambdaAuth<SessionContext>(req)
                 const {body} = req.parse()
                 const username = req.user.profile['cognito:username']
-                const userRepo = new UserRepo(req, dynamo)
+                const userRepo = createUserRepo(req)
                 const user = await userRepo.fetchLocked(username)
                 try {
                     const aliasAttributes = userRepo.aliases(body.userAttributesNames)
@@ -342,7 +306,7 @@ export const handler = pipeline()
             case "POST /user/password/forgot": {
                 const {ClientSecret} = await __init()
                 const {body} = req.parse()
-                const userRepo = new UserRepo(req, dynamo)
+                const userRepo = createUserRepo(req)
                 const {username} = await userRepo.lookupAlias(body.username)
                 return await cognito.forgotPassword({
                     ClientMetadata: body.clientMetadata,
@@ -354,7 +318,7 @@ export const handler = pipeline()
             case "POST /user/password/confirm": {
                 const {ClientSecret} = await __init()
                 const {body} = req.parse()
-                const userRepo = new UserRepo(req, dynamo)
+                const userRepo = createUserRepo(req)
                 const {username} = await userRepo.lookupAlias(body.username)
                 return await cognito.confirmForgotPassword({
                     Username: username,
@@ -422,30 +386,6 @@ export const handler = pipeline()
 
 //#endregion
 
-        async function fetchCognitoAttributes(username: string): Promise<UserAttribute[]> {
-            const cognitoUser = await cognito.adminGetUser({Username: username, UserPoolId})
-            req.tracer.info("Cognito attributes", {attributes: cognitoUser.UserAttributes})
-            const verifiers = _(cognitoUser.UserAttributes)
-                .filter(x => x.Name?.endsWith('_verified') ?? false)
-                .keyBy('Name')
-                .mapKeys((_1, k) => k.substring(0, k.length - 9 /*_verified.length*/))
-                .mapValues('Value')
-                .value()
-            return _(cognitoUser.UserAttributes)
-                .map(function (x) {
-                    if (x.Name === undefined || x.Value === undefined) {
-                        return undefined
-                    }
-                    if (x.Name.endsWith('_verified')) return undefined
-                    const verified = verifiers[x.Name]
-                    if (verified === 'true')
-                        return {name: x.Name, value: x.Value, verified: true}
-                    return {name: x.Name, value: x.Value}
-                })
-                .compact()
-                .value()
-        }
-
         async function processAuthResponse(auth: InitiateAuthResponse | RespondToAuthChallengeResponse) {
             if (auth.AuthenticationResult !== undefined) {
                 const {AccessToken, IdToken, RefreshToken, ExpiresIn} = auth.AuthenticationResult
@@ -460,6 +400,30 @@ export const handler = pipeline()
                 return auth
             }
         }
+
+        async function createNewSession(RefreshToken: string, IdToken: string, AccessToken: string, ExpiresIn: number) {
+            await initModuleVariables()
+            const tokens = new OidcTokens(RefreshToken, IdToken, AccessToken, ExpiresIn)
+            const session = SessionData.createWithTokens(tokens)
+            await session.create()
+            return refreshSessionResponse(session);
+        }
+
+        function refreshSessionResponse(session: SessionData) {
+            const cookie = session.makeCookie()
+            return {
+                statusCode: 200,
+                headers: {'Set-Cookie': cookie.makeHeaderValue()},
+                body: JSON.stringify({
+                    authenticationResult: {
+                        accessToken: session.accessToken,
+                        idToken: session.idToken,
+                        profile: jwtDecode(session.idToken)
+                    },
+                    challengeParameters: {}
+                })
+            }
+        }
     })
 
 
@@ -469,28 +433,18 @@ function secretHash(username: string, clientSecret: string) {
     return hasher.digest('base64');
 }
 
-async function createNewSession(RefreshToken: string, IdToken: string, AccessToken: string, ExpiresIn: number) {
-    await initModuleVariables()
-    const tokens = new OidcTokens(RefreshToken, IdToken, AccessToken, ExpiresIn)
-    const session = SessionData.createWithTokens(tokens)
-    await session.create()
-    return newSessionResponse(session);
+
+function createUserRepo(req: LambdaRequest & TracedEvent) {
+    return new UserRepo({
+        tag: req.requestContext.requestId,
+        db: dynamo,
+        tracer: req.tracer
+    });
 }
 
-function newSessionResponse(session: SessionData) {
-    const cookie = session.makeCookie()
-    return {
-        statusCode: 200,
-        headers: {'Set-Cookie': cookie.makeHeaderValue()},
-        body: JSON.stringify({
-            authenticationResult: {
-                accessToken: session.accessToken,
-                idToken: session.idToken,
-                profile: jwtDecode(session.idToken)
-            },
-            challengeParameters: {}
-        })
-    }
+async function fetchCognitoAttributes(username: string): Promise<UserAttribute[]> {
+    const cognitoUser = await cognito.adminGetUser({Username: username, UserPoolId})
+    return toUserAttributes(cognitoUser.UserAttributes);
 }
 
 

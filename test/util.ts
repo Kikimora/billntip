@@ -5,7 +5,7 @@ import {Context} from "aws-lambda";
 import _ from "lodash";
 
 export function resources() {
-    const o = upath.join(__dirname, "..", "aws", "resources.json")
+    const o = upath.join(__dirname, "..", "out", "resources.dev.json")
     return JSON.parse(fs.readFileSync(o).toString("utf-8"))
 }
 

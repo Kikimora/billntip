@@ -2,6 +2,7 @@ import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 import {grantInvoke, newLambda, newLambdaRole, newPolicy} from "@aws/util";
 import {Lambdas} from "@aws/lambdas";
+import {DynamoDbCRUDActions, locksTable, usersTable} from "@aws/dynamodb";
 
 const config = new pulumi.Config();
 
@@ -39,28 +40,20 @@ const smsSenderRole = new aws.iam.Role('cognito-sms-sender-role', {
 })
 
 const manageUsersRole = newLambdaRole("cognito-manage-users-role")
-const preSignup = newLambda(Lambdas['cognito-triggers.preSignup'])
-    .args({timeout: 10})
-    .role(manageUsersRole)
-    .build()
-const postSignup = newLambda(Lambdas['cognito-triggers.postSignup'])
-    .args({timeout: 10})
-    .role(manageUsersRole)
-    .build()
-const info = newLambda(Lambdas['cognito-triggers.info'])
-    .args({timeout: 10})
-    .role(manageUsersRole)
-    .build()
-const preTokenGeneration = newLambda(Lambdas['cognito-triggers.preTokenGeneration'])
-    .args({timeout: 10})
-    .role(manageUsersRole)
-    .build()
-const postAuthentication = newLambda(Lambdas['cognito-triggers.postAuthentication'])
-    .args({timeout: 10})
-    .role(manageUsersRole)
-    .build()
 
-const sourcePoolArn = "arn:aws:cognito-idp:eu-south-1:381491945919:userpool/eu-south-1_deiDICPWm"
+const triggers = newLambda(Lambdas['users/cognito-triggers.handler'])
+    .args({
+        timeout: 10,
+        memorySize: 256,
+        environment: {
+            variables: {
+                USERS_TABLE: usersTable.name,
+                LOCKS_TABLE: locksTable.name
+            }
+        }
+    })
+    .role(manageUsersRole)
+    .build()
 
 const pool = new aws.cognito.UserPool('cognito-user-pool-v3', {
     autoVerifiedAttributes: ['email', 'phone_number'],
@@ -71,11 +64,11 @@ const pool = new aws.cognito.UserPool('cognito-user-pool-v3', {
         //    lambdaArn: "arn:of:your:lambda:function",
         //    lambdaVersion: "V1_0",
         // },
-        preSignUp: info.arn,
-        postConfirmation: info.arn,
-        preAuthentication: info.arn,
-        postAuthentication: info.arn,
-        preTokenGeneration: info.arn,
+        preSignUp: triggers.arn,
+        postConfirmation: triggers.arn,
+        preAuthentication: triggers.arn,
+        postAuthentication: triggers.arn,
+        preTokenGeneration: triggers.arn,
     },
     // Define password policy
     passwordPolicy: {
@@ -132,16 +125,14 @@ const userPool = {
     sourceArn: pool.arn,
     urn: pool.urn
 }
-grantInvoke(preSignup, userPool)
-grantInvoke(postSignup, userPool)
-grantInvoke(info, userPool)
-grantInvoke(preTokenGeneration, userPool)
-grantInvoke(postAuthentication, userPool)
+grantInvoke(triggers, userPool)
 
 export default userPool
 
-const args = {
-    ...newPolicy("ManageUsers")
+const manageUsersPolicy = new aws.iam.Policy("cognito-manage-users-policy", {
+    namePrefix: "ManageUsers",
+    policy: newPolicy()
+        .sid("Cognito")
         .allow(
             "cognito-idp:ListUsers",
             "cognito-idp:AdminUpdateUserAttributes",
@@ -150,10 +141,13 @@ const args = {
             "cognito-idp:AdminLinkUserAccounts",
             "cognito-idp:AdminListGroupsForUser",
             "cognito-idp:AdminAddUserToGroup",
-        ).on(pool, sourcePoolArn)
-        .buildRoleInlinePolicy()
-};
-const manageUsersPolicy = new aws.iam.Policy("cognito-manage-users-policy", args)
+        )
+        .on(pool)
+        .sid("DynamoDB")
+        .allow(...DynamoDbCRUDActions)
+        .on(usersTable, locksTable)
+        .buildPolicy()
+})
 
 new aws.iam.RolePolicyAttachment("cognito-manage-users-policy-attachment", {
     role: manageUsersRole,

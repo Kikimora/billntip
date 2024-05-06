@@ -1,10 +1,7 @@
 import {RouteMap} from "@app/lambda";
 import * as schemas from './schemas';
-import {SecurityRequirementObject} from "openapi3-ts/src/model/openapi31";
-import {AuthResponse} from "./schemas";
+import {authenticatedEndpoint, publicEndpoint} from "@src/common";
 
-const authenticated: SecurityRequirementObject[] = [{"Cookie": []}]
-const publicEndpoint: SecurityRequirementObject[] = []
 
 export default {
     "POST /user": {
@@ -47,18 +44,18 @@ export default {
     "GET /user/session": {
         operationId: "GetSession",
         responses: [{200: schemas.GetSessionResponse}, 401, 403],
-        security: authenticated,
+        security: authenticatedEndpoint,
         tags: ['Session']
     },
     "POST /user/session": {
         operationId: "RefreshSession",
         responses: [{200: schemas.GetSessionResponse}, 401, 403],
-        security: authenticated,
+        security: authenticatedEndpoint,
         tags: ['Session']
     },
     "DELETE /user/session": {
         operationId: "SignOut",
-        security: authenticated,
+        security: authenticatedEndpoint,
         responses: [401, 403],
         tags: ['Session']
     },
@@ -67,7 +64,7 @@ export default {
         operationId: "GetUser",
         success: schemas.UserAttributes,
         responses: [401, 403],
-        security: authenticated,
+        security: authenticatedEndpoint,
         tags: ['Attributes']
     },
     "PUT /user/attributes": {
@@ -75,7 +72,7 @@ export default {
         body: schemas.UpdateUserAttributesBody,
         success: schemas.UpdateUserAttributesResponse,
         responses: [400, 401, 403],
-        security: authenticated,
+        security: authenticatedEndpoint,
         tags: ['Attributes']
     },
     "DELETE /user/attributes": {
@@ -83,7 +80,7 @@ export default {
         body: schemas.DeleteUserAttributesBody,
         success: schemas.DeleteUserAttributesResponse,
         responses: [400, 401, 403],
-        security: authenticated,
+        security: authenticatedEndpoint,
         tags: ['Attributes']
     },
 
@@ -91,7 +88,7 @@ export default {
         operationId: "ChangePassword",
         body: schemas.ChangePasswordBody,
         responses: [{200: schemas.ChangePasswordResponse}, 400, 401, 403],
-        security: authenticated,
+        security: authenticatedEndpoint,
         tags: ['Password']
     },
     "POST /user/password/forgot": {
@@ -113,14 +110,14 @@ export default {
         operationId: "GetDevices",
         body: schemas.GetDevicesBody,
         responses: [{200: schemas.GetDevicesResponse}, 400, 401, 403],
-        security: authenticated,
+        security: authenticatedEndpoint,
         tags: ['Devices']
     },
     "GET /user/device/{id}": {
         operationId: "GetDevice",
         path: {id: schemas.DeviceId},
         responses: [{200: schemas.GetDeviceBody}, 400, 401, 403],
-        security: authenticated,
+        security: authenticatedEndpoint,
         tags: ['Devices']
     },
     "PUT /user/device/{id}": {
@@ -128,7 +125,7 @@ export default {
         path: {id: schemas.DeviceId},
         body: schemas.UpdateDeviceStatusBody,
         responses: [{200: schemas.UpdateDeviceStatusResponse}, 400, 401, 403],
-        security: authenticated,
+        security: authenticatedEndpoint,
         tags: ['Devices']
     },
     "PUT /user/device/{id}/confirm": {
@@ -136,14 +133,14 @@ export default {
         path: {id: schemas.DeviceId},
         body: schemas.ConfirmDeviceBody,
         responses: [{200: schemas.ConfirmDeviceResponse}, 400, 401, 403],
-        security: authenticated,
+        security: authenticatedEndpoint,
         tags: ['Devices']
     },
     "DELETE /user/device/{id}": {
         operationId: "ForgetDevice",
         path: {id: schemas.DeviceId},
         responses: [{200: schemas.ForgetDeviceResponse}, 400, 401, 403],
-        security: authenticated,
+        security: authenticatedEndpoint,
         tags: ['Devices']
     },
 } as const satisfies RouteMap

@@ -172,6 +172,14 @@ export function accessDeniedError(message: string = "Access denied.", details?: 
     })
 }
 
+export function notFoundError(message: string = "Resource does not exist.", details?: object) {
+    return new AppError(message, {
+        ...details,
+        statusCode: '404',
+        name: 'NotFound',
+    })
+}
+
 export function conflictError(message: string, details?: object) {
     return new AppError(message, {
         ...details,

@@ -7,7 +7,7 @@ const apiServiceLambda = authorizer.gateway.newLambda(Lambdas['api.handler'])
         timeout: 5,
         memorySize: 512
     })
-    .inlinePolicy(allowCrud().on(dataTable).buildRoleInlinePolicy())
+    .inlinePolicy(allowCrud().on(dataTable).buildRoleInlinePolicy("DynamoDbAccess"))
     .build()
 
 export default authorizer.newAuthorizedIntegration(apiServiceLambda)

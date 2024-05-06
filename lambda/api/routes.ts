@@ -15,7 +15,7 @@ import _ from "lodash";
 import {SecurityRequirementObject} from "openapi3-ts/src/model/openapi31";
 import {Middleware, Pipeline, LambdaRequest} from "./pipeline"
 import {HttpError} from "./errors";
-
+import {Value} from "@sinclair/typebox/value";
 
 const HttpMethods = ["GET", "PUT", "POST", "DELETE", "PATCH", "HEAD", "OPTIONS", "ANY"] as const
 type HttpMethod = typeof HttpMethods[number]
@@ -276,40 +276,57 @@ Pipeline.prototype.withRoutes = function <T extends RouteMap>(api: T, options?: 
 class RequestParser<T extends TSchema, P extends string> {
     private _check: TypeCheck<T>;
 
-    private constructor(schema: T, private readonly prop: P) {
+    private constructor(private readonly schema: T,
+                        private readonly prop: P,
+                        private readonly bodyParser: boolean) {
         this._check = TypeCompiler.Compile(schema)
     }
 
+    private getProp(e: { [key in P]?: unknown }) {
+        let val = e[this.prop]
+        if (this.bodyParser) return val
+
+        //Non-body request elements (query, path, headers, cookies) needs a special treatment.
+        //1. They have to be at least an empty object, otherwise schema validation fails even if all schema elements
+        // are optional. E.g. this fails `query: { q: Type.Optional(Type.String()) }` because there is no root object.
+        // This fails as well - `query: Type.Optional({ q: Type.Optional(Type.String()) })`.
+        //2. They represented as string, but JSON schema defines them as numbers, booleans and other primitive types.
+        if (val === undefined) val = {}
+        val = Value.Convert(this.schema, val)
+        return val
+    }
+
     parse(e: { [key in P]?: unknown }) {
-        return this._check.Decode(e[this.prop])
+        let value: any = this.getProp(e)
+        return this._check.Decode(value)
     }
 
     errors(e: { [key in P]?: unknown }) {
-        return Array.from(this._check.Errors(e[this.prop]))
+        return Array.from(this._check.Errors(this.getProp(e)))
     }
 
     check(e: { [key in P]?: unknown }) {
-        return this._check.Check(e[this.prop])
+        return this._check.Check(this.getProp(e))
     }
 
     static jsonBodyParser<Body extends TSchema>(schema: Body) {
-        return new RequestParser(schema, "json")
+        return new RequestParser(schema, "json", true)
     }
 
     static pathParser<T extends TProperties>(schema: T) {
-        return new RequestParser(Type.Object(schema), "pathParameters")
+        return new RequestParser(Type.Object(schema), "pathParameters", false)
     }
 
     static queryParser<T extends TProperties>(schema: T) {
-        return new RequestParser(Type.Object(schema), "queryStringParameters")
+        return new RequestParser(Type.Object(schema), "queryStringParameters", false)
     }
 
     static headersParser<T extends TProperties>(schema: T) {
-        return new RequestParser(Type.Object(schema), "headers")
+        return new RequestParser(Type.Object(schema), "headers", false)
     }
 
     static cookiesParser<T extends TProperties>(schema: T) {
-        return new RequestParser(Type.Object(schema), "cookiesMap")
+        return new RequestParser(Type.Object(schema), "cookiesMap", false)
     }
 }
 

@@ -83,13 +83,15 @@ export const usersTable = {
     name: users.name
 }
 
-export function allowCrud(name: string = "DynamoDbAccess") {
-    return newPolicy(name)
-        .allow("dynamodb:GetItem",
-            "dynamodb:DeleteItem",
-            "dynamodb:PutItem",
-            "dynamodb:Scan",
-            "dynamodb:Query",
-            "dynamodb:UpdateItem",
-            "dynamodb:DescribeTable")
+export const DynamoDbCRUDActions = ["dynamodb:GetItem",
+    "dynamodb:DeleteItem",
+    "dynamodb:PutItem",
+    "dynamodb:Scan",
+    "dynamodb:Query",
+    "dynamodb:UpdateItem",
+    "dynamodb:DescribeTable"]
+
+export function allowCrud() {
+    return newPolicy()
+        .allow(...DynamoDbCRUDActions)
 }

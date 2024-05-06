@@ -18,7 +18,7 @@ export interface LambdaCaller {
 }
 
 const makeResourceId = _.memoize(function ({module, handler}: LambdaSource) {
-    return `${module}-${handler}`
+    return `${module.replace('/', '-')}-${handler}`
 })
 
 /**
@@ -54,6 +54,11 @@ interface RolePolicy {
  */
 interface PolicyBuilder {
     /**
+     * Start new policy statement with a given SID
+     */
+    sid(id: string): PolicyBuilder
+
+    /**
      * Starts 'Effect: "Allow"' statement. See also {@link StatementBuilder} and {@link StatementBuilder.on}.
      * @param actions - allowed actions
      */
@@ -68,7 +73,7 @@ interface PolicyBuilder {
     /**
      * Builds inline policy.
      */
-    buildRoleInlinePolicy(): RolePolicy
+    buildRoleInlinePolicy(name: string): RolePolicy
 
     buildPolicy(): pulumi.Input<aws.iam.PolicyDocument>
 }
@@ -221,10 +226,11 @@ newLambdaModule.role = newLambdaRole
 newLambdaModule.builder = undefined
 export const newLambda: NewLambdaModule = newLambdaModule
 
-export function newPolicy(name: string): PolicyBuilder {
+export function newPolicy(): PolicyBuilder {
     const statements: any[] = []
+    let _sid: string | undefined
 
-    function statementBuilder(effect: string, actions: string[]): StatementBuilder & PolicyBuilder {
+    function statementBuilder(effect: string, actions: string[], sid?: string): StatementBuilder & PolicyBuilder {
         let _resources: AwsResource[] = []
         let _principals: Principal[] = []
 
@@ -234,6 +240,8 @@ export function newPolicy(name: string): PolicyBuilder {
                     Effect: effect,
                     Action: actions,
                 }
+
+                if (sid !== undefined) policy.Sid = sid
                 const arns = resources.map(x => typeof x === "object" && 'arn' in x ? x.arn : x)
                 if (arns.length == 1) {
                     policy.Resource = arns[0]
@@ -248,10 +256,15 @@ export function newPolicy(name: string): PolicyBuilder {
                 }
                 return policy
             })
+            _sid = undefined
             statements.push(statement)
         }
 
         return {
+            sid(id: string): PolicyBuilder {
+                pushStatement()
+                return policyBuilder.sid(id)
+            },
             on(...resources: AwsResource[]) {
                 _resources.push(...resources)
                 return this
@@ -268,9 +281,9 @@ export function newPolicy(name: string): PolicyBuilder {
                 pushStatement()
                 return policyBuilder.deny(...actions)
             },
-            buildRoleInlinePolicy() {
+            buildRoleInlinePolicy(name:string) {
                 pushStatement()
-                return policyBuilder.buildRoleInlinePolicy()
+                return policyBuilder.buildRoleInlinePolicy(name)
             },
             buildPolicy() {
                 pushStatement()
@@ -280,13 +293,20 @@ export function newPolicy(name: string): PolicyBuilder {
     }
 
     const policyBuilder: PolicyBuilder = {
+        sid(id: string): PolicyBuilder {
+            _sid = id
+            return this
+        },
         allow(...actions: string[]) {
-            return statementBuilder("Allow", actions)
+            _sid = undefined
+            return statementBuilder("Allow", actions, _sid)
         },
         deny(...actions: string[]) {
-            return statementBuilder("Deny", actions)
+            _sid = undefined
+            return statementBuilder("Deny", actions, _sid)
         },
-        buildRoleInlinePolicy() {
+        buildRoleInlinePolicy(name: string) {
+            _sid = undefined
             return {
                 name,
                 policy: pulumi.all(statements).apply(statements =>
@@ -298,10 +318,10 @@ export function newPolicy(name: string): PolicyBuilder {
                 )
             }
         },
-
-        buildPolicy(): pulumi.Input<aws.iam.PolicyDocument> {
+        buildPolicy(id?:string): pulumi.Input<aws.iam.PolicyDocument> {
+            _sid = undefined
             return {
-                Id: name,
+                Id: id,
                 Version: "2012-10-17",
                 Statement: statements
             }

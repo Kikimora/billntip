@@ -11,5 +11,5 @@ config:
     secure: AAABAFUULy/0bAsDY9VeqvBF02vTVl4hz+VOVDnQI9o2onv1kRU=
   BillAndTip:google_client_id: add-me
   BillAndTip:google_client_secret:
-    secure: AAABAC5ooU3gThL2eoetmATbWsl7SlRq4xf3gdQidNO+SJw/8Rs=
+    secure: AAABABzWvCmUZ8q4pXn86mj6+smqVVWVlA+IaSf7W44GB/WhgUK+7Qs=
   aws:profile: billntip-dev

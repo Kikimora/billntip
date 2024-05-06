@@ -19,8 +19,8 @@ export const cognito = {
 export {default as api} from "./api"
 export * as s3 from "./s3"
 
-const outputsCachePath = upath.join(__dirname, "resources.json")
+const outputsCachePath = upath.join(__dirname, "../out", `resources.${pulumi.getStack()}.json`)
 pulumi.all({...exports}).apply(x => {
     fs.writeFileSync(outputsCachePath, JSON.stringify(x, null, 2))
-    console.log("Outputs written to ./aws/resources.json")
+    console.log(`Outputs written to ${outputsCachePath}`)
 })

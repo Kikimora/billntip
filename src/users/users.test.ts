@@ -1,20 +1,32 @@
 import _ from "lodash";
 import * as uuid from "uuid";
-import {CognitoIdentityProvider, UserPoolType} from "@aws-sdk/client-cognito-identity-provider";
+import {PreSignUpTriggerEvent} from "aws-lambda";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
+import {CognitoIdentityProvider, UserPoolType, AttributeType} from "@aws-sdk/client-cognito-identity-provider";
 import * as jwt from 'jsonwebtoken'
 import {SessionContext} from "@src/authorizer/session";
-import * as users from "./index"
-import UserRepo from "@src/users/user";
 import {Tracer} from "@app/diagnostics";
+import {TracedEvent} from "@app/lambda";
+import * as users from "./index"
+import * as triggers from "./cognito-triggers"
+import UserRepo from "./user";
+import {UserPoolId} from "./index";
 import FunctionPropertyNames = jest.FunctionPropertyNames;
 
-jest.mock('@aws-sdk/client-cognito-identity-provider')
+const cognito = new CognitoIdentityProvider()
+const dynamo = new DynamoDB()
+const tracer = new Tracer("test");
+const userRepo = new UserRepo({
+    tracer,
+    tag: uuid.v4(),
+    db: dynamo
+})
+const createdUsers: string[] = []
 
 const handler = async function (req: any, auth?: SessionContext) {
-    if (req.body !== undefined)
+    if (req.body !== undefined) {
         req.body = JSON.stringify(req.body, null, 2)
-
+    }
     req = _.merge(req, {
         headers: {'content-type': 'application/json'},
         requestContext: {
@@ -36,11 +48,9 @@ const handler = async function (req: any, auth?: SessionContext) {
     }
     return response
 }
-
 beforeAll(async () => {
     jest.resetModules()
     jest.clearAllMocks()
-
     jest.spyOn(CognitoIdentityProvider.prototype, 'describeUserPoolClient')
         .mockImplementation(() => ({
             UserPoolClient: {
@@ -53,43 +63,43 @@ beforeAll(async () => {
                 RefreshTokenValidity: 3600
             } as UserPoolType
         }));
+    jest.spyOn(CognitoIdentityProvider.prototype, 'describeUserPool')
+        .mockImplementation(() => ({
+            UserPool: {
+                UsernameAttributes: ['email', 'phone_number'],
+                AliasAttributes: undefined
+            } as UserPoolType
+        }));
+
 })
 
-const dynamo = new DynamoDB()
+async function cleanup() {
+    const cleanup = createdUsers.map(async function (uname) {
+        try {
+            const user = await userRepo.fetch(uname, {allowUnverifiedAlias: true})
+            await user.delete(true)
+            await cognito.adminDeleteUser({UserPoolId, Username: user.username})
+        } catch (e: any) {
+            if (e.name !== 'UserNotFoundException') throw e
+        }
+    })
+    await Promise.all(cleanup)
+}
 
-let username!: string
-let email!: string
-let newEmail!: string
-let phone!: string
-let userRepo!: UserRepo
-beforeEach(() => {
-    username = uuid.v4()
-    email = `${username}@example.com`
-    newEmail = `new_email@example.com`
-    phone = `+1123123123`
-    userRepo = new UserRepo({
-        tracer: new Tracer("test"),
-        requestContext: {requestId: uuid.v4()}
-    } as any, dynamo)
-})
-afterEach(async () => {
-    try {
-        const user = await userRepo.fetch(username)
-        await user.delete(true)
-    } catch (e: any) {
-        if (e.name !== 'UserNotFoundException') throw e
-    }
-})
+beforeEach(async () => await cleanup())
+afterEach(async () => await cleanup())
 
 describe("Signup process", () => {
-    let signupMock!: jest.SpyInstance
+    let signupSpy!: jest.SpyInstance
+    let username!: string, email!: string
 
-    beforeEach(() => ({signupMock} = setupSignup()))
+    beforeEach(() => ({signupSpy, username, email} = setupSignup()))
 
     describe("POST /user", () => {
         it("creates user in Cognito and Dynamo, returns cognito response", async () => {
             //act
             const response = await signUp({
+                username,
                 userAttributes: [
                     {name: 'email', value: `${email}`},
                     {name: 'attr1', value: "attr1 value"},
@@ -98,13 +108,17 @@ describe("Signup process", () => {
                 validationData: [{name: 'value', value: 'validation data'}],
                 clientMetadata: {'metadataKey': 'metadataValue'}
             })
+
             //assert
-            expect(signupMock).toHaveBeenCalledWith(expect.objectContaining({
+            expect(signupSpy).toHaveBeenCalledWith(expect.objectContaining({
                 Username: username,
                 Password: "Qweqwe_1",
                 UserAttributes: [{"Name": "email", "Value": `${email}`}],
                 ValidationData: [{Name: 'value', Value: 'validation data'}],
-                ClientMetadata: {'metadataKey': 'metadataValue'}
+                ClientMetadata: {
+                    'metadataKey': 'metadataValue',
+                    '_attributes': `[{"name":"attr1","value":"attr1 value"},{"name":"attr2","value":"attr2 value"}]`
+                }
             }))
             expect(response).toEqual({
                 userConfirmed: false,
@@ -124,8 +138,8 @@ describe("Signup process", () => {
         })
         it("fails if user exists", async () => {
             //act
-            const successfulResponse = await signUp()
-            const failedResponse = await signUp()
+            const successfulResponse = await signUp({username})
+            const failedResponse = await signUp({username})
             //assert
             expect(successfulResponse).toEqual(expect.objectContaining({
                 userSub: username
@@ -140,7 +154,7 @@ describe("Signup process", () => {
                 ...Array.from({length: 60}, (_1, i) => ({name: `attr${i}`, value: `attr${i} value`}))
             ];
             //act
-            const response = await signUp({userAttributes})
+            const response = await signUp({username, userAttributes})
             //assert
             expect(response).toEqual({
                 statusCode: "400",
@@ -153,8 +167,9 @@ describe("Signup process", () => {
     })
 
     describe("POST /user/confirm", () => {
-        beforeEach(setupSignup)
-        beforeEach(signUp)
+        let username!: string, email!: string
+        beforeEach(() => ({username, email} = setupSignup()))
+        beforeEach(() => signUp({username}))
 
         it("confirm user in cognito", async () => {
             //arrange
@@ -163,6 +178,7 @@ describe("Signup process", () => {
             })
             //act
             const confirmResponse = await confirmSignup({
+                username,
                 confirmationCode: "123456",
                 clientMetadata: {'metadataKey': 'metadataValue'}
             })
@@ -184,25 +200,47 @@ describe("Signup process", () => {
     })
 })
 
+
 function setupSignup() {
-    const signupMock = jest.spyOn(CognitoIdentityProvider.prototype, 'signUp')
-        .mockReturnValue({
-            UserConfirmed: false,
-            CodeDeliveryDetails: {
-                Destination: `${email}`,
-                DeliveryMedium: "EMAIL",
-                AttributeName: 'email'
-            },
-            UserSub: username
-        } as any)
-    return {signupMock}
+    const username = uuid.v4()
+    const email = `${username}@example.com`
+    createdUsers.push(username)
+    const signupSpy = jest.spyOn(CognitoIdentityProvider.prototype, 'signUp')
+        .mockImplementation(async function (signupInput) {
+            await triggers.trigger({
+                tracer: tracer,
+                version: "1",
+                region: "eu-south-1",
+                userPoolId: UserPoolId,
+                callerContext: {},
+                triggerSource: "PreSignUp_SignUp",
+                userName: username,
+                request: {
+                    userAttributes: _(signupInput.UserAttributes).keyBy('Name').mapValues('Value').value(),
+                    clientMetadata: signupInput.ClientMetadata,
+                    validationData: _(signupInput.ValidationData).keyBy('Name').mapValues('Value').value()
+                },
+                response: {
+                    autoConfirmUser: false, autoVerifyEmail: false, autoVerifyPhone: false
+                }
+            } as PreSignUpTriggerEvent & TracedEvent, {} as any)
+            return {
+                UserConfirmed: false,
+                CodeDeliveryDetails: {
+                    Destination: `${email}`,
+                    DeliveryMedium: "EMAIL",
+                    AttributeName: 'email'
+                },
+                UserSub: username
+            }
+        })
+    return {signupSpy, username, email}
 }
 
-async function signUp(request?: any) {
+async function signUp(request: any) {
     return await handler({
         routeKey: "POST /user",
         body: {
-            username: username,
             password: "Qweqwe_1",
             ...request
         }
@@ -225,38 +263,29 @@ function confirmSignup(request: any) {
     const confirmRequest = {
         routeKey: "POST /user/confirm",
         body: {
-            username,
             ...request
         }
     }
     return handler(confirmRequest)
 }
 
-
-//Alternative
-//GET  /user/attributes - get user attributes and prefill the form
-//PUT  /user/attributes - update user attributes
-//POST /tip/registration - add user to the group
-//POST /user/session - get new tokens and cookie
-
 describe("Session", () => {
+    let username!: string, email!: string
+    beforeEach(() => ({username, email} = setupSignup()))
+    beforeEach(() => signUp({username}))
 
     beforeEach(async () => {
-        setupSignup()
-        await signUp()
-        setupConfirmSignup()
-        await confirmSignup({
-            UserAttributes: [{Name: 'email', Value: email}, {Name: 'email_verified', Value: 'true'}]
-        })
+        setupConfirmSignup({UserAttributes: [{Name: 'email', Value: email}, {Name: 'email_verified', Value: 'true'}]})
+        await confirmSignup({username})
     })
 
     describe("POST /user/signin", () => {
         it("generates access tokens", async () => {
-            const {mock: initiateAuthMock} = setupAuthResponse('initiateAuth', {
+            const {mock: initiateAuthMock} = setupAuthResponse('initiateAuth', username, email, {
                 "cognito:groups": ["admin"],
                 "email_verified": true
             })
-            const response = await initiateAuth()
+            const response = await initiateAuth(username)
 
             expect(initiateAuthMock).toBeCalled()
             expect(response).toEqual(expect.objectContaining({
@@ -284,7 +313,7 @@ describe("Session", () => {
         })
         it("can respond with a challenge", async () => {
             setupAuthChallengeResponse('initiateAuth')
-            const response = await initiateAuth()
+            const response = await initiateAuth(username)
             expect(response).toEqual(expect.objectContaining({
                 challengeName: 'SMS_MFA',
                 session: 'CHALLENGE SESSION',
@@ -294,12 +323,12 @@ describe("Session", () => {
     })
 
     describe("POST /user/signin/challenge", () => {
-        beforeEach(async ()=>{
-            setupAuthResponse('initiateAuth')
-            await initiateAuth()
+        beforeEach(async () => {
+            setupAuthResponse('initiateAuth', username, email)
+            await initiateAuth(username)
         })
         it("generates access tokens", async () => {
-            const {mock: respondToAuthChallengeMock} = setupAuthResponse('respondToAuthChallenge')
+            const {mock: respondToAuthChallengeMock} = setupAuthResponse('respondToAuthChallenge', username, email)
             const response = await respondToAuthChallenge({
                 session: "XYZ",
                 challengeName: "SMS_MFA",
@@ -371,10 +400,11 @@ describe("Session", () => {
         it("removes session from storage", () => {
         })
     })
-
 })
 
 function setupAuthResponse(method: FunctionPropertyNames<Required<CognitoIdentityProvider>> = 'initiateAuth',
+                           username: string,
+                           email: string,
                            authResponse?: any) {
     const private_key = 'private_key';
     const access = {};
@@ -419,7 +449,7 @@ function setupAuthChallengeResponse(method: FunctionPropertyNames<Required<Cogni
         } as any)
 }
 
-function initiateAuth(body?: any) {
+function initiateAuth(username: string, body?: any) {
     return handler({
         routeKey: "POST /user/signin",
         body: {
@@ -442,18 +472,27 @@ function respondToAuthChallenge(body?: any) {
 
 describe("Attributes", () => {
 
+    let username!: string, email!: string
+    beforeEach(() => ({username, email} = setupSignup()))
+    beforeEach(() => signUp({
+        username,
+        userAttributes: [{name: "attr", value: "value"}, {name: "email", value: email}]
+    }))
+
     let auth!: SessionContext
     beforeEach(async () => {
-        setupSignup()
-        await signUp({userAttributes: [{name: "attr", value: "value"}, {name: "email", value: email}]})
         setupConfirmSignup({UserAttributes: []})
-        await confirmSignup({confirmationCode: "123456"})
-        const {session} = setupAuthResponse('initiateAuth', {"cognito:groups": [], "email_verified": true})
+        await confirmSignup({username, confirmationCode: "123456"})
+        const {session} = setupAuthResponse('initiateAuth', username, email, {
+            "cognito:groups": [],
+            "email_verified": true
+        })
         auth = session
-        await initiateAuth()
+        await initiateAuth(username)
     })
 
     describe("PUT /user/attributes", () => {
+
         it("requires active session", async () => {
             const response = await putUserAttributes()
             expect(response).toEqual({
@@ -463,29 +502,14 @@ describe("Attributes", () => {
         })
         it("update attributes in Cognito and DynamoDB", async () => {
             //arrange
-            const codeDeliveryDetailsList = [{
-                Destination: newEmail,
-                DeliveryMedium: "EMAIL",
-                AttributeName: "email"
-            }, {
-                Destination: phone,
-                DeliveryMedium: "SMS",
-                AttributeName: "phone_number"
-            }];
-            const updateMock = jest.spyOn(CognitoIdentityProvider.prototype, 'updateUserAttributes')
-                .mockReturnValue({
-                    CodeDeliveryDetailsList: codeDeliveryDetailsList
-                } as any)
-            jest.spyOn(CognitoIdentityProvider.prototype, 'adminGetUser')
-                .mockReturnValue({
-                    UserAttributes: [
-                        {Name: "email", Value: newEmail},
-                        {Name: "email_verified", Value: 'false'},
-                        {Name: "phone_number", Value: phone},
-                        {Name: "phone_number_verified", Value: 'false'},
-                    ],
-                } as any)
-
+            const newEmail = `users.test.new_email@example.com`
+            const phone = `+1123123123`
+            const {codeDeliveryDetailsList, updateUserAttributes} = setupUpdateAttributes([
+                {Name: "email", Value: newEmail},
+                {Name: "email_verified", Value: 'false'},
+                {Name: "phone_number", Value: phone},
+                {Name: "phone_number_verified", Value: 'false'},
+            ]);
             //act
             const response = await putUserAttributes({
                 userAttributes: [
@@ -498,10 +522,16 @@ describe("Attributes", () => {
             }, auth)
 
             //assert
-            expect(response).toEqual({
-                codeDeliveryDetailsList: codeDeliveryDetailsList.map(x => _.mapKeys(x, (v, k) => _.lowerFirst(k)))
-            })
-            expect(updateMock).toHaveBeenCalledWith({
+            expect(response).toEqual(expect.objectContaining({
+                attributes: expect.arrayContaining([
+                    {name: "attr", value: "new value"},
+                    {name: "new_attr", value: "value"},
+                    {name: "email", value: newEmail, verified: false},
+                    {name: "phone_number", value: phone, verified: false},
+                ]),
+                codeDeliveryDetailsList: codeDeliveryDetailsList.map(x => _.mapKeys(x, (_1, k) => _.lowerFirst(k)))
+            }))
+            expect(updateUserAttributes).toHaveBeenCalledWith({
                 UserAttributes: [
                     {Name: "email", Value: newEmail},
                     {Name: "phone_number", Value: phone}
@@ -516,6 +546,20 @@ describe("Attributes", () => {
                 {name: "email", value: newEmail, verified: false},
                 {name: "phone_number", value: phone, verified: false},
             ])
+        })
+
+        it("handles empty attribute value", async () => {
+            const response = await putUserAttributes({
+                userAttributes: [
+                    {name: "attr", value: ""},
+                ],
+            }, auth)
+            expect(response).toEqual(expect.objectContaining({
+                attributes: expect.arrayContaining([
+                    {name: "attr", value: ""},
+                ]),
+                codeDeliveryDetailsList: undefined
+            }))
         })
     })
 
@@ -549,4 +593,27 @@ function getUserAttributes(auth?: any) {
         routeKey: "GET /user/attributes",
     }, auth)
 }
+
+function setupUpdateAttributes(attributes: AttributeType[]) {
+
+    const codeDeliveryDetailsList = attributes
+        .filter(x => x.Name === 'email' || x.Name === 'phone_number')
+        .map(x => ({
+            Destination: x.Value,
+            DeliveryMedium: x.Name === 'email' ? "EMAIL" : 'SMS',
+            AttributeName: x.Name
+        }))
+
+    const updateUserAttributes = jest.spyOn(CognitoIdentityProvider.prototype, 'updateUserAttributes')
+        .mockReturnValue({
+            CodeDeliveryDetailsList: codeDeliveryDetailsList.length > 0 ? codeDeliveryDetailsList : undefined
+        } as any)
+
+    jest.spyOn(CognitoIdentityProvider.prototype, 'adminGetUser')
+        .mockReturnValue({
+            UserAttributes: attributes,
+        } as any)
+    return {codeDeliveryDetailsList, updateUserAttributes};
+}
+
 

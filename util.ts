@@ -120,8 +120,12 @@ declare module "lodash" {
     }
 }
 
-export function die(errorMessage: string, E?: { new(m: string): Error; }): never {
-    throw new (E ?? Error)(errorMessage);
+export function die(errorMessage: Error): never
+export function die(errorMessage: string, E?: { new(m: string): Error; }): never
+export function die(error: string | Error, E?: { new(m: string): Error; }): never {
+    if (typeof error === "string")
+        throw new (E ?? Error)(error);
+    throw error
 }
 
 declare module 'lodash' {

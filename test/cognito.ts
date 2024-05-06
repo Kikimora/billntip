@@ -134,8 +134,6 @@ export async function init(userPoolId: string, userPoolClientId: string): Promis
                 UserAttributes: [
                     {Name: "email_verified", Value: "true"},
                     {Name: "email", Value: username},
-                    {Name: "phone_number_verified", Value: "true"},
-                    {Name: "phone_number", Value: "+79219736635"},
                 ]
             })
             await cognito.send(signupCommand)

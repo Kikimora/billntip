@@ -9,14 +9,34 @@ describe("User", () => {
     let repo!: UserRepo
     let user!: User
     let anotherUser: User
-    beforeEach(() => {
+    beforeEach(async () => {
         const req = {
             tracer: new Tracer("test"),
             requestContext: {requestId: uuid.v4()}
         }
-        repo = new UserRepo(req as any, dynamodb, {
+        repo = new UserRepo({
+            tracer: req.tracer,
+            tag: "test",
+            db: dynamodb,
             aliasAttributes: ['email', 'phone_number', 'alt_email']
         })
+
+        const cleanup = ['user.test.user@example.com', 'user.test@example.com', 'user.test.anotherUser@example.com', 'user.test.new@example.com']
+            .map(async function (uname) {
+                try {
+                    console.log('Cleanup: ', uname)
+                    const user = await repo.fetch(uname, {allowUnverifiedAlias: true, fetchDeleted: true})
+                    console.log('Cleanup: Found ', uname)
+                    await user.delete(true)
+                    console.log('Cleanup: Deleted ', uname)
+                } catch (e: any) {
+                    if (e.name !== 'UserNotFoundException') {
+                        console.log('Cleanup: Not Found ', uname, e.name, e.message)
+                    }
+                    console.log('Cleanup: Not Found ', uname)
+                }
+            })
+        await Promise.all(cleanup)
     })
     afterEach(async () => {
         if (user !== undefined) {
@@ -31,7 +51,9 @@ describe("User", () => {
 
     describe("create", () => {
         it("creates new user", async () => {
-            user = await repo.create("test", 'user', [{name: "attr", value: "value"}])
+            user = await repo.create("test", 'user', [
+                {name: "attr", value: "value"}
+            ])
             expect(user.isLocked).toBeFalse()
             await verifyAttributes([
                 {name: "attr", value: "value"},
@@ -41,29 +63,41 @@ describe("User", () => {
             user = await repo.createLocked("test")
             expect(user.isLocked).toBeTrue()
         })
-        it("ignores verified attribute coming from untrusted source", async () => {
+        it("creates new user", async () => {
             user = await repo.create("test", 'user', [
-                {name: "email", value: "a@example.com", verified: true},
-                {name: "phone_number", value: "+1123123123", verified: true},
+                {name: "attr", value: "value"}
             ])
+            expect(user.isLocked).toBeFalse()
             await verifyAttributes([
-                {name: "email", value: "a@example.com", verified: false},
-                {name: "phone_number", value: "+1123123123", verified: false},
+                {name: "attr", value: "value"},
             ])
         })
-        it("trust verifiers coming from a trusted source", async () => {
-            user = await repo.create("test", 'trusted', [
-                {name: "email", value: "a@example.com", verified: true},
-                {name: "phone_number", value: "+1123123123", verified: true},
-            ])
-            await verifyAttributes([
-                {name: "email", value: "a@example.com", verified: true},
-                {name: "phone_number", value: "+1123123123", verified: true},
-            ])
+        it.each([
+            {
+                title: "ignores verified flag coming from untrusted source",
+                attr: {name: "email", value: "user.test@example.com", verified: true},
+                from: "user",
+                result: {name: "email", value: "user.test@example.com", verified: false}
+            },
+            {
+                title: "accept verified flag coming from trusted source",
+                attr: {name: "email", value: "user.test@example.com", verified: true},
+                from: "trusted",
+                result: {name: "email", value: "user.test@example.com", verified: true}
+            },
+            {
+                title: "ignores verified flag set on a normal (not alias) attribute coming from trusted source",
+                attr: {name: "attr", value: "value", verified: true},
+                from: "trusted",
+                result: {name: "attr", value: "value"}
+            },
+        ])("$title", async ({attr, from, result}) => {
+            user = await repo.create("test", from as any, [attr])
+            await verifyAttributes([result])
         })
         it("alias cannot be equal to a username", async () => {
-            const createTask = repo.create("user@example.com", 'user', [
-                {name: "email", value: "user@example.com", verified: false}
+            const createTask = repo.create("user.test.user@example.com", 'user', [
+                {name: "email", value: "user.test.user@example.com", verified: false}
             ])
             await expect(createTask).rejects.toThrowError(expect.objectContaining({
                 name: 'InvalidAliasException'
@@ -71,8 +105,8 @@ describe("User", () => {
         })
         it("alias cannot be equal to another alias", async () => {
             const createTask = repo.create("test", 'user', [
-                {name: "email", value: "user@example.com"},
-                {name: "alt_email", value: "user@example.com"}
+                {name: "email", value: "user.test.user@example.com"},
+                {name: "alt_email", value: "user.test.user@example.com"}
             ])
             await expect(createTask).rejects.toThrowError(expect.objectContaining({
                 name: 'InvalidAliasException'
@@ -85,10 +119,10 @@ describe("User", () => {
             }))
         })
         it("alias cannot be equal to another alias of another user", async () => {
-            user = await repo.create("test1", 'trusted', [{name: 'email', value: 'user@example.com'}])
+            user = await repo.create("test1", 'trusted', [{name: 'email', value: 'user.test.user@example.com'}])
             await expect(repo.create("test2", 'trusted', [{
                 name: 'alt_email',
-                value: 'user@example.com'
+                value: 'user.test.user@example.com'
             }])).rejects.toThrowError(expect.objectContaining({
                 name: 'UsernameExistsException'
             }))
@@ -99,7 +133,7 @@ describe("User", () => {
 
         beforeEach(async () => {
             user = await repo.createLocked("test", 'trusted', [
-                {name: "email", value: "a@example.com", verified: true},
+                {name: "email", value: "user.test@example.com", verified: true},
                 {name: "phone_number", value: "+1123123123", verified: false},
             ])
         })
@@ -111,7 +145,7 @@ describe("User", () => {
             }))
         })
         it.each([
-            ["email", "a@example.com", true],
+            ["email", "user.test@example.com", true],
             ["phone_number", "+1123123123", false],
         ])("map %s to username", async (_, value, verified) => {
             const alias = await repo.lookupAlias(value)
@@ -126,7 +160,7 @@ describe("User", () => {
         beforeEach(async () => {
             user = await repo.create("test", 'trusted', [
                 {name: "attr", value: "value"},
-                {name: "email", value: "a@example.com", verified: true},
+                {name: "email", value: "user.test@example.com", verified: true},
                 {name: "phone_number", value: "+1123123123"},
             ])
         })
@@ -135,7 +169,7 @@ describe("User", () => {
             expect(usr).toBeObject()
         })
         it("fetches by verified alias", async () => {
-            const usr = await repo.fetch('a@example.com')
+            const usr = await repo.fetch('user.test@example.com')
             expect(usr).toBeObject()
         })
         it("fetches by unverified alias", async () => {
@@ -176,7 +210,7 @@ describe("User", () => {
             const usr = await repo.fetch("test")
             expect(usr.attributes).toContainValues([
                 {name: "attr", value: "value"},
-                {name: "email", value: "a@example.com", verified: true},
+                {name: "email", value: "user.test@example.com", verified: true},
                 {name: "phone_number", value: "+1123123123", verified: false}
             ])
         })
@@ -185,9 +219,9 @@ describe("User", () => {
     describe("updateAttributes", () => {
 
         beforeEach(async () => {
-            user = await repo.create("test@example.com", 'trusted', [
+            user = await repo.create("user.user.test@example.com", 'trusted', [
                 {name: "attr", value: "value"},
-                {name: "email", value: "user@example.com", verified: true},
+                {name: "email", value: "user.test.user@example.com", verified: true},
             ])
         })
         it("updates normal attributes", async () => {
@@ -198,37 +232,37 @@ describe("User", () => {
             await verifyAttributes([
                 {name: "attr", value: "new value"},
                 {name: "new_attr", value: "value"},
-                {name: "email", value: "user@example.com", verified: true},
+                {name: "email", value: "user.test.user@example.com", verified: true},
             ])
         })
         it("creates new unconfirmed alias", async () => {
-            await user.updateAttributes('user', [{name: "email", value: "new@example.com"}])
+            await user.updateAttributes('user', [{name: "email", value: "user.test.new@example.com"}])
             await verifyAttributes([
-                {name: "email", value: "new@example.com", verified: false},
-                {name: "email", value: "user@example.com", verified: true},
+                {name: "email", value: "user.test.new@example.com", verified: false},
+                {name: "email", value: "user.test.user@example.com", verified: true},
                 {name: "attr", value: "value"},
             ])
         })
         it("keep old alias until new alias is not confirmed", async () => {
-            await user.updateAttributes('user', [{name: "email", value: "new@example.com"}])
-            await expect(repo.fetch('user@example.com')).resolves.toBeObject()
-            await expect(repo.fetch('new@example.com')).rejects.toThrow(expect.objectContaining({
+            await user.updateAttributes('user', [{name: "email", value: "user.test.new@example.com"}])
+            await expect(repo.fetch('user.test.user@example.com')).resolves.toBeObject()
+            await expect(repo.fetch('user.test.new@example.com')).rejects.toThrow(expect.objectContaining({
                 name: 'UserNotFoundException'
             }))
         })
         it("confirms alias", async () => {
             await user.updateAttributes('trusted', [
-                {name: "email", value: "new@example.com", verified: true}
+                {name: "email", value: "user.test.new@example.com", verified: true}
             ])
             await verifyAttributes([
                 {name: "attr", value: "value"},
-                {name: "email", value: "new@example.com", verified: true},
+                {name: "email", value: "user.test.new@example.com", verified: true},
             ])
-            expect(await repo.fetch('new@example.com')).toBeObject()
+            expect(await repo.fetch('user.test.new@example.com')).toBeObject()
         })
         it("fails to update deleted user", async () => {
             await user.delete()
-            await expect(user.updateAttributes('user', [{name: "email", value: "new@example.com"}]))
+            await expect(user.updateAttributes('user', [{name: "email", value: "user.test.new@example.com"}]))
                 .rejects.toThrowError(expect.objectContaining({
                     name: "UserNotFoundException"
                 }))
@@ -243,7 +277,7 @@ describe("User", () => {
         })
         it("alias cannot be equal to another alias", async () => {
             const updateTask = user.updateAttributes('user', [
-                {name: "alt_email", value: "user@example.com"}
+                {name: "alt_email", value: "user.test.user@example.com"}
             ])
             await expect(updateTask).rejects.toThrowError(expect.objectContaining({
                 name: 'InvalidAliasException'
@@ -251,10 +285,10 @@ describe("User", () => {
         })
         it("alias cannot be equal to an alias of another user", async () => {
             anotherUser = await repo.create('anotherUser', 'trusted', [
-                {name: "email", value: "anotherUser@example.com"},
+                {name: "email", value: "user.test.anotherUser@example.com"},
             ])
             const updateTask = user.updateAttributes('user', [
-                {name: "email", value: "anotherUser@example.com"},
+                {name: "email", value: "user.test.anotherUser@example.com"},
             ])
             await expect(updateTask).rejects.toThrowError(expect.objectContaining({
                 name: 'InvalidAliasException'
@@ -267,14 +301,14 @@ describe("User", () => {
             user = await repo.create("test", 'trusted', [
                 {name: "attr1", value: "value"},
                 {name: "attr2", value: "value"},
-                {name: "email", value: "a@example.com", verified: true},
+                {name: "email", value: "user.test@example.com", verified: true},
                 {name: "phone_number", value: "+1123123123", verified: false},
             ])
         })
         it("deletes normal attributes", async () => {
             await user.deleteAttributes(['attr1', 'attr2'])
             await verifyAttributes([
-                {name: "email", value: "a@example.com", verified: true},
+                {name: "email", value: "user.test@example.com", verified: true},
                 {name: "phone_number", value: "+1123123123", verified: false}
             ])
         })
@@ -300,7 +334,7 @@ describe("User", () => {
             user = await repo.create("test", 'trusted', [
                 {name: "attr1", value: "value"},
                 {name: "attr2", value: "value"},
-                {name: "email", value: "a@example.com", verified: true},
+                {name: "email", value: "user.test@example.com", verified: true},
             ])
         })
 
@@ -310,7 +344,7 @@ describe("User", () => {
             await verifyAttributes([
                 {name: "attr1", value: "value"},
                 {name: "attr2", value: "value"},
-                {name: "email", value: "a@example.com", verified: false}
+                {name: "email", value: "user.test@example.com", verified: false}
             ])
             //verifyAttributes reload user from storage, below line checks if deleted flag saved
             expect(user.deleted).toBeTrue()

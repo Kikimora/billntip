@@ -32,7 +32,7 @@ export const MaxAttributes = 50
 export const UserAttributes = T.Array(
     T.Object({
         name: UserAttributeNames,
-        value: T.String({maxLength: 2048}),
+        value: T.String({maxLength: 1024}),
         verified: T.Optional(T.Boolean({
             description: "Indicate that user has confirmed the attribute (e.g. validated email with a code)."
         }))

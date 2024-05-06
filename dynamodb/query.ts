@@ -77,12 +77,14 @@ export function query<T extends TableType<T>, V>(tbl: T, command: QueryCommand<T
     } = prepareCommand(tbl, context as NonNullable<V>)
     const {keyCondition, filter, projection} = command
 
+    let filterExpression = filter?.({attr, val});
+    if (filterExpression?.trim() === '') filterExpression = undefined
     return {
         TableName: tbl.name,
         IndexName: command.indexName,
         KeyConditionExpression: keyCondition?.({key, val}),
         ProjectionExpression: projection?.({key, attr, val}),
-        FilterExpression: filter?.({attr, val}),
+        FilterExpression: filterExpression,
         Select: command.select,
         Limit: command.limit,
         ExclusiveStartKey: command.exclusiveStartKey !== undefined ? marshall(command.exclusiveStartKey, MarshalOptions) : undefined,

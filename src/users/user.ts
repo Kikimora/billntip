@@ -1,5 +1,5 @@
 import {AppError, internalServerError, LambdaRequest, TracedEvent} from "@app/lambda";
-import {DynamoDB, TransactionCanceledException} from "@aws-sdk/client-dynamodb";
+import {TransactionCanceledException} from "@aws-sdk/client-dynamodb";
 import * as ddb from "@app/dynamodb";
 import _, {mergeJoin, MergePair} from "@app/util";
 import {ErrorContext, errorWithContext} from "@app/diagnostics";
@@ -29,15 +29,16 @@ export interface FetchOptions {
  * User data repository provides methods to load users from the storage.
  */
 export default class UserRepo {
-    readonly lockStore: ddb.LockStore;
     private readonly store: UserStore
+    readonly lockStore: ddb.LockStore;
 
+    get db() {
+        return this.store.db
+    }
 
-    constructor(public readonly req: LambdaRequest & TracedEvent,
-                public readonly db: DynamoDB,
-                options?: UserStoreOptions) {
-        this.store = new UserStore(db, options)
-        this.lockStore = ddb.makeLockStore(LocksTableName, {dynamoDb: db})
+    constructor(options?: UserStoreOptions) {
+        this.store = new UserStore(options)
+        this.lockStore = ddb.makeLockStore(LocksTableName, {dynamoDb: this.db})
     }
 
     /**
@@ -115,7 +116,7 @@ export default class UserRepo {
     }
 
     private async _create(username: string, lock: boolean, source: "trusted" | "user" = 'user', attributes?: UserAttribute[]) {
-        const user = new User(username, this.req, this.store, this.lockStore)
+        const user = new User(username, this.store, this.lockStore)
         if (lock)
             await user.lock()
         try {
@@ -165,7 +166,7 @@ export default class UserRepo {
             throw userNotFoundException().withContext(context)
         }
 
-        const user = new User(username, this.req, this.store, this.lockStore)
+        const user = new User(username, this.store, this.lockStore)
 
         try {
             if (lock) {
@@ -205,7 +206,6 @@ export class User {
     private _lock?: ddb.LockHandle;
 
     constructor(public readonly username: string,
-                private readonly req: LambdaRequest & TracedEvent,
                 private readonly store: UserStore,
                 private readonly lockStore: ddb.LockStore,) {
         this._attributes = []
@@ -213,7 +213,7 @@ export class User {
     }
 
     private get requestId() {
-        return this.req.requestContext.requestId
+        return this.store.tag
     }
 
     get attributes(): Readonly<UserAttribute[]> {
@@ -226,20 +226,20 @@ export class User {
                         yield {
                             name: attr.name,
                             value: attr.value,
-                            verified: true
+                            verified: true,
                         }
                     }
                     if (attr.unverifiedValue !== undefined) {
                         yield {
                             name: attr.name,
                             value: attr.unverifiedValue,
-                            verified: false
+                            verified: false,
                         }
                     }
-                } else if (attr.value !== undefined) {
+                } else {
                     yield {
                         name: attr.name,
-                        value: attr.value
+                        value: attr.value ?? "",
                     }
                 }
             }
@@ -454,10 +454,13 @@ export class User {
         const {username, store} = this
 
         /**
-         * Prepare input attributes
+         * Prepare input attributes:
          * 1. Map them into storage representation {@link UserAttributeItem} which is easy to merge.
          * 2. Override 'verified' flag based on attributes source.
-         * 3. Validate names and values.
+         * 3. Validate names and values: alis cannot be equal to another alias or username, duplicate names are not allowed.
+         * 4. Map empty string values to undefined. Attribute values used as a secondary key sort key and empty sort
+         * keys are not allowed. Using undefined as a value removes value attribute from the item instead if creating
+         * an empty string.
          */
         function prepareAttributes(attributes: UserAttribute[], trust: boolean): UserAttributeItem[] {
             const values = new Set<string>()
@@ -473,20 +476,23 @@ export class User {
                     }
                     values.add(value)
                 }
-                if (names.has(name)) {
+                if (_.isEmpty(name)) {
                     throw invalidAttributeException(attribute)
                 }
                 names.add(name)
 
+                const attrValue = _.isEmpty(value) ? undefined : value
+                const item: UserAttributeItem = {name}
                 if (isAlias) {
-                    return (verified && trust)
-                        ? {name, value, isAlias: true}
-                        : {name, unverifiedValue: value, isAlias: true}
+                    item.isAlias = isAlias
+                    if (verified && trust)
+                        item.value = attrValue
+                    else
+                        item.unverifiedValue = attrValue
                 } else {
-                    return {
-                        name, value, isAlias: false
-                    }
+                    item.value = attrValue
                 }
+                return item
             })
         }
 
@@ -547,7 +553,7 @@ export class User {
                         tx.refreshAliasRecord(right, 'unverified')
                         merged = {...left, unverifiedValue: right.unverifiedValue}
                     } else {
-                        merged = left
+                        merged = right
                     }
                     tx.updateAttribute(merged)
                     return merged
@@ -556,7 +562,7 @@ export class User {
         }
 
         const join = mergeJoin(userAttributes, input, match)
-        const attributes = Array.from(join, mergeAttributes)
+        const attributes = Array.from(join, mergeAttributes).filter(x => x.value !== '')
         if (attributes.length > this.store.maxAttributes) {
             throw tooManyUserAttributes()
         }

@@ -6,6 +6,7 @@ import {UserAttribute} from "@src/users/attributes";
 import {unmarshall} from "@aws-sdk/util-dynamodb";
 import * as Schemas from "@src/users/schemas";
 import {TransactWriteItem} from "@app/dynamodb";
+import {Tracer} from "@app/diagnostics";
 
 export const UsersTableName = process.env.USERS_TABLE ?? _.throw("Missing required USERS_TABLE env variable")
 
@@ -85,10 +86,10 @@ const Attributes = ddb.table(UsersTableName, {
  * User attribute storage item.
  */
 export interface UserAttributeItem {
-    readonly name: string
-    readonly value?: string
-    readonly unverifiedValue?: string
-    readonly isAlias: boolean
+    name: string
+    value?: string
+    unverifiedValue?: string
+    isAlias?: boolean
 }
 
 /**
@@ -114,14 +115,30 @@ export interface UserStoreOptions {
     /**
      * Attribute names that uniquely identify user and can be user.
      */
-    aliasAttributes?: string[]
+    aliasAttributes?: string[],
+    /**
+     * DynamoDB client instance to use
+     */
+    db?: DynamoDB,
+    /**
+     * Tracer instance to use for tracing
+     */
+    tracer?: Tracer,
+    /**
+     * Store tags to attach in log records and the like.
+     */
+    tag?: string
 }
 
 export default class UserStore {
     private readonly aliasAttributes: Set<string>;
-    public readonly maxAttributes: number;
+    readonly maxAttributes: number;
+    readonly db: DynamoDB
+    readonly tag: string;
 
-    constructor(private readonly db: DynamoDB, options?: UserStoreOptions) {
+    constructor(options?: UserStoreOptions) {
+        this.db = options?.db ?? new DynamoDB()
+        this.tag = options?.tag ?? "noname"
         this.aliasAttributes = new Set(options?.aliasAttributes ?? AliasAttributes)
         this.aliasAttributes.add('username')
         this.maxAttributes = options?.maxAttributes ?? Schemas.MaxAttributes
@@ -206,6 +223,9 @@ class UserTxBuilder {
         tx.add(Attributes, deleteAttribute(username, attr.name))
     }
 
+    /**
+     * Create or update alias record, does nothing if attribute is not an alias.
+     */
     refreshAliasRecord(attr: UserAttributeItem, alias: 'verified' | 'unverified' | 'both' = 'both') {
         const {username, tx} = this
         if (attr.isAlias) {
@@ -218,6 +238,9 @@ class UserTxBuilder {
         }
     }
 
+    /**
+     * Delete alias record, does nothing if attribute is not an alias.
+     */
     deleteAliasRecord(attr: UserAttributeItem, alias: 'verified' | 'unverified' | 'both' = 'both') {
         const {username, tx} = this
         if (attr.isAlias) {
@@ -280,11 +303,8 @@ function refreshAliasRecord(username: string, name: string, alias: string, verif
                 [attr.name]: val(name),
             }
         }),
-        condition: ({
-                        key,
-                        attr,
-                        val
-                    }) => `attribute_not_exists(${key.pk}) OR (${attr.username} = ${val(username)} AND ${attr.name} = ${val(name)})`,
+        condition: ({key, attr, val}) =>
+            `attribute_not_exists(${key.pk}) OR (${attr.username} = ${val(username)} AND ${attr.name} = ${val(name)})`,
         returnOnConditionFailure: "ALL_OLD"
     }
 }

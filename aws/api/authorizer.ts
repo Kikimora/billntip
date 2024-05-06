@@ -32,11 +32,11 @@ const environment = {
 };
 
 const authOperation = [
-    allowCrud().on(sessionsTable, locksTable).buildRoleInlinePolicy(),
-    newPolicy('DescribeUserPoolClient')
+    allowCrud().on(sessionsTable, locksTable).buildRoleInlinePolicy('DynamoDbAccess'),
+    newPolicy()
         .allow("cognito-idp:DescribeUserPoolClient")
         .on(cognito.userPool)
-        .buildRoleInlinePolicy()
+        .buildRoleInlinePolicy('DescribeUserPoolClient')
 ]
 
 function newAuthLambda(lambda: LambdaSource) {

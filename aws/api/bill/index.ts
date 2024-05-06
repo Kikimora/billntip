@@ -16,14 +16,15 @@ const lambda = authorizer.gateway.newLambda(Lambdas['bill.handler'])
         },
         timeout: 10
     })
-    .inlinePolicy(allowCrud().on(usersTable, locksTable).buildRoleInlinePolicy())
+    .inlinePolicy(allowCrud().on(usersTable, locksTable, dataTable).buildRoleInlinePolicy("DynamoDbAccess"))
     .inlinePolicy(
-        newPolicy('UserPoolAccess')
+        newPolicy()
             .allow(
-                "cognito-idp:AdminCreateUser"
+                "cognito-idp:AdminCreateUser",
+                "cognito-idp:ListUsers",
             )
             .on(cognito.userPool)
-            .buildRoleInlinePolicy()
+            .buildRoleInlinePolicy('UserPoolAccess')
     )
     .build()
 
