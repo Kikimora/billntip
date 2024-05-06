@@ -2,6 +2,7 @@ import {ErrorSchema, openapi} from "@app/lambda";
 import upath from "upath";
 import users from "@app/doc/users";
 import images from "@app/doc/images";
+import billntip from "@app/doc/billntip";
 
 export default function () {
     const api = openapi()
@@ -13,5 +14,6 @@ export default function () {
         .response(403, {schema: ErrorSchema})
     users(api)
     images(api)
+    billntip(api)
     return api.build()
 }

@@ -17,12 +17,12 @@ export const Api = {
 } as const
 
 export const Bill = {
-    name: "bill",
+    name: "billntip/bill",
     handlers: ["handler"]
 } as const
 
 export const Tip = {
-    name: "tip",
+    name: "billntip/tip",
     handlers: ["handler"]
 } as const
 
@@ -41,7 +41,7 @@ export const Lambdas = lambdaSet().add(Authorizer).add(Api).add(Users).add(Cogni
 function makeLambdaNamer(stack: string) {
     return function (lambda: LambdaSource) {
         const {module, handler} = lambda
-        return `billntip-${stack}-${module}-${handler}-fn`
+        return `billntip-${stack}-${module}-${handler}-fn`.replace('/', '-')
     }
 }
 

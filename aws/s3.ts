@@ -32,12 +32,12 @@ const accessBlock = new aws.s3.BucketPublicAccessBlock("bucket-access-block", {
 
 const policy = new aws.s3.BucketPolicy("bucket-public-access", {
     bucket: s3Bucket.id,
-    policy: newPolicy("AllowPublic")
+    policy: newPolicy()
         .allow("s3:GetObject")
         .principals("*")
         .on(pulumi.interpolate`arn:aws:s3:::${s3Bucket.id}/public/*`)
         .buildPolicy()
-})
+}, {dependsOn: [s3Bucket]})
 
 export const bucket = {
     id: s3Bucket.id,

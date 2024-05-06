@@ -21,6 +21,12 @@ x-tagGroups:
   - name: Files
     tags:
       - Images
+  - name: Bill
+    tags:
+      - Bill
+  - name: Tip
+    tags:
+      - Tip
 
 components:
   responses:

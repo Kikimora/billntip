@@ -1,17 +1,18 @@
 import {Lambdas} from "@aws/lambdas";
-import {dataTable, allowCrud, locksTable, usersTable} from "@aws/dynamodb";
-import Routes from "@src/bill/routes";
+import {allowCrud, dataTable, locksTable, usersTable} from "@aws/dynamodb";
+import Routes from "@src/billntip/bill-paths";
 import authorizer from "../authorizer";
 import cognito from "@aws/cognito";
 import {newPolicy} from "@aws/util";
 
-const lambda = authorizer.gateway.newLambda(Lambdas['bill.handler'])
+const lambda = authorizer.gateway.newLambda(Lambdas['billntip/bill.handler'])
     .args({
         environment: {
             variables: {
                 USER_POOL_ID: cognito.userPool.id,
                 LOCKS_TABLE: locksTable.name,
-                USERS_TABLE: usersTable.name
+                USERS_TABLE: usersTable.name,
+                DATA_TABLE: dataTable.name
             }
         },
         timeout: 10

@@ -1,16 +1,16 @@
 import {Lambdas} from "@aws/lambdas";
-import {dataTable, allowCrud, locksTable, usersTable} from "@aws/dynamodb";
-import Paths from "@src/tip/paths";
+import {dataTable, allowCrud, usersTable, locksTable} from "@aws/dynamodb";
+import Paths from "@src/billntip/tip-paths";
 import authorizer from "../authorizer";
-import {newPolicy} from "@aws/util";
-import _ from "lodash";
 import cognito from "@aws/cognito";
+import {newPolicy} from "@aws/util";
 
-const lambda = authorizer.gateway.newLambda(Lambdas['tip.handler'])
+const lambda = authorizer.gateway.newLambda(Lambdas['billntip/tip.handler'])
     .args({
         environment: {
             variables: {
                 USER_POOL_ID: cognito.userPool.id,
+                DATA_TABLE: dataTable.name,
                 LOCKS_TABLE: locksTable.name,
                 USERS_TABLE: usersTable.name
             }

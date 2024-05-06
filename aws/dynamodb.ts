@@ -4,17 +4,16 @@ import {newPolicy} from "@aws/util";
 const data = new aws.dynamodb.Table('data', {
     attributes: [
         {name: 'pk', type: 'S'},
-        {name: 'sk', type: 'S'},
-        {name: 'uid', type: 'S'}
+        {name: 'sk', type: 'S'}
     ],
     hashKey: 'pk',
     rangeKey: 'sk',
     billingMode: 'PAY_PER_REQUEST',
     globalSecondaryIndexes: [{
-        name: "business_users",
-        hashKey: "uid",
-        rangeKey: "sk",
-        projectionType: "ALL"
+        name: "inverse",
+        hashKey: "sk",
+        rangeKey: "pk",
+        projectionType: "KEYS_ONLY"
     }]
 }, {retainOnDelete: true});
 
@@ -61,8 +60,7 @@ const users = new aws.dynamodb.Table('users', {
             name: "user_attributes",
             hashKey: "name",
             rangeKey: "value",
-            projectionType: "INCLUDE",
-            nonKeyAttributes: ['pk']
+            projectionType: "KEYS_ONLY"
         }],
 }, {retainOnDelete: true});
 
