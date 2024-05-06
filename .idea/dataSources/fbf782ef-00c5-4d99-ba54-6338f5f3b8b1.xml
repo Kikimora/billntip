@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<dataSource name="Users">
+  <database-model serializer="dbm" dbms="DYNAMO" family-id="DYNAMO" format-version="4.52">
+    <root id="1">
+      <ServerVersion>1.0</ServerVersion>
+    </root>
+    <schema id="2" parent="1" name="schema"/>
+    <table id="3" parent="2" name="Locks"/>
+    <table id="4" parent="2" name="data-33df69c"/>
+    <table id="5" parent="2" name="locks-e544f38"/>
+    <table id="6" parent="2" name="sessions-b097e39"/>
+    <table id="7" parent="2" name="users-b979b61"/>
+    <column id="8" parent="3" name="pk">
+      <DasType>S|0s</DasType>
+      <Position>1</Position>
+    </column>
+    <key id="9" parent="3" name="primary key">
+      <PartitionColumnName>pk</PartitionColumnName>
+    </key>
+    <column id="10" parent="4" name="pk">
+      <DasType>S|0s</DasType>
+      <Position>1</Position>
+    </column>
+    <column id="11" parent="4" name="sk">
+      <DasType>S|0s</DasType>
+      <Position>2</Position>
+    </column>
+    <column id="12" parent="4" name="uid">
+      <DasType>S|0s</DasType>
+      <Position>3</Position>
+    </column>
+    <index id="13" parent="4" name="business_users">
+      <Global>1</Global>
+      <ProjectionType>all</ProjectionType>
+      <PartitionColumnName>uid</PartitionColumnName>
+      <SortColumnName>sk</SortColumnName>
+    </index>
+    <key id="14" parent="4" name="primary key">
+      <PartitionColumnName>pk</PartitionColumnName>
+      <SortColumnName>sk</SortColumnName>
+    </key>
+    <column id="15" parent="5" name="pk">
+      <DasType>S|0s</DasType>
+      <Position>1</Position>
+    </column>
+    <key id="16" parent="5" name="primary key">
+      <PartitionColumnName>pk</PartitionColumnName>
+    </key>
+    <column id="17" parent="6" name="session_id">
+      <DasType>S|0s</DasType>
+      <Position>1</Position>
+    </column>
+    <key id="18" parent="6" name="primary key">
+      <PartitionColumnName>session_id</PartitionColumnName>
+    </key>
+    <column id="19" parent="7" name="name">
+      <DasType>S|0s</DasType>
+      <Position>1</Position>
+    </column>
+    <column id="20" parent="7" name="pk">
+      <DasType>S|0s</DasType>
+      <Position>2</Position>
+    </column>
+    <column id="21" parent="7" name="sk">
+      <DasType>S|0s</DasType>
+      <Position>3</Position>
+    </column>
+    <column id="22" parent="7" name="value">
+      <DasType>S|0s</DasType>
+      <Position>4</Position>
+    </column>
+    <index id="23" parent="7" name="user_attributes">
+      <Global>1</Global>
+      <ProjectedColumnNames>pk</ProjectedColumnNames>
+      <ProjectionType>include</ProjectionType>
+      <PartitionColumnName>name</PartitionColumnName>
+      <SortColumnName>value</SortColumnName>
+    </index>
+    <key id="24" parent="7" name="primary key">
+      <PartitionColumnName>pk</PartitionColumnName>
+      <SortColumnName>sk</SortColumnName>
+    </key>
+  </database-model>
+</dataSource>
