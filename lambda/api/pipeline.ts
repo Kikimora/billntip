@@ -19,7 +19,7 @@ export interface LambdaRequest<TAuthorizer = unknown> {
     stageVariables?: lambda.APIGatewayProxyEventStageVariables;
 }
 
-type Handler<I = any, O = any> = (event: I, context: Context) => Promise<O>
+export type Handler<I = any, O = any> = (event: I, context: Context) => Promise<O>
 
 /**
  * Middleware function accepting request of type `TEvent`, converting it into `T` and calling `this.next` with it.

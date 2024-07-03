@@ -4,7 +4,8 @@ import {Lambdas} from "@aws/lambdas";
 import authorizer from "@aws/api/authorizer";
 import cognito from "@aws/cognito";
 import Paths from "@src/users/paths";
-import {allowCrud, locksTable, sessionsTable, usersTable} from "@aws/dynamodb";
+import ddb, {allowCrud} from "@aws/dynamodb";
+import {bucket} from "@aws/s3";
 
 const users = authorizer.newAuthLambda(Lambdas["users.handler"])
     .args({
@@ -12,7 +13,8 @@ const users = authorizer.newAuthLambda(Lambdas["users.handler"])
         memorySize: 256,
         environment: {
             variables: {
-                USERS_TABLE: usersTable.name
+                USERS_TABLE: ddb.usersTable.name,
+                BUCKET: bucket.id
             }
         }
     })
@@ -27,7 +29,7 @@ const users = authorizer.newAuthLambda(Lambdas["users.handler"])
             )
             .on(cognito.userPool)
             .buildRoleInlinePolicy('UserPoolAccess'),
-        allowCrud().on(usersTable).buildRoleInlinePolicy("UsersTableAccess"))
+        allowCrud().on(ddb.usersTable).buildRoleInlinePolicy("UsersTableAccess"))
     .build()
 const publicRoutes = _.pickBy(Paths, function (value) {
     return value.security?.length === 0;

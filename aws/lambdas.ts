@@ -1,19 +1,14 @@
 import * as upath from "upath";
 import fs from 'fs'
-import {Builder, LambdaSource, lambdaSet} from "@app/lambda/builder";
 import _ from "lodash";
-import * as pulumi from "@pulumi/pulumi";
-import {newLambda} from "@aws/util";
 import * as aws from "@pulumi/aws";
+import {newLambda} from "@aws/util";
+import {configFolder, stack, tags} from "@aws/config";
+import {Builder, LambdaSource, lambdaSet} from "@app/lambda/builder";
 
 export const Authorizer = {
     name: "authorizer",
     handlers: ["code", "tokens", "cookie"]
-} as const
-
-export const Api = {
-    name: "api",
-    handlers: ["handler"]
 } as const
 
 export const Bill = {
@@ -36,7 +31,26 @@ export const Cognito = {
     handlers: ["handler"]
 } as const
 
-export const Lambdas = lambdaSet().add(Authorizer).add(Api).add(Users).add(Cognito).add(Bill).add(Tip).build()
+export const Images = {
+    name: "images",
+    handlers: ["handler"],
+    deps: ['@img/sharp-libvips-linux-arm64', '@img/sharp-linux-arm64']
+} as const
+
+export const Lambdas = lambdaSet()
+    .add(Authorizer)
+    .add(Users)
+    .add(Cognito)
+    .add(Bill)
+    .add(Tip)
+    .add(Images)
+    .build()
+
+export const Modules = [
+    'authorizer.code',
+    'authorizer.tokens',
+    'authorizer.cookie',
+]
 
 function makeLambdaNamer(stack: string) {
     return function (lambda: LambdaSource) {
@@ -80,14 +94,18 @@ const nodejs20xRuntime = "nodejs20.x" as aws.lambda.Runtime;
 newLambda.defaults = {
     runtime: nodejs20xRuntime,
     architectures: ["arm64"],
+    memorySize: 256,
     loggingConfig: {
         logFormat: "JSON",
-        systemLogLevel: pulumi.getStack() == "dev" ? "DEBUG" : "WARN",
+        systemLogLevel: stack == "dev" ? "DEBUG" : "WARN",
     },
     environment: {
         variables: {
-            NODE_OPTIONS: '--enable-source-maps'
+            NODE_OPTIONS: '--enable-source-maps',
+            SSM_PREFIX: configFolder
         }
-    }
+    },
+    timeout: 10,
+    tags
 }
-newLambda.builder = makeBuilder(pulumi.getStack())
+newLambda.builder = makeBuilder(stack)

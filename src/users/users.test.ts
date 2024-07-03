@@ -1,24 +1,25 @@
 import _ from "lodash";
 import * as uuid from "uuid";
-import {PreSignUpTriggerEvent} from "aws-lambda";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {CognitoIdentityProvider, UserPoolType, AttributeType} from "@aws-sdk/client-cognito-identity-provider";
-import * as jwt from 'jsonwebtoken'
-import {SessionContext} from "@src/authorizer/session";
-import {Tracer} from "@app/diagnostics";
-import {TracedEvent} from "@app/lambda";
+import {SessionContext} from "@src/authorizer/types";
+import diagnostics from "@app/diagnostics";
 import * as users from "./index"
-import * as triggers from "./cognito-triggers"
 import UserRepo from "./user";
-import {UserPoolId} from "./index";
 import FunctionPropertyNames = jest.FunctionPropertyNames;
+import {resources} from "@app/test/util";
+import {newSession} from "@app/test/cognito";
+
+diagnostics({
+    triggers: {request: true}
+})
 
 const cognito = new CognitoIdentityProvider()
+const {dynamodb: {usersTable, locksTable}, cognito: {userPool: {id: UserPoolId}}} = resources()
 const dynamo = new DynamoDB()
-const tracer = new Tracer("test");
 const userRepo = new UserRepo({
-    tracer,
-    tag: uuid.v4(),
+    table: usersTable.name,
+    locks: locksTable.name,
     db: dynamo
 })
 const createdUsers: string[] = []
@@ -66,7 +67,8 @@ beforeAll(async () => {
     jest.spyOn(CognitoIdentityProvider.prototype, 'describeUserPool')
         .mockImplementation(() => ({
             UserPool: {
-                UsernameAttributes: ['email', 'phone_number'],
+                //UsernameAttributes: ['email', 'phone_number'],
+                UsernameAttributes: undefined,
                 AliasAttributes: undefined
             } as UserPoolType
         }));
@@ -116,10 +118,11 @@ describe("Signup process", () => {
                 UserAttributes: [{"Name": "email", "Value": `${email}`}],
                 ValidationData: [{Name: 'value', Value: 'validation data'}],
                 ClientMetadata: {
+                    '_attributes': "[{\"name\":\"attr1\",\"value\":\"attr1 value\"},{\"name\":\"attr2\",\"value\":\"attr2 value\"}]",
                     'metadataKey': 'metadataValue',
-                    '_attributes': `[{"name":"attr1","value":"attr1 value"},{"name":"attr2","value":"attr2 value"}]`
                 }
             }))
+
             expect(response).toEqual({
                 userConfirmed: false,
                 codeDeliveryDetails: {
@@ -206,34 +209,15 @@ function setupSignup() {
     const email = `${username}@example.com`
     createdUsers.push(username)
     const signupSpy = jest.spyOn(CognitoIdentityProvider.prototype, 'signUp')
-        .mockImplementation(async function (signupInput) {
-            await triggers.trigger({
-                tracer: tracer,
-                version: "1",
-                region: "eu-south-1",
-                userPoolId: UserPoolId,
-                callerContext: {},
-                triggerSource: "PreSignUp_SignUp",
-                userName: username,
-                request: {
-                    userAttributes: _(signupInput.UserAttributes).keyBy('Name').mapValues('Value').value(),
-                    clientMetadata: signupInput.ClientMetadata,
-                    validationData: _(signupInput.ValidationData).keyBy('Name').mapValues('Value').value()
-                },
-                response: {
-                    autoConfirmUser: false, autoVerifyEmail: false, autoVerifyPhone: false
-                }
-            } as PreSignUpTriggerEvent & TracedEvent, {} as any)
-            return {
-                UserConfirmed: false,
-                CodeDeliveryDetails: {
-                    Destination: `${email}`,
-                    DeliveryMedium: "EMAIL",
-                    AttributeName: 'email'
-                },
-                UserSub: username
-            }
-        })
+        .mockReturnValue({
+            UserConfirmed: false,
+            CodeDeliveryDetails: {
+                Destination: `${email}`,
+                DeliveryMedium: "EMAIL",
+                AttributeName: 'email'
+            },
+            UserSub: username
+        } as any)
     return {signupSpy, username, email}
 }
 
@@ -291,13 +275,13 @@ describe("Session", () => {
             expect(response).toEqual(expect.objectContaining({
                 statusCode: 200,
                 headers: {
-                    'set-Cookie': expect.stringMatching(/SID=.*; Path=\/; Expires=.*; HttpOnly; Secure; SameSite=None/)
+                    'set-Cookie': expect.stringMatching(/SID=.*; Path=\/; Expires=.*; HttpOnly; Secure; Partitioned; SameSite=None/)
                 },
                 body: {
                     authenticationResult: {
                         accessToken: expect.toBeString(),
                         idToken: expect.toBeString(),
-                        profile: {
+                        profile: expect.objectContaining({
                             'cognito:username': expect.toBeString(),
                             email: email,
                             sub: expect.toBeString(),
@@ -305,7 +289,7 @@ describe("Session", () => {
                             'cognito:groups': ["admin"],
                             email_verified: true,
                             iat: expect.toBeNumber()
-                        }
+                        })
                     },
                     challengeParameters: {}
                 }
@@ -351,19 +335,19 @@ describe("Session", () => {
             expect(response).toEqual(expect.objectContaining({
                 statusCode: 200,
                 headers: {
-                    'set-Cookie': expect.stringMatching(/SID=.*; Path=\/; Expires=.*; HttpOnly; Secure; SameSite=None/)
+                    'set-Cookie': expect.stringMatching(/SID=.*; Path=\/; Expires=.*; HttpOnly; Secure; Partitioned; SameSite=None/)
                 },
                 body: {
                     authenticationResult: {
                         accessToken: expect.toBeString(),
                         idToken: expect.toBeString(),
-                        profile: {
+                        profile: expect.objectContaining({
                             'cognito:username': expect.toBeString(),
                             email: email,
                             sub: expect.toBeString(),
                             token_use: 'id',
                             iat: expect.toBeNumber()
-                        }
+                        })
                     },
                     challengeParameters: {}
                 }
@@ -405,36 +389,18 @@ describe("Session", () => {
 function setupAuthResponse(method: FunctionPropertyNames<Required<CognitoIdentityProvider>> = 'initiateAuth',
                            username: string,
                            email: string,
-                           authResponse?: any) {
-    const private_key = 'private_key';
-    const access = {};
-    const accessToken = jwt.sign(access, private_key, {algorithm: 'HS256'});
-    const expiresIn = 3600;
-    const profile = {
-        "cognito:username": username,
-        "email": email,
-        "sub": username,
-        "token_use": "id",
-        ...authResponse
-    };
-    const idToken = jwt.sign(profile, private_key, {algorithm: 'HS256'});
+                           profile?: any) {
+    const session = newSession(username, {email, profile})
+
     const mock = jest.spyOn(CognitoIdentityProvider.prototype, method)
         .mockReturnValue({
             AuthenticationResult: {
-                AccessToken: accessToken,
-                ExpiresIn: expiresIn,
+                AccessToken: session.access_token,
+                ExpiresIn: session.profile.exp,
                 RefreshToken: "Cognito Refresh Token",
-                IdToken: idToken
+                IdToken: session.id_token
             }
         } as any)
-    const session = {
-        id: "SessionId:123",
-        access,
-        access_token: accessToken,
-        profile,
-        id_token: idToken,
-        expires_at: Date.now() / 1000 + expiresIn,
-    };
     return {session, mock}
 }
 

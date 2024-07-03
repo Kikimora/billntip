@@ -18,7 +18,7 @@ import {HttpError} from "./errors";
 import {Value} from "@sinclair/typebox/value";
 
 const HttpMethods = ["GET", "PUT", "POST", "DELETE", "PATCH", "HEAD", "OPTIONS", "ANY"] as const
-type HttpMethod = typeof HttpMethods[number]
+export type HttpMethod = typeof HttpMethods[number]
 
 export function isHttpMethod(x: any): x is HttpMethod {
     return HttpMethods.indexOf(x) >= 0

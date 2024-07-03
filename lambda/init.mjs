@@ -5,21 +5,27 @@ import * as app from "./function.js"
 export * from "./function.js"
 
 //Run function init
-let init = Promise.resolve();
+let init
 if (app.__init instanceof Promise) {
     init = app.__init
+} else if (typeof app.__init === 'function') {
+    init = app.__init()
+} else {
+    init = Promise.resolve()
 }
 //Register internal extension to receive SIGTERM and SIGINT
-let extension = Promise.resolve();
-let extensionId;
-if (process.env.AWS_LAMBDA_RUNTIME_API !== undefined && extensionId === undefined) {
+let extension
+if (process.env.AWS_LAMBDA_RUNTIME_API !== undefined) {
     // noinspection HttpUrlsUsage
     const baseUrl = `http://${process.env.AWS_LAMBDA_RUNTIME_API}/2020-01-01/extension`;
     extension = runExtension(baseUrl)
+} else {
+    extension = Promise.resolve();
 }
 //Wait for all initialization to complete
 await Promise.all([init, extension])
 
+let extensionId
 async function runExtension(baseUrl) {
     //1. Register internal extension
     extensionId = await register(baseUrl)

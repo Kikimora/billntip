@@ -1,0 +1,15 @@
+config:
+  BillAndTip:apple_client_id: add-me
+  BillAndTip:apple_key_id: add-me
+  # Apple ID - appdev@qoden.com
+  BillAndTip:apple_private_key:
+    secure: AAABAAkth2/ggMpNCoXyS/hltQZsEjEBaer9saPefn4G1k2Lf9cBWNiZimfR07KN0Wnw8xDi76tYNVfaWWd05F5kB9EUE9Fqja/1/Oo2gokRCaKIvs++G2YQ/IW9Bh+BS6yc8BXjBwXkDx2QuO2Zwvm1DMQ2ulkHelWD9jdJvNMKIm6is++778TVRFG7iv5Ycr4wKT/3bHfeJbqVJN2dxoTQZFgiwqA3+ZvamYw/nUP2LK8yry/EwGICsSos2t39iWnWvly1lKt5VoOEkUCa3chHlQwJROsPVaUJ08JFue8bpCT0uAnqHiwBKhBV966VscrMPJgUk31ee4Ok1AgbNbOyb1SlfhybojPr4TvHYQbYdvUVf4gT1KuoljP+LK9PBQ==
+  BillAndTip:apple_team_id: add-me
+  BillAndTip:domain: "billntip.com"
+  BillAndTip:facebook_client_id: add-me
+  BillAndTip:facebook_client_secret:
+    secure: AAABAMRxFNRvUhpyn41dNijt2dAxviscfLlSdTxzZAnXpcL5E7cp3Ok=
+  BillAndTip:google_client_id: add-me
+  BillAndTip:google_client_secret:
+    secure: AAABAIalMVCbCYJoJMAV5qq2TRG/ybxyNL60DzeLpoD82Xwh9Erhg50=
+  aws:profile: billntip-dev

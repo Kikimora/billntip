@@ -16,35 +16,54 @@ export const Upload = Type.Object({
     id: Type.String(),
     type: UploadType,
     contentType: Type.String(),
+    url: Type.String(),
     image: Type.Optional(Type.Object({
         width: Type.Number(),
         height: Type.Number(),
-        url: Type.String(),
     })),
 });
 export default {
-
+    'GET /uploads': {
+        operationId: "ListUploads",
+        query: {
+            startKey: Type.Optional(Type.String({maxLength: 1024}))
+        },
+        success: Type.Object({
+            lastKey: Type.Optional(Type.String()),
+            files: Type.Array(Type.String())
+        }),
+        responses: [400, 401, 403]
+    },
+    'GET /upload/{id}': {
+        operationId: "ListUploads",
+        path: {
+            id: Type.String({maxLength: 1024})
+        },
+        success: Upload,
+        responses: [400, 401, 403]
+    },
     'POST /uploads': {
         operationId: "CreateUpload",
         body: Type.Object({
             type: UploadType
         }),
         success: CreateEmptyImageResponse,
-        responses: []
+        responses: [400, 401, 403]
     },
     'POST /upload/{id}': {
         operationId: "FinishUpload",
         path: {
-            id: Type.String()
+            id: Type.String({maxLength: 1024})
         },
         success: Upload,
-        responses: []
+        responses: [400, 401, 403, 404]
     },
     'DELETE /upload/{id}': {
         operationId: "DeleteUpload",
         path: {
-            id: Type.String()
-        }
+            id: Type.String({maxLength: 1024})
+        },
+        responses: [400, 401, 403, 404]
     }
 
 } satisfies RouteMap

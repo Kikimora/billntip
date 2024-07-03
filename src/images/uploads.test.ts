@@ -1,109 +1,135 @@
 import {RequestBuilder, resources} from "@app/test/util";
 import {generateImage} from 'js-image-generator'
 import fs from "fs";
-import cognito, {TestUser} from "@app/test/cognito"
-import {TokenEndpointResponse} from "@src/authorizer/oidc_tokens";
 
 const {
     s3: {bucket: {id: Bucket}},
-    cognito: {
-        userPool: {id: userPoolId},
-        clients: {api: {id: userPoolClientId}}
-    }
 } = resources()
 process.env.BUCKET = Bucket
 process.env.AWS_REGION = "eu-south-1"
-process.env.USER_POOL_ID = userPoolId
 //Must be after process.env modifications
 import {CreateUploadResponse, handler} from "@src/images/index";
+import {newSession} from "@app/test/cognito";
 
-let user!: TestUser
-let tokens!: TokenEndpointResponse
-let sub!: string
+const sub = "test"
 
-beforeAll(async () => {
-    const x = await cognito.init(userPoolId, userPoolClientId)
-    const y = await x.loadTestGroup()
-    user = await y.createUniqueUser()
-    tokens = await user.login()
-    const usr = await user.data()
-    sub = usr.UserAttributes!.find(x => x.Name === "sub")!.Value!
-})
+describe("Uploads", () => {
 
-afterAll(async () => {
-    await user?.delete()
-})
+    let request!: RequestBuilder
+    beforeEach(() => {
 
-let request!: RequestBuilder
-beforeEach(() => {
-    request = new RequestBuilder({functionName: "images", functionVersion: "Test"})
-})
-
-describe("POST /uploads", () => {
-    it("return an upload URL with parameters", async () => {
-        request.route('POST /uploads').json({type: "profile_pic"}).lambdaAuth({profile: {sub}})
-        const response = await handler(request.event, request.context)
-        expect(response).toEqual({
-            type: 'profile_pic',
-            id: expect.toBeString(),
-            uploadUrl: `https://${Bucket}.s3.eu-south-1.amazonaws.com/`,
-            uploadFields: {
-                key: expect.stringMatching(`uploads/${sub}/*`),
-                bucket: Bucket,
-                'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
-                'X-Amz-Credential': expect.toBeString(),
-                'X-Amz-Date': expect.toBeString(),
-                'X-Amz-Security-Token': expect.toBeString(),
-                Policy: expect.toBeString(),
-                'X-Amz-Signature': expect.toBeString()
-            },
-            expires: expect.toBeDateString()
-        })
-        const expiresIn = (Date.parse(response.expires) - Date.now()) / 1000
-        expect(expiresIn).toBeCloseTo(5 * 60, -1)
+        request = new RequestBuilder({functionName: "images", functionVersion: "Test"})
+            .lambdaAuth(newSession("test"))
     })
-})
 
-describe("POST /upload/{id}", () => {
-    it("process (resize) uploaded images", async () => {
-        request.route('POST /uploads').json({type: "profile_pic"}).lambdaAuth({profile: {sub}})
-        const uploadResponse: CreateUploadResponse = await handler(request.event, request.context)
-        await uploadImage(uploadResponse)
-        request.route('POST /upload/{id}', {id: uploadResponse.id})
-        const imageResponse = await handler(request.event, request.context)
-        const url = `https://${Bucket}.s3.eu-south-1.amazonaws.com/public/${sub}/profile_pic.png`;
-        expect(imageResponse).toEqual({
-            type: 'profile_pic',
-            id: uploadResponse.id,
-            contentType: 'image/png',
-            image: {
+    afterEach(async () => {
+        const {files} = await request
+            .route('GET /uploads')
+            .run(handler)
+        for (const file of files) {
+            await request
+                .route('DELETE /upload/{id}', {id: file})
+                .run(handler)
+        }
+    })
+
+    describe("POST /uploads", () => {
+        it("return an upload URL with parameters", async () => {
+            const response = await createUpload()
+            expect(response).toEqual({
+                type: 'profile_pic',
+                id: expect.toBeString(),
+                uploadUrl: `https://${Bucket}.s3.eu-south-1.amazonaws.com/`,
+                uploadFields: {
+                    key: expect.stringMatching(`uploads/${sub}/*`),
+                    bucket: Bucket,
+                    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+                    'X-Amz-Credential': expect.toBeString(),
+                    'X-Amz-Date': expect.toBeString(),
+                    'X-Amz-Security-Token': expect.toBeString(),
+                    Policy: expect.toBeString(),
+                    'X-Amz-Signature': expect.toBeString()
+                },
+                expires: expect.toBeDateString()
+            })
+            const expiresIn = (Date.parse(response.expires) - Date.now()) / 1000
+            expect(expiresIn).toBeCloseTo(5 * 60, -1)
+        })
+    })
+
+    describe("POST /upload/{id}", () => {
+        it("process (resize) uploaded images", async () => {
+            const uploadResponse = await createUpload()
+            await uploadImage(uploadResponse)
+            const imageResponse = await request
+                .route('POST /upload/{id}', {id: uploadResponse.id})
+                .run(handler)
+            const url = `https://${Bucket}.s3.eu-south-1.amazonaws.com/public/${sub}/profile_pic.png`;
+            expect(imageResponse).toEqual({
+                type: 'profile_pic',
+                id: 'profile_pic.png',
+                contentType: 'image/png',
                 url: url,
-                height: 100,
-                width: 100
-            }
+                image: {
+                    height: 100,
+                    width: 100
+                }
+            })
         })
     })
 
-    it("updates picture attribute", async () => {
-        request.route('POST /uploads').json({type: "profile_pic"}).lambdaAuth({profile: {sub}})
-        const uploadResponse: CreateUploadResponse = await handler(request.event, request.context)
-        await uploadImage(uploadResponse)
-        request.route('POST /upload/{id}', {id: uploadResponse.id})
-        await handler(request.event, request.context)
-        const url = `https://${Bucket}.s3.eu-south-1.amazonaws.com/public/${sub}/profile_pic.png`;
-
-        const {UserAttributes: attrs} = await cognito.client.getUser({
-            AccessToken: tokens.access_token
+    describe("GET /uploads", () => {
+        it("return uploads", async () => {
+            const uploadResponse = await createUpload()
+            await uploadImage(uploadResponse)
+            await request
+                .route('POST /upload/{id}', {id: uploadResponse.id})
+                .run(handler)
+            const uploads = await request
+                .route('GET /uploads')
+                .run(handler)
+            expect(uploads).toEqual({
+                lastKey: undefined,
+                files: [
+                    'profile_pic.png'
+                ]
+            })
         })
-        expect(attrs).toEqual(expect.arrayContaining([{Name: "picture", Value: url}]))
     })
+
+    describe("GET /upload/{id}", () => {
+        it("return upload", async () => {
+            const uploadResponse = await createUpload()
+            await uploadImage(uploadResponse)
+            const imageResponse = await request
+                .route('POST /upload/{id}', {id: uploadResponse.id})
+                .run(handler)
+            const upload = await request
+                .route('GET /upload/{id}', {id: imageResponse.id})
+                .run(handler)
+            expect(upload).toEqual({
+                contentType: 'image/png',
+                type: 'profile_pic',
+                id: 'profile_pic.png',
+                url: `https://${Bucket}.s3.eu-south-1.amazonaws.com/public/${sub}/profile_pic.png`,
+                image: {width: 100, height: 100}
+            })
+        })
+    })
+
+    async function createUpload() {
+        return await request
+            .route('POST /uploads')
+            .jsonBody({type: "profile_pic"})
+            .lambdaAuth({profile: {sub}})
+            .run(handler)
+    }
 })
 
 async function uploadImage(response: CreateUploadResponse) {
     const imageBuffer = await new Promise<Buffer>(function (resolve, reject) {
         generateImage(400, 400, 0.5, function (err, img) {
             if (err) return reject(err)
-            fs.writeFileSync("output.jpeg", img.data)
             return resolve(img.data)
         })
     })

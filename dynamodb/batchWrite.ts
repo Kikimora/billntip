@@ -1,17 +1,17 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
-import {KeySchema, TableType, SchemaType, AttributesSchema,} from "./schema";
+import {TableType, TableSchema, TableAttributes, TableKey,} from "./schema";
 import {MarshalOptions} from "@app/dynamodb/util";
 
 /**
- * DynamoDb {@link ddb.WriteRequest} for a given {@link Table}
+ * DynamoDb {@link ddb.WriteRequest} for a given {@link TableSchema}
  */
-export type BatchWriteItem<T> = BatchPutItem<T> | BatchDeleteItem<T>
+export type BatchWriteItem<T extends TableSchema> = BatchPutItem<T> | BatchDeleteItem<T>
 
 /**
  * Request to put an item into the table (see {@link ddb.PutRequest}).
  */
-interface BatchPutItem<T> {
+interface BatchPutItem<T extends TableSchema> {
     /**
      * Indicate put request.
      */
@@ -19,17 +19,17 @@ interface BatchPutItem<T> {
     /**
      * Table item key.
      */
-    key: SchemaType<KeySchema<T>>
+    key: TableKey<T>
     /**
      * Non-key attributes.
      */
-    item: Partial<SchemaType<AttributesSchema<T>>>
+    item: TableAttributes<T>
 }
 
 /**
  * Request to delete an item from the table (see {@link ddb.DeleteRequest}).
  */
-interface BatchDeleteItem<T> {
+interface BatchDeleteItem<T extends TableSchema> {
     /**
      * Indicate delete request.
      */
@@ -37,7 +37,7 @@ interface BatchDeleteItem<T> {
     /**
      * Table item key.
      */
-    key: SchemaType<KeySchema<T>>
+    key: TableKey<T>
 }
 
 /**
@@ -49,7 +49,7 @@ export interface BatchWriteBuilder {
      * @param tbl - target table
      * @param items - the batch
      */
-    add<Table extends TableType<Table>>(tbl: Table, items: BatchWriteItem<Table>[]): BatchWriteBuilder
+    add<T extends TableType<T>>(tbl: T, items: BatchWriteItem<T>[]): BatchWriteBuilder
 
     /**
      * See {@link ddb.BatchWriteItemInput.ReturnConsumedCapacity}
@@ -83,14 +83,16 @@ export function batchWrite(): BatchWriteBuilder {
     let returnItemCollectionMetrics: ddb.ReturnItemCollectionMetrics | undefined;
 
     return {
-        add<Table extends TableType<Table>>(tbl: Table, items: BatchWriteItem<Table>[]) {
+        add<T extends TableType<T>>(tbl: T, items: BatchWriteItem<T>[]) {
             const batch = requests[tbl.name] ?? (requests[tbl.name] = [])
             batch.push(...items.map(x => {
                 switch (x.action) {
                     case "put":
+                        const data = {...x.key, ...x.item};
+                        const item = marshall(data, MarshalOptions);
                         return {
                             PutRequest: {
-                                Item: marshall({...x.key, ...x.item}, MarshalOptions)
+                                Item: item
                             }
                         }
                     case "delete":

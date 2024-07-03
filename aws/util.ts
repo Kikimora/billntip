@@ -7,7 +7,8 @@ import _ from '@app/util';
 import {RouteMap} from "@app/lambda";
 import {IntegrationArgs} from "@pulumi/aws/apigatewayv2/integration";
 import {RequiredKeysOf} from "type-fest";
-import {Principal} from "@pulumi/aws/iam/documents";
+import {Conditions, Principal} from "@pulumi/aws/iam/documents";
+import {Input} from "@pulumi/pulumi";
 
 /**
  * Details of an AWS service that wants to call a Lambda function.
@@ -36,6 +37,12 @@ interface StatementBuilder {
      * @param principals - AWS principals
      */
     principals(...principals: Principal[]): StatementBuilder & PolicyBuilder
+
+    /**
+     * Add condition block to the policy
+     * @param condition - condition block
+     */
+    condition(condition: pulumi.Input<aws.iam.Conditions>): StatementBuilder & PolicyBuilder
 }
 
 interface RolePolicy {
@@ -198,7 +205,7 @@ const newLambdaModule = function (src: LambdaSource) {
             const lambdaFunction = new aws.lambda.Function(`${id}-fn`, {
                     ...args,
                     name: builder.lambdaName(src),
-                    code: new pulumi.asset.FileArchive(builder.bundle(src.module, "ts")),
+                    code: new pulumi.asset.FileArchive(builder.bundle(src, "ts")),
                     handler,
                     role: role.arn
                 },
@@ -233,12 +240,14 @@ export function newPolicy(): PolicyBuilder {
     function statementBuilder(effect: string, actions: string[], sid?: string): StatementBuilder & PolicyBuilder {
         let _resources: AwsResource[] = []
         let _principals: Principal[] = []
+        let _condition = {}
 
         function pushStatement() {
-            const statement = pulumi.all([_resources, _principals]).apply(([resources, principals]) => {
+            const statement = pulumi.all([_resources, _principals, _condition]).apply(([resources, principals, condition]) => {
                 const policy: any = {
                     Effect: effect,
                     Action: actions,
+                    Condition: condition
                 }
 
                 if (sid !== undefined) policy.Sid = sid
@@ -271,6 +280,10 @@ export function newPolicy(): PolicyBuilder {
             },
             principals(...principals: Principal[]): PolicyBuilder & StatementBuilder {
                 _principals.push(...principals)
+                return this
+            },
+            condition(condition: object): StatementBuilder & PolicyBuilder {
+                _condition = condition
                 return this
             },
             allow(...actions: string[]) {
@@ -383,7 +396,7 @@ export function newApiGwIntegration(gw: ApiGateway, lambda: LambdaFunction, args
         ...args,
         apiId: gw.id,
         integrationUri: lambda.arn,
-        payloadFormatVersion: "2.0"
+        payloadFormatVersion: "2.0",
     });
 
     let _default: Partial<ApiRoute>

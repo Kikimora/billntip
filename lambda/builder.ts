@@ -5,9 +5,9 @@ import archiver from "archiver";
 import * as upath from "upath";
 import {LambdaClient, UpdateFunctionCodeCommand} from "@aws-sdk/client-lambda";
 
-export type LambdaModule = { name: string, handlers: readonly string[] }
+export type LambdaModule = { name: string, handlers: readonly string[], deps?: readonly string[] }
 export type Type<T extends LambdaModule> = { [key in T['handlers'][number]]: (...args: any[]) => Promise<any> }
-export type LambdaSource = { readonly module: string, readonly handler: string }
+export type LambdaSource = { readonly module: string, readonly handler: string, deps: readonly string[] }
 
 // This line does not compile in Pulumi environment and ok everywhere else.
 // https://github.com/pulumi/pulumi/issues/4876
@@ -28,8 +28,9 @@ class LambdaSetBuilder<T extends `${string}.${string}` = never> {
     private set: { [key: `${string}.${string}`]: LambdaSource } = {}
 
     add<Module extends LambdaModule>(module: Module): LambdaSetBuilder<T | LambdaHandler<Module>> {
-        for (let handler of module.handlers) {
-            this.set[`${module.name}.${handler}`] = {module: module.name, handler}
+        const {name, handlers, deps} = module
+        for (let handler of handlers) {
+            this.set[`${module.name}.${handler}`] = {module: name, handler, deps: deps ?? []}
         }
         return this as any
     }
@@ -119,16 +120,18 @@ export class Builder {
     /**
      * Bundle and archive TypeScript entry point.
      */
-    public bundle(entryPoint: string, type: "ts" | "js" = "ts",): Promise<string> {
+    public bundle(src: LambdaSource, type: "ts" | "js" = "ts",): Promise<string> {
+        const entryPoint = src.module
         const stack = new Error().stack
         let cached = this._buildTasks[entryPoint]
         if (cached == null) {
-            this._buildTasks[entryPoint] = cached = this._bundle(entryPoint, type, stack)
+            this._buildTasks[entryPoint] = cached = this._bundle(src, type, stack)
         }
         return cached
     }
 
-    private async _bundle(module: string, type: "ts" | "js", stack: any) {
+    private async _bundle(src: LambdaSource, type: "ts" | "js", stack: any) {
+        const module = src.module
         const outfile = this.toArchiveName(module)
         const buildOptions = this.esBuildOptions
 
@@ -145,7 +148,8 @@ export class Builder {
             console.error(stack)
             throw e
         }
-        const bundleArchive = archiver("zip", {});
+        const bundleArchive = archiver("zip", {
+        });
         const archive = `${outfile}.zip`;
         const dstZip = fs.createWriteStream(archive);
         const zipTask = new Promise(function (resolve, reject) {
@@ -158,11 +162,17 @@ export class Builder {
         })
         bundleArchive.pipe(dstZip)
 
-        await bundleArchive
+        bundleArchive
             .file(outfile, {name: `function.js`})
             .file(upath.joinSafe(__dirname, "init.mjs"), {name: `index.mjs`})
             .file(`${outfile}.map`, {name: upath.basename(`${outfile}.map`)})
-            .finalize()
+
+        for (const dep of src.deps) {
+            const dir = upath.joinSafe('node_modules', dep);
+            bundleArchive.directory(dir, dir)
+        }
+
+        await bundleArchive.finalize()
         await zipTask
         return archive
 

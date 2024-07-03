@@ -2,7 +2,7 @@ name: BillAndTip
 runtime:
   name: nodejs
   options:
-#this is needed until https://github.com/pulumi/pulumi/issues/3061 is resolved
+    #this is needed until https://github.com/pulumi/pulumi/issues/3061 is resolved
     nodeargs: -r ../tsconfig-paths
 
 description: Bill & Tip API
@@ -10,5 +10,7 @@ main: "aws/index.ts"
 
 config:
   aws:region: eu-south-1
-  domain: billntip.com
-  cognito-sms-external-id: 304cabc9-d2c9-4f58-9a76-be68a7570eb5
+  BillAndTip:domain: billntip.com
+  BillAndTip:cognito-sms-external-id: 304cabc9-d2c9-4f58-9a76-be68a7570eb5
+  BillAndTip:cert-regional: arn:aws:acm:eu-south-1:381491945919:certificate/30de6657-936b-403e-b455-29e0d8bfa7f7
+  BillAndTip:cert-us-east-1: arn:aws:acm:us-east-1:381491945919:certificate/f071af37-2191-44a7-91dc-1b761e7b228a

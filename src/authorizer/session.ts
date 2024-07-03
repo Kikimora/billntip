@@ -1,88 +1,114 @@
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
-import {z} from "zod";
+import {Static, Type as T} from "@sinclair/typebox";
+import {TypeCompiler} from "@sinclair/typebox/compiler";
 import shortUUID from "short-uuid"
-import {Env, useVariables, AuthTracer} from "./ctx";
-import OidcTokens from "./oidc_tokens";
-import SessionCookie from "./cookie";
-import {
-    Type,
-    deleteCommand,
-    getCommand,
-    LockHandle,
-    makeLockStore,
-    putCommand,
-    table,
-    updateCommand
-} from "@app/dynamodb";
 import {jwtDecode} from "jwt-decode";
+import * as ddb from "@app/dynamodb";
+import {SessionCookieRepo} from "./cookie";
+import {OidcTokens} from "./oidc_tokens";
+import {OperationContext, SessionContext} from "./types";
+import {errorWithContext} from "@app/diagnostics";
 
-const dynamoDb = new DynamoDB({region: Env.region})
-const tracer = AuthTracer.withScope("session")
-
+const dynamoDb = new DynamoDB()
 const shortUUIDGenerator = shortUUID(shortUUID.constants.flickrBase58)
-const store = makeLockStore(Env.locksTable, {dynamoDb})
+const SessionKey = {session_id: ddb.Type.String} as const;
+const SessionAttributes = {
+    access_token: ddb.Type.String,
+    id_token: ddb.Type.String,
+    refresh_token: ddb.Type.String,
+    expires_at: ddb.Type.Number,
+    refresh_token_expires_at: ddb.Type.Number,
+    cached_till: ddb.Type.Number
+} as const;
 
-interface IdToken {
-    "at_hash": string,
-    "aud": string,
-    "auth_time": number,
-    "cognito:groups": string [],
-    "cognito:username": string,
-    "email": string,
-    "email_verified": boolean,
-    "event_id"?: string,
-    "exp": number,
-    "iat": number,
-    "iss": string,
-    "jti": string,
-    "origin_jti"?: string,
-    "sub": string,
-    "token_use": "id"
+type SessionsTable = ddb.TableSchema<typeof SessionKey, typeof SessionAttributes>
+
+interface SessionOptions {
+    locksTable: string
+    sessionTable: string
+    ctx: OperationContext
+    cookies: SessionCookieRepo
 }
 
-export type SessionContext<Id = IdToken> = {
-    /**
-     * Session identifier.
-     */
-    id: string,
-    /**
-     * Access Token from OIDC provider initiated the session.
-     */
-    access_token: string,
-    /**
-     * Parsed Access token.
-     */
-    access: object,
-    /**
-     * ID Token from OIDC provider initiated the session.
-     */
-    id_token: string,
-    /**
-     * Parsed ID Token
-     */
-    profile: Id,
-    /**
-     * Access token expiration time as **seconds** since the [epoch]{@link https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date#the_epoch_timestamps_and_invalid_date}.
-     * Calculated at tokens arrival as "{@link now} + {@link OidcTokens.expiresIn}".
-     */
-    expires_at: number
-}
+export class SessionRepo {
+    store: ddb.LockStore;
+    Sessions: SessionsTable
 
-export const Sessions = table(Env.sessionTable,
-    {session_id: Type.String} as const,
-    {
-        access_token: Type.String,
-        id_token: Type.String,
-        refresh_token: Type.String,
-        expires_at: Type.Number,
-        refresh_token_expires_at: Type.Number,
-        cached_till: Type.Number
-    } as const)
+    constructor(private readonly options: SessionOptions) {
+        const {locksTable, sessionTable, ctx} = options
+        this.store = ddb.makeLockStore(locksTable, {dynamoDb})
+        this.Sessions = ddb.table(sessionTable, SessionKey, SessionAttributes)
+    }
+
+    /**
+     * Load a session record while placing a lock on it. Use {@link SessionData#release} or
+     * {@link SessionData#remove} to release the lock.
+     */
+    public async fetchLocked(sessionId: string) {
+        const {store, options:{ctx}} = this
+
+        async function lock() {
+            try {
+                return await store.lock(sessionId, ctx.requestId, {retries: 5, leaseDuration: 1000, autoBump: true})
+            } catch (e: any) {
+                throw errorWithContext(e, "fetchLocked", {sessionId})
+            }
+        }
+
+        return this._fetch(sessionId, await lock())
+    }
+
+    public async fetch(sessionId: string) {
+        return this._fetch(sessionId)
+    }
+
+    /**
+     * Create new session from OIDC tokens. {@param tokens} must have {@link OidcTokens#refreshToken}.
+     */
+    public createWithTokens(tokens: OidcTokens): SessionData {
+        const {Sessions, options} = this
+        const refreshToken = tokens.refreshToken
+        if (refreshToken == null) throw new Error('Cannot create new session without a refresh token.')
+        //TODO add user sub and email to DynamoDB.
+        const item = parseSessionItem({
+            sessionId: makeSessionId(),
+            accessToken: tokens.accessToken,
+            idToken: tokens.idToken,
+            refreshToken,
+            accessExpiresAt: options.ctx.now + tokens.expiresIn,
+            refreshTokenExpiresAt: options.ctx.now + tokens.refreshTokenExpiresIn,
+            //0 means the session is not in the cache
+            cachedTill: 0
+        });
+        return new SessionData(item, false, Sessions, options)
+    }
+
+    private async _fetch(sessionId: string, sessionLock?: ddb.LockHandle) {
+        const {Sessions, options} = this
+        try {
+            const command = ddb.getCommand(Sessions, {key: {session_id: sessionId}});
+            const {Item: attrs} = await dynamoDb.send(command)
+            if (attrs == null) return null
+            const item = parseSessionItem({
+                sessionId,
+                accessToken: attrs['access_token'].S,
+                idToken: attrs['id_token'].S,
+                refreshToken: attrs['refresh_token'].S,
+                accessExpiresAt: Number(attrs['expires_at'].N),
+                refreshTokenExpiresAt: Number(attrs['refresh_token_expires_at'].N),
+                cachedTill: Number(attrs['cached_till'].N),
+            });
+            return new SessionData(item, false, Sessions, options, sessionLock)
+        } catch (e: any) {
+            throw errorWithContext(e, "fetch", {sessionId})
+        }
+    }
+}
 
 /**
  * Session data stored in the session store.
  */
-export default class SessionData implements SessionItem {
+export class SessionData implements SessionItem {
     /**
      * Session identifier.
      */
@@ -134,11 +160,15 @@ export default class SessionData implements SessionItem {
     /**
      * @param item session item loaded from the store
      * @param isRefreshTokenRotated True if this session was created from another session with different refresh token.
+     * @param Sessions session table
+     * @param options session options
      * @param lock lock handle, when present indicate the session data is locked.
      */
     constructor(item: SessionItem,
                 readonly isRefreshTokenRotated: boolean,
-                readonly lock?: LockHandle) {
+                readonly Sessions: SessionsTable,
+                readonly options: SessionOptions,
+                readonly lock?: ddb.LockHandle) {
         this.sessionId = item.sessionId
         this.accessToken = item.accessToken
         this.idToken = item.idToken
@@ -149,48 +179,6 @@ export default class SessionData implements SessionItem {
     }
 
     /**
-     * Load a session record while placing a lock on it. Use {@link SessionData#release} or
-     * {@link SessionData#remove} to release the lock.
-     */
-    public static async fetchLocked(sessionId: string) {
-        async function lock() {
-            try {
-                const {requestId} = useVariables()
-                return await store.lock(sessionId, requestId, {retries: 5, leaseDuration: 100, autoBump: true})
-            } catch (e: any) {
-                throw tracer.errorWithContext(e, {sessionId})
-            }
-        }
-
-        return SessionData._fetch(sessionId, await lock())
-    }
-
-    public static async fetch(sessionId: string) {
-        return SessionData._fetch(sessionId)
-    }
-
-    private static async _fetch(sessionId: string, sessionLock?: LockHandle) {
-        try {
-            const command = getCommand(Sessions, {key: {session_id: sessionId}});
-            const {Item: attrs} = await dynamoDb.send(command)
-            if (attrs == null) return null
-            const item = parseSessionItem({
-                sessionId,
-                accessToken: attrs['access_token'].S,
-                idToken: attrs['id_token'].S,
-                refreshToken: attrs['refresh_token'].S,
-                accessExpiresAt: Number(attrs['expires_at'].N),
-                refreshTokenExpiresAt: Number(attrs['refresh_token_expires_at'].N),
-                cachedTill: Number(attrs['cached_till'].N),
-            });
-            return new SessionData(item, false, sessionLock)
-        } catch (e) {
-            throw tracer.errorWithContext(e, {sessionId})
-        }
-    }
-
-
-    /**
      * Release session data lock. This should be the last method to call on a session data instance.
      */
     async release() {
@@ -199,28 +187,8 @@ export default class SessionData implements SessionItem {
         try {
             await lock.unlock()
         } catch (e) {
-            throw tracer.errorWithContext(e, {sessionId, lock})
+            throw errorWithContext(e, "release", {sessionId, lock})
         }
-    }
-
-    /**
-     * Create new session from OIDC tokens. {@param tokens} must have {@link OidcTokens#refreshToken}.
-     */
-    public static createWithTokens(tokens: OidcTokens): SessionData {
-        const {now, refreshTokenTtl} = useVariables()
-        const refreshToken = tokens.refreshToken
-        if (refreshToken == null) throw new Error('Cannot create new session without a refresh token.')
-        //TODO add user sub and email to DynamoDB.
-        const item = parseSessionItem({
-            sessionId: makeSessionId(),
-            accessToken: tokens.accessToken,
-            idToken: tokens.idToken,
-            refreshToken,
-            accessExpiresAt: now + tokens.expiresIn,
-            refreshTokenExpiresAt: now + refreshTokenTtl,
-            cachedTill: 0
-        });
-        return new SessionData(item, false)
     }
 
     /**
@@ -228,7 +196,7 @@ export default class SessionData implements SessionItem {
      * cookie must be rotated.
      */
     withTokens(tokens: OidcTokens): SessionData {
-        const {now, refreshTokenTtl} = useVariables()
+        const {Sessions, options: {ctx: {now, refreshTokenTtl}}} = this
         const isRefreshTokenRotated = tokens.refreshToken != null && tokens.refreshToken != this.refreshToken
         const item = parseSessionItem({
             sessionId: makeSessionId(),
@@ -239,14 +207,15 @@ export default class SessionData implements SessionItem {
             refreshTokenExpiresAt: isRefreshTokenRotated ? now + refreshTokenTtl : this.refreshTokenExpiresAt,
             cachedTill: this.cachedTill
         })
-        return new SessionData(item, isRefreshTokenRotated, this.lock)
+        return new SessionData(item, isRefreshTokenRotated, Sessions, this.options, this.lock)
     }
 
     /**
      * Create new session in the data store.
      */
     async create() {
-        const command = putCommand(Sessions, {
+        const {Sessions} = this
+        const command = ddb.putCommand(Sessions, {
             key: {session_id: this.sessionId},
             item: {
                 refresh_token: this.refreshToken,
@@ -261,7 +230,7 @@ export default class SessionData implements SessionItem {
         try {
             await dynamoDb.send(command)
         } catch (e) {
-            throw tracer.errorWithContext(e, {command: command.input})
+            throw errorWithContext(e, "create", {command: command.input})
         }
     }
 
@@ -269,8 +238,8 @@ export default class SessionData implements SessionItem {
      * Save session data to the store.
      */
     async save() {
-        const {sessionId} = this
-        const command = updateCommand(Sessions, {
+        const {sessionId, Sessions} = this
+        const command = ddb.updateCommand(Sessions, {
             key: {session_id: sessionId},
             expression: ({attr, val}) => `SET
                 ${attr.refresh_token} = ${val(this.refreshToken)},
@@ -285,7 +254,7 @@ export default class SessionData implements SessionItem {
         try {
             await dynamoDb.send(command)
         } catch (e) {
-            throw tracer.errorWithContext(e, {sessionId})
+            throw errorWithContext(e, "save", {sessionId})
         }
     }
 
@@ -293,16 +262,15 @@ export default class SessionData implements SessionItem {
      * Notify session about a cache extension. Call this method from authorizer function to let session know that cache record TTL extended.
      */
     updateCacheTtl() {
-        const {now} = useVariables()
-        const {authorizerCacheTtl} = Env
+        const {now, authorizerCacheTtl} = this.options.ctx
         this._cachedTill = now + authorizerCacheTtl
     }
 
     /**
-     * True if tokens are about to expire or can expire while being cached.
+     * True if tokens expired, about to expire or can expire while being cached.
      */
     get isTimeToRefresh(): boolean {
-        const {now} = useVariables()
+        const {now} = this.options.ctx
         return this.cachedTill >= this.accessExpiresAt || this.accessExpiresAt - now < 10
     }
 
@@ -310,14 +278,14 @@ export default class SessionData implements SessionItem {
      * Remove session data from the store
      */
     async remove() {
-        const {sessionId} = this
-        const command = deleteCommand(Sessions, {
+        const {sessionId, Sessions} = this
+        const command = ddb.deleteCommand(Sessions, {
             key: {session_id: sessionId},
         });
         try {
             await dynamoDb.send(command)
         } catch (e) {
-            throw tracer.errorWithContext(e, {sessionId})
+            throw errorWithContext(e, "remove", {sessionId})
         }
     }
 
@@ -326,7 +294,7 @@ export default class SessionData implements SessionItem {
      */
     makeCookie() {
         const expiration = new Date(this.refreshTokenExpiresAt * 1000)
-        return new SessionCookie(this.sessionId, expiration)
+        return this.options.cookies.create(this.sessionId, expiration)
     }
 
     /**
@@ -344,22 +312,24 @@ export default class SessionData implements SessionItem {
     }
 }
 
-const SessionItemSchema = z.object({
-    sessionId: z.string().min(1).readonly(),
-    accessToken: z.string().min(1).readonly(),
-    idToken: z.string().min(1).readonly(),
-    refreshToken: z.string().min(1).readonly(),
-    accessExpiresAt: z.number().min(1).readonly(),
-    refreshTokenExpiresAt: z.number().min(1).readonly(),
-    cachedTill: z.number().min(0).readonly(),
+const SessionItemSchema = T.Object({
+    sessionId: T.String(),
+    accessToken: T.String(),
+    idToken: T.String(),
+    refreshToken: T.String(),
+    accessExpiresAt: T.Number({minimum: 1}),
+    refreshTokenExpiresAt: T.Number({minimum: 1}),
+    cachedTill: T.Number({minimum: 0}),
 })
-type SessionItem = z.infer<typeof SessionItemSchema>
+
+type SessionItem = Static<typeof SessionItemSchema>
+const SessionItemChecker = TypeCompiler.Compile(SessionItemSchema)
 
 function parseSessionItem(x: Partial<SessionItem>): SessionItem {
     try {
-        return SessionItemSchema.parse(x)
+        return SessionItemChecker.Decode(x)
     } catch (e) {
-        throw tracer.errorWithContext(e, {sessionItem: x})
+        throw errorWithContext(e, "parse", {sessionItem: x})
     }
 }
 

@@ -1,20 +1,19 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
 import {
-    KeySchema,
     TableType,
-    SchemaType,
+    Schema,
     ExpressionGenerator,
     FilterConditionGenerator,
-    KeyConditionGenerator
+    KeyConditionGenerator, TableSchema, TableKey
 } from "./schema";
 import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
 /**
- * DynamoDb {@link ddb.QueryCommandInput} for a given {@link Table}
+ * DynamoDb {@link ddb.QueryCommandInput} for a given {@link TableSchema}
  */
-interface QueryCommand<Table, V> {
+interface QueryCommand<T extends TableSchema, V> {
     /**
      * See {@link ddb.QueryInput.IndexName}
      */
@@ -26,15 +25,15 @@ interface QueryCommand<Table, V> {
     /**
      * Function generating {@link ddb.QueryInput.KeyConditionExpression}
      */
-    keyCondition?: KeyConditionGenerator<Table, V>
+    keyCondition?: KeyConditionGenerator<T, V>
     /**
      * Function generating {@link ddb.QueryInput.FilterExpression}
      */
-    filter?: FilterConditionGenerator<Table, V>
+    filter?: FilterConditionGenerator<T, V>
     /**
      * Function generating {@link ddb.QueryInput.ProjectionExpression}
      */
-    projection?: ExpressionGenerator<Table, never>
+    projection?: ExpressionGenerator<T, never>
     /**
      * See {@link ddb.QueryInput.Select}
      */
@@ -50,7 +49,7 @@ interface QueryCommand<Table, V> {
     /**
      * See {@link ddb.QueryInput.ExclusiveStartKey}
      */
-    exclusiveStartKey?: SchemaType<KeySchema<Table>>,
+    exclusiveStartKey?: TableKey<T>,
     /**
      * See {@link ddb.QueryInput.ConsistentRead}
      */

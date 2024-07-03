@@ -11,7 +11,6 @@ import {
     getCommand,
     queryCommand, scanCommand, batchGet, batchWrite, deleteCommand, transactGet, transactWrite
 } from "@app/dynamodb";
-import {DynamoDB} from "@aws-sdk/client-dynamodb";
 
 const Table = table("sessions",
     {"session_id": Type.String} as const,
@@ -76,6 +75,31 @@ describe("Update Command", () => {
             ReturnValuesOnConditionCheckFailure: "ALL_OLD",
             ReturnItemCollectionMetrics: "SIZE",
             ReturnConsumedCapacity: "TOTAL",
+        }))
+    })
+
+    it("accept expression object", () => {
+        const {input} = updateCommand(Table, {
+                key: {session_id: "SESSION ID"},
+                values: {age: 30},
+                expression: ({attr, val}) => ({
+                    set: {
+                        [attr.age]: val.age,
+                        [attr.name]: val("New Name"),
+                    }
+                }),
+            }
+        )
+        expect(input).toEqual(expect.objectContaining({
+            UpdateExpression: "SET #age = :age, #name = :__val1",
+            ExpressionAttributeValues: {
+                ':age': {N: '30'},
+                ':__val1': {S: 'New Name'}
+            },
+            ExpressionAttributeNames: {
+                '#age': 'age',
+                "#name": "name"
+            },
         }))
     })
 })

@@ -29,7 +29,7 @@ User set a cost threshold and system adjust sampling and batching intervals to h
 # EMF vs PutMetricData
 
 With EMF you pay for CloudWatch log ingest which is 0.50 USD per 1 GB (crazy, I know). EMF documents have overhead,
-they are almost never less than 512 bytes even of they report single number. Alternative is PutMetricData API which
+they are almost never less than 512 bytes even if they report a single number. Alternative is PutMetricData API which
 is billed at 0.01 USD per 1000 requests and has per-call limits:
 
 1. 1000 different metrics.

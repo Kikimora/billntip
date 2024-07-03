@@ -1,6 +1,7 @@
 import {RouteMap} from "@app/lambda";
 import {Type} from "@sinclair/typebox";
 import {SecurityRequirementObject} from "openapi3-ts/src/model/openapi31";
+import {MemberSchema} from "@src/billntip/schemas";
 
 export const authenticatedEndpoint: SecurityRequirementObject[] = [{"Cookie": ["admin", "business"]}]
 
@@ -11,41 +12,54 @@ const InviteId = {
     id: Type.String()
 } as const;
 export default {
-    "GET /bill/{orgId}/invites": {
+    "GET /bill/{orgId}/members": {
         operationId: "ListInvites",
+        security: authenticatedEndpoint,
         path: OrgId,
-        body: Type.Object({
+        query: {
             startKey: Type.Optional(Type.String())
+        },
+        success: Type.Object({
+            lastKey: Type.Optional(Type.String()),
+            members: Type.Array(MemberSchema)
         }),
+        responses: [401, 403, 404],
         tags: ['Bill']
     },
-    "POST /bill/{orgId}/invite": {
+    "POST /bill/{orgId}/member": {
         operationId: "CreateInvite",
-        summary: "Invite user into Tips app",
+        summary: "Invite new users",
         security: authenticatedEndpoint,
         path: OrgId,
         body: Type.Object({
-            email: Type.String(),
-            resend: Type.Optional(Type.Boolean({default: false}))
+            email: Type.String()
         }),
+        success: MemberSchema,
+        responses: [401, 403, 404],
         tags: ['Bill']
     },
-    "GET /bill/invite/{orgId}/{id}": {
+    "GET /bill/{orgId}/member/{id}": {
         operationId: "GetInvite",
         security: authenticatedEndpoint,
         path: {...OrgId, ...InviteId},
+        success: MemberSchema,
+        responses: [401, 403, 404],
         tags: ['Bill']
     },
-    "PUT /bill/invite/{orgId}/{id}": {
+    "PUT /bill/{orgId}/member/{id}": {
         operationId: "UpdateInvite",
         security: authenticatedEndpoint,
         path: {...OrgId, ...InviteId},
+        success: MemberSchema,
+        responses: [401, 403, 404],
         tags: ['Bill']
     },
-    "DELETE /bill/invite/{orgId}/{id}": {
+    "DELETE /bill/{orgId}/member/{id}": {
         operationId: "DeleteInvite",
         security: authenticatedEndpoint,
         path: {...OrgId, ...InviteId},
+        success: MemberSchema,
+        responses: [401, 403, 404],
         tags: ['Bill']
     }
 } as const satisfies RouteMap

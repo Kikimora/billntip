@@ -2,25 +2,36 @@ import shortUUID from "short-uuid";
 import {Conditions as PolicyEntry} from "@aws-sdk/s3-presigned-post/dist-types/types";
 import sharp, {FormatEnum} from "sharp";
 import {createPresignedPost} from "@aws-sdk/s3-presigned-post";
-import {GetObjectCommandOutput, S3} from "@aws-sdk/client-s3";
+import {S3} from "@aws-sdk/client-s3";
+import _ from "lodash";
+import {StreamingBlobPayloadOutputTypes} from "@smithy/types";
+import {Type} from "@sinclair/typebox";
 import {errorWithContext} from "@app/diagnostics";
 import {die} from "@app/util";
+import {moduleConfig} from "@app/lambda";
 
-const Bucket = process.env.BUCKET ?? die("BUCKET required")
 const Region = process.env.AWS_REGION ?? die("AWS_REGION required")
 
 const shortUUIDGenerator = shortUUID(shortUUID.constants.flickrBase58)
 const s3 = new S3()
 
+const config = moduleConfig()
+    .parameters({
+        s3: Type.Object({
+            bucket: Type.String()
+        })
+    })
+    .build()
+
 export default {
     prepare: prepareUpload,
     read: readUpload,
-    process: processUpload,
+    transform: processUpload,
     save: saveUpload,
     remove: deleteUpload,
-    Bucket,
-    Region
+    list: listUploads
 }
+type UploadArea = "uploads" | "public"
 
 interface UploadConfig {
     policy: PolicyEntry[],
@@ -51,25 +62,26 @@ const UploadConfigs: Record<UploadType, UploadConfig> = {
     }
 }
 
-function uploadKey(sub: string, id: string) {
-    return `uploads/${sub}/${id}`;
+function uploadKey(sub: string, id: string, type: UploadArea) {
+    return `${type}/${sub}/${id}`;
 }
 
-function uploadPrefix(sub: string) {
-    return `uploads/${sub}`;
+function uploadPrefix(sub: string, type: UploadArea) {
+    return `${type}/${sub}`;
 }
 
-async function prepareUpload(sub: string, type: UploadType) {
-    const prefix = uploadPrefix(sub)
+async function prepareUpload(sub: string, type: UploadType, area: UploadArea) {
+    const prefix = uploadPrefix(sub, area)
     const id = shortUUIDGenerator.generate()
-    const key = uploadKey(sub, id)
+    const key = uploadKey(sub, id, area)
     const {expires, policy} = UploadConfigs[type]
+    const {s3: {bucket}} = await config.parameters
     try {
         const url = await createPresignedPost(s3, {
-            Bucket,
+            Bucket: bucket,
             Key: key,
             Conditions: [
-                {"bucket": Bucket},
+                {"bucket": bucket},
                 ["starts-with", "$key", prefix],
                 {"x-amz-meta-type": type},
                 ...policy
@@ -81,51 +93,103 @@ async function prepareUpload(sub: string, type: UploadType) {
         return {post: url, expires, id}
 
     } catch (e: any) {
-        throw errorWithContext(e, "prepareUpload", {Bucket, key, config: UploadConfigs[type]})
+        throw errorWithContext(e, "prepareUpload", {bucket, key, config: UploadConfigs[type]})
     }
 }
 
-async function readUpload(sub: string, id: string) {
-    const key = uploadKey(sub, id)
+async function listUploads(sub: string, area: UploadArea, lastKey?: string) {
+    const {s3: {bucket}} = await config.parameters
     try {
-        const uploadObject = await s3.getObject({Bucket, Key: key})
+        const x = await s3.listObjectsV2({
+            Bucket: bucket,
+            Prefix: uploadPrefix(sub, area),
+            ContinuationToken: lastKey,
+        })
+        const p = uploadPrefix(sub, area)
+        return {
+            files: _(x.Contents).map('Key').compact().map(x => x.substring(p.length + 1)).value(),
+            lastKey: x.ContinuationToken
+        }
+    } catch (e: any) {
+        throw errorWithContext(e, "listUploads", {sub})
+    }
+}
+
+interface UploadMetadata {
+    id: string
+    type: UploadType,
+    contentType: string
+    image?: {
+        height: number
+        width: number
+    }
+}
+
+interface Upload extends UploadMetadata {
+    url: string
+}
+
+async function readUpload(sub: string, id: string, area: UploadArea) {
+    const {s3: {bucket}} = await config.parameters
+    const key = uploadKey(sub, id, area)
+    try {
+        const uploadObject = await s3.getObject({Bucket: bucket, Key: key})
         const type = uploadObject.Metadata?.['type'] as UploadType
-        if (type === undefined) throw new Error("Cannot process upload without a type")
-        if (type !== "profile_pic") throw new Error("Unexpected upload type")
-        return {uploadObject, type}
+        const url = `https://${bucket}.s3.${Region}.amazonaws.com/${key}`;
+        const height = Number(uploadObject.Metadata?.['height'])
+        const width = Number(uploadObject.Metadata?.['width'])
+        const contentType = uploadObject.ContentType ?? 'application/octet-stream'
+        const upload: Upload = {contentType, type, id, url}
+        if (!isNaN(height) && !isNaN(width)) {
+            upload.image = {width, height}
+        }
+        return {upload, body: uploadObject.Body}
     } catch (e: any) {
         throw errorWithContext(e, "readUpload", {key})
     }
 }
 
-async function processUpload(type: UploadType, s3Object: GetObjectCommandOutput) {
+async function processUpload(type: UploadType, body?: StreamingBlobPayloadOutputTypes) {
     try {
         const {format, contentType, resize: {width: targetWidth, height: targetHeight}} = UploadConfigs[type]
-        const buffer = await sharp(await s3Object.Body?.transformToByteArray())
+        const buffer = await sharp(await body?.transformToByteArray())
             .resize(targetWidth, targetHeight)
             .toFormat(format)
             .toBuffer();
-        return {contentType, buffer, width: targetWidth, height: targetHeight}
+        return {contentType, buffer, format, width: targetWidth, height: targetHeight}
     } catch (e: any) {
-        const {Body, ...rest} = s3Object
-        throw errorWithContext(e, "processImage", {type, s3Object: rest})
+        throw errorWithContext(e, "processImage", {type})
     }
 }
 
-async function saveUpload(buffer: Buffer, sub: string, type: UploadType) {
-    const {format, contentType} = UploadConfigs[type]
-    const target = `public/${sub}/${type}.${format}`;
+async function saveUpload(sub: string, buffer: Buffer, upload: UploadMetadata, area: UploadArea) {
+    const {id, type, contentType, image} = upload
+    const {s3: {bucket}} = await config.parameters
+    const target = uploadKey(sub, id, area);
     try {
-        const x = await s3.putObject({
-            Bucket,
+        const s3Metadata: Record<string, string> = {'type': type}
+        if (image !== undefined) {
+            s3Metadata['height'] = image.height.toString()
+            s3Metadata['width'] = image.width.toString()
+        }
+        await s3.putObject({
+            Bucket: bucket,
             Key: target,
             ContentType: contentType,
-            Metadata: {
-                'x-amz-meta-type': type
-            },
+            Metadata: s3Metadata,
             Body: buffer
         })
-        return target
+        const url = `https://${bucket}.s3.${Region}.amazonaws.com/${target}`;
+        const metadata: Upload = {
+            contentType,
+            type,
+            id,
+            url
+        }
+        if (image !== undefined) {
+            metadata.image = image
+        }
+        return metadata
     } catch (e: any) {
         throw errorWithContext(e, "saveTransformedImage", {
             buffer: buffer?.subarray(0, 32).toString('hex'),
@@ -136,11 +200,12 @@ async function saveUpload(buffer: Buffer, sub: string, type: UploadType) {
     }
 }
 
-async function deleteUpload(sub: string, id: string) {
-    const key = uploadKey(sub, id);
+async function deleteUpload(sub: string, id: string, type: UploadArea = "public") {
+    const {s3: {bucket}} = await config.parameters
+    const key = uploadKey(sub, id, type);
     try {
         await s3.deleteObject({
-            Bucket,
+            Bucket: bucket,
             Key: key
         })
     } catch (e: any) {

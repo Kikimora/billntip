@@ -1,8 +1,8 @@
-import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import userPool from "./userpool";
+import {stack} from "../config";
 
-const domain = pulumi.getStack() == 'prod' ? 'billntip' : `billntip-${pulumi.getStack()}`
+const domain = `billntip-${stack}`
 //Domain is required for hosted UI and OAuth endpoints
 const userPoolDomain = new aws.cognito.UserPoolDomain("cognito-hosted-ui-domain", {
     domain,

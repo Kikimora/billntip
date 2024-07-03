@@ -1,8 +1,8 @@
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
-import * as uuid from "uuid"
 import UserRepo, {UserAttribute, User} from "./user";
-import {Tracer} from "@app/diagnostics";
+import {resources} from "@app/test/util"
 
+const {dynamodb: {usersTable, locksTable}} = resources()
 const dynamodb = new DynamoDB()
 describe("User", () => {
 
@@ -10,15 +10,11 @@ describe("User", () => {
     let user!: User
     let anotherUser: User
     beforeEach(async () => {
-        const req = {
-            tracer: new Tracer("test"),
-            requestContext: {requestId: uuid.v4()}
-        }
         repo = new UserRepo({
-            tracer: req.tracer,
-            tag: "test",
             db: dynamodb,
-            aliasAttributes: ['email', 'phone_number', 'alt_email']
+            aliasAttributes: ['email', 'phone_number', 'alt_email'],
+            table: usersTable.name,
+            locks: locksTable.name
         })
 
         const cleanup = ['user.test.user@example.com', 'user.test@example.com', 'user.test.anotherUser@example.com', 'user.test.new@example.com']

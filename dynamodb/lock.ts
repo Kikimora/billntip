@@ -1,6 +1,6 @@
 import {ConditionalCheckFailedException, CreateTableCommand, DynamoDB} from "@aws-sdk/client-dynamodb";
 import {unmarshall} from "@aws-sdk/util-dynamodb";
-import {Table, table, Type} from "./schema";
+import {TableSchema, table, Type} from "./schema";
 import {update, updateCommand} from "./update";
 import {Just, repeat, retry} from "@app/util";
 import {deleteCommand} from "./delete";
@@ -17,7 +17,7 @@ export interface LockStore {
     /**
      * Lock table
      */
-    readonly table: Table<typeof LockKey, typeof LockAttributes>
+    readonly table: TableSchema<typeof LockKey, typeof LockAttributes>
 
     /**
      * DynamoDB client
@@ -336,7 +336,7 @@ function lockExpiration(lock: Lock) {
  */
 class Locker {
     constructor(private readonly dynamoDb: DynamoDB,
-                private readonly table: Table<typeof LockKey, typeof LockAttributes>) {
+                private readonly table: TableSchema<typeof LockKey, typeof LockAttributes>) {
     }
 
     async tryLock(lock: Lock): Promise<TryLockResult> {

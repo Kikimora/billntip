@@ -2,7 +2,7 @@
 import {
     Type,
     attributeGenerator,
-    SchemaType,
+    Schema,
 } from "@app/dynamodb/schema";
 
 const SampleSchema = {
@@ -31,7 +31,7 @@ const SampleSchema = {
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 // noinspection JSUnusedLocalSymbols
-const sampleObj: SchemaType<typeof SampleSchema> = {
+const sampleObj: Schema<typeof SampleSchema> = {
     numberArray: [1],
     arrayOfArrays: [[1]],
     arrayOfArraysOfObjects: [[{s: "", n: 1}]],

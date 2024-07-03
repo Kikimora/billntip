@@ -1,7 +1,8 @@
 import {DynamoDBClient} from "@aws-sdk/client-dynamodb";
 import {unmarshall} from '@aws-sdk/util-dynamodb';
-import {Type, TableSchema, getCommand, SchemaType, table, updateCommand, TableSchemaType} from "@app/dynamodb";
+import {Type, getCommand, table, updateCommand, TableItem} from "@app/dynamodb";
 import _ from "lodash";
+import {resources} from "@app/test/util";
 
 const dynamodb = new DynamoDBClient()
 
@@ -17,7 +18,7 @@ export function init(sessionsTable: string) {
             return response.Item != null ? unmarshall(response.Item) : null
         },
 
-        async updateSession(key: string, data: Partial<TableSchemaType<typeof Sessions>>) {
+        async updateSession(key: string, data: Partial<TableItem<typeof Sessions>>) {
             const response = await dynamodb.send(updateCommand(Sessions, {
                 key: {session_id: key},
                 return: "ALL_NEW",

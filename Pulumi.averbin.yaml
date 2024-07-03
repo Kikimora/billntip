@@ -1,15 +1,18 @@
 config:
+  aws:profile: billntip-dev
   BillAndTip:apple_client_id: add-me
   BillAndTip:apple_key_id: add-me
   # Apple ID - appdev@qoden.com
   BillAndTip:apple_private_key:
     secure: "AAABAHN81h2CIGkJKWRF1ulF9qNaeInUDN6NNy37PjctJYmrpJ3zuINX3+dtpjPaM6EX3vKIp7M5W7RKJDUhu0dEc1itZyeUMTuFsfkRbdZNpi52yK+XcIzFDQl+f+xx4N2YdFCiqqv7owJlN6raHBpR8THL9qzrRIRnxNpf8kdb5SSqUIhXoGtNbpTNFBeXzWYOrYUmvtYkdx4LkRKpRQ/Q8D/BZ9ohyOZMMyb+smz7dHYTyzuhmIrYIKNY4+lBKwadrfHHfv+Onev96yRTSRhW1SGJ5HgcEiRyELtPUwxhplejVKnDL0CZLYZWeXzFkcAZoQ0uO6gwUnGaVDL/qKWrYnYaFadBGxS2ctiaR5WqE9ZVT5szHYnWVPfSENWrgA=="
   BillAndTip:apple_team_id: add-me
-  BillAndTip:domain: ""
+  BillAndTip:domain: "qa.billntip.com"
   BillAndTip:facebook_client_id: add-me
   BillAndTip:facebook_client_secret:
     secure: "AAABABnM1RP1H3UyLlH6emtWPNrOI99WVCDK9MQ7jGjhtX2JK01LILQ="
   BillAndTip:google_client_id: add-me
   BillAndTip:google_client_secret:
     secure: "AAABAFM+8hLH8S55y3w2usjB7LC1trZzUfq9nfcT0Leel6JC13VVfoI="
-  aws:profile: billntip-dev
+  BillAndTip:cert-regional: arn:aws:acm:eu-south-1:381491945919:certificate/0fb9996e-983f-4fe9-ae8c-2458f11328c0
+  BillAndTip:cert-us-east-1: arn:aws:acm:us-east-1:381491945919:certificate/c445fdc3-f08e-4cdc-ab6e-e9f215feed5d
+

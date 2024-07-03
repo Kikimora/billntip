@@ -1,44 +1,72 @@
-import {Type as T} from '@sinclair/typebox';
+import {Static, Type, Type as T} from '@sinclair/typebox';
 import {RouteMap} from "@app/lambda";
-import {SecurityRequirementObject} from "openapi3-ts/src/model/openapi31";
+import {
+    MemberSchema,
+    PaymentGatewayQuery,
+    TransactionsQuery,
+    TransferSchema,
+    TxStatus,
+    TxType,
+    WalletSchema
+} from "./schemas";
 
 const Id = {
-    id: T.String()
+    id: T.String({description: "Organisation identifier"})
 }
-const authenticated: SecurityRequirementObject[] = [{"Cookie": []}]
 export default {
     "POST /tip/registration": {
         operationId: "Register",
-        security: authenticated,
+        success: Type.Object({
+            invites: Type.Array(MemberSchema)
+        }),
+        responses: [401, 403],
         tags: ['Tip']
     },
     "GET /tip/invites": {
         operationId: "ListInvites",
         query: {
-            accepted: T.Optional(T.Boolean()),
-            rejected: T.Optional(T.Boolean()),
+            accepted: T.Optional(T.Boolean({description: "Show only accepted invites"})),
+            rejected: T.Optional(T.Boolean({description: "Show only rejected invites"})),
         },
-        success: T.Null(),
+        success: Type.Array(MemberSchema),
+        responses: [401, 403],
         tags: ['Tip']
     },
     "GET /tip/invite/{id}": {
         operationId: "GetInvite",
-        body: T.Null(),
-        success: T.Null(),
         path: Id,
+        success: MemberSchema,
+        responses: [401, 403, 404],
         tags: ['Tip']
     },
     "PUT /tip/invite/{id}": {
         operationId: "AcceptInvite",
-        success: T.Null(),
         path: Id,
+        success: MemberSchema,
+        responses: [401, 403, 404],
         tags: ['Tip']
     },
     "DELETE /tip/invite/{id}": {
         operationId: "RejectInvite",
-        body: T.Null(),
-        success: T.Null(),
         path: Id,
+        success: Type.Optional(MemberSchema),
+        responses: [401, 403, 404],
         tags: ['Tip']
-    }
+    },
+    "GET /tip/wallet": {
+        operationId: "GetWalletDetails",
+        success: WalletSchema,
+        responses: [401, 403],
+        tags: ['Tip']
+    },
+    "GET /tip/wallet/transactions": {
+        operationId: "GetWalletTransactions",
+        query: TransactionsQuery,
+        success: Type.Object({
+            transactions: T.Array(TransferSchema),
+            wallet: WalletSchema
+        }),
+        responses: [401, 403],
+        tags: ['Tip']
+    },
 } as const satisfies RouteMap

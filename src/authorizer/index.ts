@@ -3,12 +3,9 @@ import {
     APIGatewaySimpleAuthorizerWithContextResult,
     APIGatewayProxyStructuredResultV2
 } from "aws-lambda";
-import {Env, initModuleVariables, Metrics} from "./ctx";
-import {configure, findErrorContext, Tracer} from '@app/diagnostics'
-import SessionData, {SessionContext} from "./session";
-import OidcTokens from "./oidc_tokens";
-import SessionCookie from "./cookie";
-import {pipeline} from "@app/lambda";
+import diagnostics, {EMF, findErrorContext, Tracer} from '@app/diagnostics'
+import {internalError, pipeline} from "@app/lambda";
+import startAuthOperation, {SessionData, SessionContext, SessionContextSchema} from "./operation";
 
 const Unauthorized = {isAuthorized: false, context: undefined}
 const BadRequest = {statusCode: 400, body: JSON.stringify({'error': 'Invalid request parameters.'})}
@@ -21,12 +18,17 @@ type AuthorizerHooks = {
     cookieAuthorizerFinish?: () => Promise<void>,
 }
 export const hooks: AuthorizerHooks = {}
-configure({
+diagnostics({
     triggers: {
         info: true, error: true, warn: true, request: true
     }
 })
-const tracer = new Tracer("auth")
+
+export const AuthTracer = new Tracer("authorizer")
+export const Metrics = EMF.namespace("authorizer")
+    .dimensions("functionVersion")
+    .metric("tokenVerificationLatency", {units: "Milliseconds"})
+    .startReporter()
 
 /**
  * Authorize request based on a cookie value. The authorizer performs following steps:
@@ -55,13 +57,12 @@ const tracer = new Tracer("auth")
  * expired. After it expires client with old cookie would get 401 Unauthorized or 403 Forbidden.
  *
  */
-
 export const cookie = pipeline<APIGatewayAuthorizerEvent>()
-    .traceRequest({tracer, tag: "cookie"})
+    .traceRequest({tracer: AuthTracer, tag: "cookie"})
     .done(async function (event, context): Promise<AuthResult> {
         const {tracer} = event
 
-        const {now} = await initModuleVariables(context.awsRequestId)
+        const {tokens: oidc, sessions, cookies, ctx} = await startAuthOperation(context.awsRequestId)
         switch (event.type) {
             case "REQUEST": {
                 const cookieHeader = event.headers?.cookie
@@ -69,13 +70,13 @@ export const cookie = pipeline<APIGatewayAuthorizerEvent>()
                     tracer.info("no cookie header")
                     return Unauthorized
                 }
-                const sessionCookie = SessionCookie.load(cookieHeader)
+                const sessionCookie = cookies.load(cookieHeader)
                 if (sessionCookie == null) {
                     tracer.info("cookie header present, but invalid", {cookieHeader})
                     return Unauthorized
                 }
-                const session = await SessionData.fetchLocked(sessionCookie.id)
-                if (session == null || session.refreshTokenExpiresAt < now) {
+                const session = await sessions.fetchLocked(sessionCookie.id)
+                if (session == null || session.refreshTokenExpiresAt < ctx.now) {
                     tracer.info("session not found or expired", {sessionId: sessionCookie.id, ...session?.info})
                     return Unauthorized
                 }
@@ -107,7 +108,7 @@ export const cookie = pipeline<APIGatewayAuthorizerEvent>()
                 if (hooks.cookieAuthorizerRefresh) {
                     await hooks.cookieAuthorizerRefresh()
                 }
-                const tokens = await OidcTokens.refresh(session.refreshToken)
+                const tokens = await oidc.refresh(session.refreshToken)
                 if (tokens == null) {
                     tracer.info("OIDC server refused to refresh tokens")
                     await session.remove();
@@ -117,8 +118,8 @@ export const cookie = pipeline<APIGatewayAuthorizerEvent>()
                 const newSession = session.withTokens(tokens)
                 //Fail if after refresh the session still can expire while being cached.
                 if (newSession.isTimeToRefresh) {
-                    const error = new Error("Configuration issue: API Gateway will cache tokens for over their lifetime.")
-                    throw tracer.errorWithContext(error, {updatedSession: newSession.info})
+                    throw internalError("Configuration issue: API Gateway will cache tokens for over their lifetime.")
+                        .withContext("authenticateSession", {updatedSession: newSession.info})
                 }
 
                 tracer.info("session refreshed", {session: newSession.info})
@@ -151,20 +152,20 @@ export const cookie = pipeline<APIGatewayAuthorizerEvent>()
  * The 'code' parameter contains one time code to get id, access and refresh tokens.
  */
 export const code = pipeline()
-    .traceRequest({tracer, tag: "code"})
+    .traceRequest({tracer: AuthTracer, tag: "code"})
     .done(async function (event, context): Promise<Promise<APIGatewayProxyStructuredResultV2>> {
         Metrics.setDimensions({functionVersion: context.functionVersion})
         const {tracer} = event
-        await initModuleVariables(context.awsRequestId)
+        const {ctx: {postAuthRedirectUrl}, tokens: oidc, sessions} = await startAuthOperation(context.awsRequestId)
         //TODO support OAuth PKCE for better security
         const code = event.queryStringParameters?.['code'] ?? ""
         const callbackUrl = `https://${event.requestContext.domainName}${event.rawPath}`
-        const tokens = await OidcTokens.authorisationCode(code, callbackUrl)
+        const tokens = await oidc.authorisationCode(code, callbackUrl)
         if (tokens == null) return BadRequest
         const start = performance.now()
         await Promise.all([tokens.verifyIdToken(), tokens.verifyAccessToken()])
         Metrics.tokenVerificationLatency(performance.now() - start)
-        const session = SessionData.createWithTokens(tokens)
+        const session = sessions.createWithTokens(tokens)
         const cookie = session.makeCookie()
         await session.create()
         tracer.info("new session", {
@@ -184,10 +185,10 @@ export const code = pipeline()
             body: `
     <html lang="en">
         <head>
-        <meta http-equiv="refresh" content="0;URL='${Env.postAuthRedirectUrl}'"/>
+        <meta http-equiv="refresh" content="0;URL='${postAuthRedirectUrl}'"/>
         <title>Bill & Tip</title>
         </head>
-        <body><p>Moved to <a href="${Env.postAuthRedirectUrl}">${Env.postAuthRedirectUrl}</a>.</p></body>
+        <body><p>Moved to <a href="${postAuthRedirectUrl}">${postAuthRedirectUrl}</a>.</p></body>
     </html>`
         }
     })
@@ -207,8 +208,8 @@ export const tokens = pipeline()
             throw e
         }
     })
-    .traceRequest({tracer, tag: "tokens"})
-    .requireLambdaAuth<SessionContext>()
+    .traceRequest({tracer: AuthTracer, tag: "tokens"})
+    .requireLambdaAuth(SessionContextSchema)
     .done(async function (event): Promise<APIGatewayProxyStructuredResultV2> {
             const authContext = event.requestContext.authorizer.lambda
             return {

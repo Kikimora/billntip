@@ -1,21 +1,21 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
-import {KeySchema, TableType, SchemaType, ExpressionGenerator, ProjectionGenerator} from "./schema";
+import {TableType, ProjectionGenerator, TableSchema, TableKey} from "./schema";
 import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
 /**
- * DynamoDb {@link ddb.GetItemCommandInput} for a given {@link Table}
+ * DynamoDb {@link ddb.GetItemCommandInput} for a given {@link TableSchema}
  */
-export interface GetCommand<Table> {
+export interface GetCommand<T extends TableSchema> {
     /**
      * See {@link ddb.GetItemInput.Key}
      */
-    key: SchemaType<KeySchema<Table>>,
+    key: TableKey<T>,
     /**
      * Function generating {@link ddb.GetItemInput.ProjectionExpression}
      */
-    projection?: ProjectionGenerator<Table>
+    projection?: ProjectionGenerator<T>
     /**
      * See {@link ddb.GetItemInput.ConsistentRead}
      */

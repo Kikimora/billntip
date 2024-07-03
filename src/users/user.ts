@@ -1,4 +1,4 @@
-import {AppError, internalServerError, LambdaRequest, TracedEvent} from "@app/lambda";
+import {AppError, internalError} from "@app/lambda";
 import {TransactionCanceledException} from "@aws-sdk/client-dynamodb";
 import * as ddb from "@app/dynamodb";
 import _, {mergeJoin, MergePair} from "@app/util";
@@ -6,8 +6,6 @@ import {ErrorContext, errorWithContext} from "@app/diagnostics";
 import * as Schemas from "./schemas";
 import UserStore, {UserAttributeItem, UserStoreOptions} from "./store";
 import {UserAttribute} from "./attributes";
-
-export const LocksTableName = process.env.LOCKS_TABLE ?? _.throw("Missing required LOCKS_TABLE env variable")
 
 export {UserAttribute} from "./attributes"
 
@@ -26,6 +24,16 @@ export interface FetchOptions {
 }
 
 /**
+ * Batch Fetch operation options.
+ */
+export interface BatchFetchOptions {
+    /**
+     * Allow fetch of deleted users, default - false
+     */
+    fetchDeleted?: boolean
+}
+
+/**
  * User data repository provides methods to load users from the storage.
  */
 export default class UserRepo {
@@ -36,9 +44,9 @@ export default class UserRepo {
         return this.store.db
     }
 
-    constructor(options?: UserStoreOptions) {
+    constructor(options: UserStoreOptions) {
         this.store = new UserStore(options)
-        this.lockStore = ddb.makeLockStore(LocksTableName, {dynamoDb: this.db})
+        this.lockStore = ddb.makeLockStore(options.locks, {dynamoDb: this.db})
     }
 
     /**
@@ -59,7 +67,7 @@ export default class UserRepo {
             try {
                 return await store.lookupAlias(usernameOrAlias)
             } catch (e: any) {
-                throw internalServerError(e.message).withContext({
+                throw internalError(e.message).withContext({
                     name: 'lookupAlias',
                     value: {
                         usernameOrAlias
@@ -147,6 +155,29 @@ export default class UserRepo {
         return await this._fetch(usernameOrAlias, false, options)
     }
 
+    /**
+     * Fetch batch of users. This method makes one query for each username.
+     * @param users - array of usernames, max 50
+     * @param options - fetch options
+     */
+    async batchFetch(users: string[], options?: BatchFetchOptions) {
+        const context = {
+            name: "batchFetch",
+            value: {users, options}
+        }
+        if (users.length > 50) throw internalError("Too many users in a batch").withContext(context)
+        const usersArray = await Promise.all(users.map(async username => {
+            const user = new User(username, this.store, this.lockStore)
+            try {
+                await user.fetch()
+                return user
+            } catch (e: any) {
+                throw errorWithContext(e, context)
+            }
+        }))
+        return _.keyBy(usersArray, 'username')
+    }
+
     private async _fetch(usernameOrAlias: string, lock: boolean, options?: FetchOptions) {
         const self = this
         const {username, verified} = await lookupAlias()
@@ -212,11 +243,25 @@ export class User {
 
     }
 
-    private get requestId() {
-        return this.store.tag
+    private get lockOwner() {
+        //AWS_LAMBDA_LOG_STREAM_NAME contains execution environment name
+        //which makes good lock owner name
+        return process.env.AWS_LAMBDA_LOG_STREAM_NAME ?? "noname"
     }
 
-    get attributes(): Readonly<UserAttribute[]> {
+    attr(name: string, verified?: boolean) {
+        return this.attributes.find(x => x.name === name && x.verified === verified)?.value
+    }
+
+    get attributeMap() {
+        return _(this.attributes)
+            .filter(x => 'verified' in x && x.verified || !('verified' in x))
+            .keyBy('name')
+            .mapValues('value')
+            .value()
+    }
+
+    get attributes(): UserAttribute[] {
         return Array.from(makeAttributes(this._attributes))
 
         function* makeAttributes(attributes: UserAttributeItem[]): Generator<UserAttribute> {
@@ -255,9 +300,9 @@ export class User {
     }
 
     async lock() {
-        const {username, lockStore, requestId} = this
-        this._lock = await lockStore.tryLock(username, requestId, {
-            leaseDuration: 100,
+        const {username, lockStore, lockOwner} = this
+        this._lock = await lockStore.tryLock(username, lockOwner, {
+            leaseDuration: 1000,
             autoBump: true
         });
     }
@@ -285,7 +330,7 @@ export class User {
             try {
                 return await store.fetch(username)
             } catch (e: any) {
-                throw internalServerError(e.message).withContext(context, {cause: e})
+                throw internalError(e.message).withContext(context, {cause: e})
             }
         }
 
@@ -370,6 +415,7 @@ export class User {
 
     /**
      * Soft delete user while hard deleting its aliases.
+     * @param force - force user hard delete
      */
     async delete(force: boolean = false) {
         const {username, _attributes: attributes, deleted, store} = this
@@ -403,7 +449,7 @@ export class User {
         try {
             await userTx.run()
         } catch (e: any) {
-            throw internalServerError("Cannot delete user").withContext(context, {cause: e})
+            throw internalError("Cannot delete user").withContext(context, {cause: e})
         }
         if (force) {
             this._attributes = []
@@ -445,7 +491,7 @@ export class User {
         try {
             await tx.run()
         } catch (e: any) {
-            throw internalServerError("Cannot delete attributes.").withContext(context, {cause: e})
+            throw internalError("Cannot delete attributes.").withContext(context, {cause: e})
         }
         this._attributes = this._attributes.filter(x => !targetAttributes.has(x.name))
     }
@@ -587,10 +633,10 @@ export class User {
                     throw invalidAliasException()
                         .withContext(context, cause)
                 }
-                throw internalServerError("TransactionCanceledException due to an unexpected condition.")
+                throw internalError("TransactionCanceledException due to an unexpected condition.")
                     .withContext(context, cause)
             }
-            throw internalServerError(e.message)
+            throw internalError(e.message)
                 .withContext(context, {cause: e})
         }
         this._attributes = attributes

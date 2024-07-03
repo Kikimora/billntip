@@ -172,18 +172,6 @@ export function cyrb53(str: string, seed: number = 0) {
     return 4294967296 * (2097151 & h2) + (h1 >>> 0);
 }
 
-
-type SortOption<L, R> = L extends R
-    ? {
-        sortLeft?: (x: L, y: L) => number,
-        sortRight?: (x: R, y: R) => number,
-        sortBoth?: (x: R, y: R) => number,
-    }
-    : {
-        sortLeft?: (x: L, y: L) => number,
-        sortRight?: (x: R, y: R) => number
-    }
-
 interface OnlyLeft<T> {
     type: 'left'
     left: T
@@ -258,9 +246,62 @@ export function mapKeysDeep<T>(value: T, rename: (name: string) => string): T {
 }
 
 export function toCamel(o: any) {
-    return mapKeysDeep(o, origKey => (origKey.charAt(0).toLowerCase() + origKey.slice(1) || origKey).toString())
+    const rename = (origKey: string) => (origKey.charAt(0).toLowerCase() + origKey.slice(1) || origKey).toString()
+    if (typeof o === 'string') return rename(o)
+    return mapKeysDeep(o, rename)
 }
 
 export function toPascal(o: any) {
-    return mapKeysDeep(o, origKey => (origKey.charAt(0).toUpperCase() + origKey.slice(1) || origKey).toString())
+    const rename = (origKey: string) => (origKey.charAt(0).toUpperCase() + origKey.slice(1) || origKey).toString()
+    if (typeof o === 'string') return rename(o)
+    return mapKeysDeep(o, rename)
+}
+
+export function cache<T>(ttl: number, producer: () => Promise<T>) {
+    let expiry = -1
+    let value: Promise<T>
+    let producers = 0
+
+    return function (force?: boolean) {
+        force = force ?? false
+        const isProducing = producers > 0
+        const cacheExpired = expiry - performance.now() <= 0;
+        if ((cacheExpired && !isProducing) || force) {
+            producers++
+            value = producer()
+                .then(function (result) {
+                    expiry = performance.now() + ttl * 1000
+                    return result
+                }).finally(function () {
+                    producers--
+                })
+        }
+        return value
+    }
+}
+
+export function onceAsync<T extends (...args: any[]) => Promise<any>>(producer: T, ...args: Parameters<T>): () => Promise<ReturnType<T>> {
+    let value: Promise<ReturnType<T>>
+    let hasValue: boolean = false
+    let isRunning: boolean = false
+
+    return function () {
+        if (!hasValue && !isRunning) {
+            isRunning = true
+            value = producer(...args)
+                .then(function (e) {
+                    hasValue = true
+                    return e
+                })
+                .catch(function (e) {
+                    hasValue = false
+                    throw e
+                })
+                .finally(function () {
+                    isRunning = false
+                })
+        }
+
+        return value
+    }
 }

@@ -1,75 +1,57 @@
-import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import gateway from "./gateway";
 import authorizer from "./authorizer";
-import apiRoute from "./$default";
-import {callbackRoute, tokensRoute} from "./auth";
-import tip from "./tip";
-import bill from "./bill";
-import users from "./users";
 import cognitoApiClient from "./cognito-api-client";
 import cognitoFrontendClient from "./cognito-frontend-client";
+import {regionalCertificate} from "../certificate"
+import {callbackRoute, tokensRoute} from "./auth";
+import bill from "./bill";
+import images from "./images";
+import tip from "./tip";
+import users from "./users";
+import {configFolder} from "@aws/config";
+import * as pulumi from "@pulumi/pulumi";
+
+const config = new aws.ssm.Parameter("api-config", {
+    name: `${configFolder}/api`,
+    type: "String",
+    value: pulumi.jsonStringify({
+        cookieName: 'SID',
+        sameSite: "none",
+        clientId: cognitoApiClient.id, //user pool client id
+        postAuthRedirectUrl: gateway.authCallback,
+        //Cache tokens for almost entire lifetime
+        authorizerCacheTtl: authorizer.authorizerCacheTtl,
+    })
+})
 
 const routes = [
-    ...apiRoute.routes,
     ...tokensRoute.routes,
     ...callbackRoute.routes,
     ...tip.routes,
     ...bill.routes,
-    ...users.routes
+    ...users.routes,
+    ...images.routes,
 ];
-const deployment = new aws.apigatewayv2.Deployment(
-    "api-deployment",
-    {
-        apiId: gateway.id,
-    },
-    {
-        dependsOn: routes
-    });
+const domainName = new aws.apigatewayv2.DomainName("api-domain", {
+    domainName: gateway.apiDomain,
+    domainNameConfiguration: {
+        certificateArn: regionalCertificate.arn,
+        endpointType: "REGIONAL",
+        securityPolicy: "TLS_1_2"
+    }
+})
 
-if (pulumi.getStack() === "prod") {
-    new aws.apigatewayv2.Stage("api-stage", {
-        apiId: gateway.id,
-        name: "$default",
-        deploymentId: deployment.id,
-        autoDeploy: false,
-    });
-
-    const config = new pulumi.Config();
-    const domain = config.get('domain');
-    const apiDomainUrl = `api.${domain}`;
-
-    const certificate = new aws.acm.Certificate("cert", {
-        domainName: apiDomainUrl,
-        validationMethod: "DNS",
-    });
-
-    new aws.acm.CertificateValidation("cert-validation", {
-        certificateArn: certificate.arn,
-    });
-
-    new aws.apigatewayv2.DomainName("api-domain", {
-        domainName: apiDomainUrl,
-        domainNameConfiguration: {
-            certificateArn: certificate.arn,
-            endpointType: "REGIONAL",
-            securityPolicy: "TLS_1_2"
-        }
-    });
-
-    new aws.apigatewayv2.ApiMapping("api-domain-mapping", {
-        apiId: gateway.id,
-        stage: "$default",
-        domainName: apiDomainUrl
-    });
-} else {
-    new aws.apigatewayv2.Stage("api-stage", {
-        apiId: gateway.id,
-        name: pulumi.getStack(),
-        autoDeploy: true
-    });
-}
-
+const stage = new aws.apigatewayv2.Stage("api-stage", {
+    apiId: gateway.id,
+    name: "$default",
+    autoDeploy: true,
+})
+new aws.apigatewayv2.ApiMapping("api-domain-mapping", {
+    apiId: gateway.id,
+    stage: stage.id,
+    domainName: domainName.domainName
+})
 
 export const cognitoClients = {
     api: cognitoApiClient,
@@ -80,7 +62,8 @@ export default {
     gateway: {
         id: gateway.id,
         url: gateway.url,
-        urn: gateway.urn
+        urn: gateway.urn,
+        domain: domainName.domainName
     },
     authorizer: {
         id: authorizer.id,
@@ -96,10 +79,5 @@ export default {
         src: x.src,
         lambdaArn: x.lambdaArn
     })),
-    deployment: {
-        id: deployment.id,
-        urn: deployment.urn,
-        autoDeployed: deployment.autoDeployed,
-        triggers: deployment.triggers
-    }
+    config: config.arn
 }

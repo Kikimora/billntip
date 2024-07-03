@@ -35,11 +35,11 @@ function buildAndUpdate(options: any) {
         if (options.build && !builder.buildTasks[module]) {
             console.log("Building: ", module)
             // noinspection ES6MissingAwait
-            builder.bundle(module)
+            builder.bundle(lambda)
         }
         await Promise.all(_.values(builder.buildTasks))
 
-        if (options.create || options.publish) {
+        if (options.createTokens || options.publish) {
             console.log("Updating AWS Lambda: ", lambda)
             await builder.update(lambda, options.publish)
         }

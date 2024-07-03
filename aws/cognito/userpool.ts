@@ -2,11 +2,10 @@ import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
 import {grantInvoke, newLambda, newLambdaRole, newPolicy} from "@aws/util";
 import {Lambdas} from "@aws/lambdas";
-import {DynamoDbCRUDActions, locksTable, usersTable} from "@aws/dynamodb";
+import ddb, {DynamoDbCRUDActions} from "@aws/dynamodb";
+import {smsExternalId, tags} from "@aws/config"
+import {bucket} from "@aws/s3";
 
-const config = new pulumi.Config();
-
-const externalId = config.get('cognito-sms-external-id')!
 const cognitoAssumeRolePolicy = JSON.stringify({
     Version: "2012-10-17",
     Statement: [{
@@ -17,7 +16,7 @@ const cognitoAssumeRolePolicy = JSON.stringify({
         },
         Condition: {
             StringEquals: {
-                "sts:ExternalId": externalId
+                "sts:ExternalId": smsExternalId
             }
         }
     }],
@@ -47,75 +46,87 @@ const triggers = newLambda(Lambdas['users/cognito-triggers.handler'])
         memorySize: 256,
         environment: {
             variables: {
-                USERS_TABLE: usersTable.name,
-                LOCKS_TABLE: locksTable.name
+                USERS_TABLE: ddb.usersTable.name,
+                LOCKS_TABLE: ddb.locksTable.name,
+                BUCKET: bucket.id
             }
         }
     })
     .role(manageUsersRole)
     .build()
 
+
+const emailIdentity = aws.ses.EmailIdentity.get('userpool-email-identity', 'billntip.com')
+
 const pool = new aws.cognito.UserPool('cognito-user-pool-v3', {
-    autoVerifiedAttributes: ['email', 'phone_number'],
-    // Configure lambda triggers, such as for custom SMS messages
-    lambdaConfig: {
-        // You must provide the ARN of the lambda function if you have one
-        // customSmsSender: {
-        //    lambdaArn: "arn:of:your:lambda:function",
-        //    lambdaVersion: "V1_0",
-        // },
-        preSignUp: triggers.arn,
-        postConfirmation: triggers.arn,
-        preAuthentication: triggers.arn,
-        postAuthentication: triggers.arn,
-        preTokenGeneration: triggers.arn,
-    },
-    // Define password policy
-    passwordPolicy: {
-        minimumLength: 6,
-        requireNumbers: true,
-        requireSymbols: true,
-        requireLowercase: true,
-        requireUppercase: true,
-        temporaryPasswordValidityDays: 7
-    },
-    // SMS configuration details
-    smsConfiguration: {
-        externalId: externalId,
-        snsCallerArn: smsSenderRole.arn,
-    },
-    // Define which attributes can be used to sign in
-    //See https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html#user-pool-settings-aliases
-    //for discussion of username attributes vs alias attributes
-    usernameAttributes: ["email", "phone_number"],
-
-    schemas: [
-        {name: "tos", attributeDataType: "String", mutable: true},
-        {name: "nationality", attributeDataType: "String", mutable: true},
-        {name: "data", attributeDataType: "String", mutable: true},
-        {name: "uid", attributeDataType: "String", mutable: true},
-    ],
-
-    // Customizes the user invitation message if you're using adminCreateUser
-    adminCreateUserConfig: {
-        inviteMessageTemplate: {
-            smsMessage: "Your username is {username} and temporary password is {####}.",
-            emailMessage: "Your username is {username} and temporary password is {####}.",
-            emailSubject: "Your temporary password",
+        autoVerifiedAttributes: ['email', 'phone_number'],
+        // Configure lambda triggers, such as for custom SMS messages
+        lambdaConfig: {
+            // You must provide the ARN of the lambda function if you have one
+            // customSmsSender: {
+            //    lambdaArn: "arn:of:your:lambda:function",
+            //    lambdaVersion: "V1_0",
+            // },
+            preSignUp: triggers.arn,
+            postConfirmation: triggers.arn,
+            preAuthentication: triggers.arn,
+            postAuthentication: triggers.arn,
+            preTokenGeneration: triggers.arn,
+            customMessage: triggers.arn,
         },
-        allowAdminCreateUserOnly: false,
+        // Define password policy
+        passwordPolicy: {
+            minimumLength: 6,
+            requireNumbers: true,
+            requireSymbols: true,
+            requireLowercase: true,
+            requireUppercase: true,
+            temporaryPasswordValidityDays: 7
+        },
+        // SMS configuration details
+        smsConfiguration: {
+            externalId: smsExternalId,
+            snsCallerArn: smsSenderRole.arn,
+        },
+        // Define which attributes can be used to sign in
+        //See https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-settings-attributes.html#user-pool-settings-aliases
+        //for discussion of username attributes vs alias attributes
+        usernameAttributes: ["email", "phone_number"],
+
+        schemas: [
+            {name: "tos", attributeDataType: "String", mutable: true},
+            {name: "nationality", attributeDataType: "String", mutable: true},
+            {name: "data", attributeDataType: "String", mutable: true},
+            {name: "uid", attributeDataType: "String", mutable: true},
+        ],
+
+        // Customizes the user invitation message if you're using adminCreateUser
+        adminCreateUserConfig: {
+            inviteMessageTemplate: {
+                smsMessage: "Your username is {username} and temporary password is {####}.",
+                emailMessage: "Your username is {username} and temporary password is {####}.",
+                emailSubject: "Your temporary password",
+            },
+            allowAdminCreateUserOnly: false,
+        },
+        userAttributeUpdateSettings: {
+            attributesRequireVerificationBeforeUpdates: ["email", "phone_number"]
+        },
+        emailConfiguration: {
+            sourceArn: emailIdentity.arn,
+            emailSendingAccount: 'DEVELOPER',
+            fromEmailAddress: 'no-reply@billntip.com'
+        },
+        // Define MFA and verification configurations
+        mfaConfiguration: "OPTIONAL",
+        smsAuthenticationMessage: "Your authentication code is {####}.",
+        // Customizable email and SMS verification messages
+        emailVerificationMessage: "Your verification code is {####}.",
+        emailVerificationSubject: "Your verification code",
+        smsVerificationMessage: "Your verification code is {####}.",
+        tags,
     },
-    userAttributeUpdateSettings: {
-        attributesRequireVerificationBeforeUpdates: ["email", "phone_number"]
-    },
-    // Define MFA and verification configurations
-    mfaConfiguration: "OPTIONAL",
-    smsAuthenticationMessage: "Your authentication code is {####}.",
-    // Customizable email and SMS verification messages
-    emailVerificationMessage: "Your verification code is {####}.",
-    emailVerificationSubject: "Your verification code",
-    smsVerificationMessage: "Your verification code is {####}."
-}, {retainOnDelete: true})
+    {retainOnDelete: true})
 
 const userPool = {
     type: "userpool",
@@ -143,9 +154,8 @@ const manageUsersPolicy = new aws.iam.Policy("cognito-manage-users-policy", {
             "cognito-idp:AdminAddUserToGroup",
         )
         .on(pool)
-        .sid("DynamoDB")
-        .allow(...DynamoDbCRUDActions)
-        .on(usersTable, locksTable)
+        .sid("DynamoDB").allow(...DynamoDbCRUDActions).on(ddb.usersTable, ddb.locksTable)
+        .sid("S3Access").allow('s3:GetObject').on(pulumi.interpolate`${bucket.arn}/emails/*`)
         .buildPolicy()
 })
 

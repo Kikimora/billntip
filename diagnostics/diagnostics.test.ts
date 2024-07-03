@@ -1,4 +1,4 @@
-import {configure, EMF, EventRecorder, Trace, Tracer} from "@app/diagnostics"
+import diagnostics, {EMF, EventRecorder, Trace, Tracer} from "@app/diagnostics"
 
 let tracer: Tracer
 let recorder: EventRecorder
@@ -145,7 +145,7 @@ describe("EventRecorder", () => {
 
 describe("Tracer", () => {
     beforeEach(() => {
-        configure({})
+        diagnostics({})
         tracer = new Tracer("test")
         recordEvent = jest.spyOn(tracer as any, 'recordEvent')
     })
@@ -229,7 +229,7 @@ describe("Tracer", () => {
     describe("startSession", () => {
         let session: any
         beforeEach(() => {
-            configure({triggers: {request: {event: {attr: "value"}}}})
+            diagnostics({triggers: {request: {event: {attr: "value"}}}})
         })
 
         afterEach(() => {

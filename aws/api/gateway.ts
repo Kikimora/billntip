@@ -1,26 +1,26 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import {domain} from "./config";
+import {domain, stack, tags} from "@aws/config";
 import {newLambda} from "@aws/util";
 import {LambdaSource} from "@app/lambda/builder";
 
 const apiGw = new aws.apigatewayv2.Api('api', {
+    name: `billntip-${stack}`,
     protocolType: "HTTP", // HTTP APIs are quicker and cheaper than REST APIs
     routeSelectionExpression: "${request.method} ${request.path}",
     corsConfiguration: {
         allowCredentials: true,
         allowHeaders: ['content-type'],
-        allowOrigins: pulumi.getStack() === "prod" ? ['https://billntip.com'] : [
-            'http://localhost:3006', //local dev
-            'http://urbankitchen.domain-for-testing.ru',
-        ],
+        allowOrigins: [`https://tip.${domain}`, `https://bill.${domain}`],
         allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
         exposeHeaders: ['*'],
         maxAge: 3600
-    }
+    },
+    tags,
 });
 
-const apiUrl = pulumi.getStack() === "prod" ? `https://api.${domain}` : pulumi.interpolate`${apiGw.apiEndpoint}/${pulumi.getStack()}`
+const apiDomain = `api.${domain}`
+const url = `https://${apiDomain}`
 const lambdaCaller = {
     sourceArn: pulumi.interpolate`${apiGw.executionArn}/*/*`,
     principal: "apigateway.amazonaws.com",
@@ -31,9 +31,10 @@ export default {
     name: "api",
     id: apiGw.id,
     urn: apiGw.urn,
-    url: apiUrl,
+    apiDomain,
+    url,
     authCallbackPath: '/auth/cognito/idpresponse',
-    authCallback: pulumi.interpolate`${apiUrl}/auth/cognito/idpresponse`,
+    authCallback: pulumi.interpolate`${url}/auth/cognito/idpresponse`,
 
     newLambda(lambda: LambdaSource) {
         return newLambda(lambda).grantInvoke(lambdaCaller)

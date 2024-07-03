@@ -97,14 +97,14 @@ describe("Lambda API JSON Body middleware", () => {
         }
     })
     it("parse json", async () => {
-        request.body = JSON.stringify({x: "Hello", y: "World"})
-        expect(await handler(request, context)).toEqual({body: {x: "Hello", y: "World"}})
+        request.body = JSON.stringify({keys: "Hello", y: "World"})
+        expect(await handler(request, context)).toEqual({body: {keys: "Hello", y: "World"}})
     })
 
     it("parse base64Encoded json", async () => {
-        request.body = Buffer.from(JSON.stringify({x: "Hello", y: "World"})).toString("base64")
+        request.body = Buffer.from(JSON.stringify({keys: "Hello", y: "World"})).toString("base64")
         request.isBase64Encoded = true
-        expect(await handler(request, context)).toEqual({body: {x: "Hello", y: "World"}})
+        expect(await handler(request, context)).toEqual({body: {keys: "Hello", y: "World"}})
     })
 
     it("throws SyntaxError on invalid JSON", async () => {
@@ -243,7 +243,7 @@ describe("Lambda API requireXYZAuth middleware", () => {
             principalId: "ACCOUNT ID",
             jwt: {claims: {"aud": "test"}}
         }],
-        ["Lambda", pipeline().requireLambdaAuth().done(dummyHandler), {lambda: {x: "lambda"}}],
+        ["Lambda", pipeline().requireLambdaAuth().done(dummyHandler), {lambda: {keys: "lambda"}}],
     ])("require %s auth", async (_, handler: any, authorizer: any) => {
         request.requestContext = {authorizer}
         expect(await handler(request, context)).toEqual({

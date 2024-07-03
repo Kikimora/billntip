@@ -1,9 +1,9 @@
 import * as dotenv from 'dotenv';
 import {Console} from 'node:console';
 import {resources} from "@app/test/util";
-import {configure} from "@app/diagnostics";
+import diagnostics from "@app/diagnostics";
 
-configure({triggers: {request: true}})
+diagnostics({triggers: {request: true}})
 
 const e = dotenv.config()
 if (e.error != null) throw e.error
@@ -40,7 +40,8 @@ global.console = new Console({
     }
 });
 
+jest.mock('@src/http');
 //Import this module after environment variables otherwise it fails to init.
-import {Metrics} from "@src/authorizer/ctx";
+import {Metrics} from "@src/authorizer";
 //Metrics start a background process waiting for the Lambda termination which never happens in tests.
 Metrics.stop()

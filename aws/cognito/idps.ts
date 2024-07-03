@@ -1,8 +1,8 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import userPool from "./userpool";
+import * as config from "../config";
 
-const config = new pulumi.Config();
 // Note - providerName and providerType must match - https://github.com/aws/aws-cli/issues/3179
 export const facebookIdp = new aws.cognito.IdentityProvider("cognito-facebook-idp", {
     //providerName MUST be the same as providerType
@@ -10,8 +10,8 @@ export const facebookIdp = new aws.cognito.IdentityProvider("cognito-facebook-id
     providerType: "Facebook",
     userPoolId: userPool.id,
     providerDetails: {
-        client_id: config.require('facebook_client_id'),
-        client_secret: config.requireSecret('facebook_client_secret'),
+        client_id: config.facebookClientId,
+        client_secret: config.facebookClientSecret,
         authorize_scopes: "email,public_profile",
         attributes_url: "https://graph.facebook.com/v17.0/me?fields=",
         attributes_url_add_attributes: "true",
@@ -31,8 +31,8 @@ export const googleIdp = new aws.cognito.IdentityProvider("cognito-google-idp", 
     providerType: "Google",
     userPoolId: userPool.id,
     providerDetails: {
-        client_id: config.require('google_client_id'),
-        client_secret: config.requireSecret('google_client_secret'),
+        client_id: config.googleClientId,
+        client_secret: config.googleClientSecret,
         authorize_scopes: "openid email profile",
         attributes_url: "https://people.googleapis.com/v1/people/me?personFields=",
         attributes_url_add_attributes: "true",
@@ -58,10 +58,10 @@ export const appleIdp = new aws.cognito.IdentityProvider("cognito-apple-idp", {
             username: "sub"
         },
         providerDetails: {
-            client_id: config.require('apple_client_id'),
-            team_id: config.require('apple_team_id'),
-            key_id: config.require('apple_key_id'),
-            private_key: config.requireSecret('apple_private_key'),
+            client_id: config.appleClientId,
+            team_id: config.appleTeamId,
+            key_id: config.appleKeyId,
+            private_key: config.applePrivateKey,
             attributes_url_add_attributes: "false",
             authorize_url: "https://appleid.apple.com/auth/authorize",
             oidc_issuer: "https://appleid.apple.com",

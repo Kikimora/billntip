@@ -8,21 +8,26 @@ import {CognitoIdentityProvider, UserType} from "@aws-sdk/client-cognito-identit
 import _ from "lodash";
 import {BaseTriggerEvent} from "aws-lambda/trigger/cognito-user-pool-trigger/_common";
 import {generate} from "generate-password";
-import {DynamoDB} from "@aws-sdk/client-dynamodb";
-import {configure, errorWithContext, Tracer} from "@app/diagnostics";
-import {pipeline, TracedEvent} from "@app/lambda";
-import UserRepo, {UserAttribute} from './user';
-import {toUserAttributes} from "./cognito";
-
-configure({
-    triggers: {
-        request: true
-    }
-})
+import {Type} from "@sinclair/typebox";
+import diagnostics, {errorWithContext, Tracer, TracingOptions} from "@app/diagnostics";
+import {moduleConfig, pipeline, TracedEvent} from "@app/lambda";
+import {fetchTemplate} from "./messages";
+import {UserAttribute} from "./attributes";
 
 const cognito = new CognitoIdentityProvider()
-const dynamodb = new DynamoDB()
 const tracer = new Tracer("cognito")
+const config = moduleConfig()
+    .parameters({
+        s3: Type.Object({bucket: Type.String()}),
+        'cognito-triggers': Type.Object({}, {relaxed: true, default: {triggers: {request: true}}}),
+    })
+    .bind(config => {
+        fetchTemplate.defaults = {s3: config.s3}
+        diagnostics(config['cognito-triggers'] as TracingOptions)
+    })
+    .build()
+// noinspection JSUnusedGlobalSymbols
+export const __init = config.load()
 
 function eventTriggerSource(event: BaseTriggerEvent<string>) {
     return event.triggerSource.split('_')[0]
@@ -66,26 +71,6 @@ export const trigger = async function (event: BaseTriggerEvent<any> & TracedEven
              * when the pre sign-up Lambda function is triggered by the AdminCreateUser API.
              */
             case "PreSignUp_SignUp": {
-                const attributeSource = event.triggerSource === 'PreSignUp_AdminCreateUser' ? 'trusted' : 'user'
-                const {userName} = event
-                const repo = new UserRepo({
-                    db: dynamodb,
-                    tag: context.awsRequestId
-                })
-                //"POST /user" puts attributes into the client metadata
-                const normalAttributes: UserAttribute[] = JSON.parse(event.request.clientMetadata?.['_attributes'] ?? "[]")
-                const aliases = _.map(event.request.userAttributes, (Value, Name) => ({Name, Value}));
-                const aliasAttributes = toUserAttributes(aliases)
-                try {
-                    await repo.create(userName, attributeSource, normalAttributes.concat(aliasAttributes))
-                } catch (e) {
-                    throw errorWithContext(e, 'trigger', {
-                        attributeSource,
-                        normalAttributes,
-                        aliasAttributes,
-                        userName
-                    })
-                }
                 break
             }
         }
@@ -123,14 +108,88 @@ export const trigger = async function (event: BaseTriggerEvent<any> & TracedEven
          * Handle [custom message]{@link https://docs.aws.amazon.com/cognito/latest/developerguide/user-pool-lambda-custom-message.html} event.
          * @param event post authentication event.
          */
+        const {request, response} = event
+        const {_attributes, ...metadata} = event.request.clientMetadata ?? {}
+
+        const attributes = {
+            ..._(JSON.parse(_attributes) as UserAttribute[])
+                .keyBy('name')
+                .mapValues('value')
+                .value(),
+            ...request.userAttributes
+        }
+
+        function targetAttribute() {
+            const userAttributes = request.userAttributes;
+            if ('email' in userAttributes && !('email_verified' in userAttributes)) {
+                return 'email'
+            } else if ('phone_number' in userAttributes && !('phone_number_verified' in userAttributes)) {
+                return 'phone_number'
+            } else {
+                return undefined
+            }
+        }
+
+        //Problem: [AWS Cognito - Custom email message with Lambda trigger being overwritten](https://stackoverflow.com/questions/61514305/aws-cognito-custom-email-message-with-lambda-trigger-being-overwritten)
+        //>
+        //> For anyone finding this, I was able to find the answer. When using the CustomMessage_AdminCreateUser
+        //> event, cognito will silently throw an error if you use event.userName in the template. Instead
+        //> use event.request.usernameParameter and it will work
+        let context = {
+            metadata,
+            attributes,
+            username: request.usernameParameter ?? '',
+            code: request.codeParameter,
+            link: request.linkParameter,
+            type: event.triggerSource.substring(14/*"CustomMessage_".length*/),
+            attribute: targetAttribute()
+        }
+        const {s3: {bucket}} = await config.parameters
+        const messageTemplate = await fetchTemplate(bucket, context.type)
+        response.emailMessage = messageTemplate(context)
+
         switch (event.triggerSource) {
             case 'CustomMessage_AdminCreateUser':
-            case 'CustomMessage_Authentication':
-            case 'CustomMessage_ForgotPassword':
-            case 'CustomMessage_ResendCode':
             case 'CustomMessage_SignUp':
+                response.emailSubject = "Welcome to Bill&Tip"
+                break
+            case 'CustomMessage_Authentication':
+                response.emailSubject = "Welcome to Bill&Tip"
+                break
+            case 'CustomMessage_ForgotPassword':
+                response.emailSubject = "Welcome to Bill&Tip"
+                break
+            case 'CustomMessage_ResendCode':
+                response.emailSubject = "Welcome to Bill&Tip"
+                switch (context.attribute) {
+                    case 'email':
+                        response.emailSubject = "Bill&Tip: Resend Verification Code for Email"
+                        break
+                    case 'phone_number':
+                        response.smsMessage = `Hello, please use the following code to verify your phone number: ${request.codeParameter}`
+                        break;
+                    default:
+                        response.emailSubject = `Verify your attribute`
+                        response.smsMessage = `Hello, please use the following code to verify your phone number: ${request.codeParameter}`
+                }
+                break
             case 'CustomMessage_UpdateUserAttribute':
+                switch (context.attribute) {
+                    case 'email':
+                        response.emailSubject = "Bill&Tip: please verify your email"
+                        break
+                    case 'phone_number':
+                        response.smsMessage = `Hello, please use the following code to verify your phone number: ${request.codeParameter}`
+                        break;
+                    default:
+                        response.emailSubject = `Verify your attribute`
+                        response.smsMessage = `Hello, please use the following code to verify your phone number: ${request.codeParameter}`
+                }
+                break
             case 'CustomMessage_VerifyUserAttribute':
+                response.emailSubject = "Bill&Tip: please verify your email."
+                response.smsMessage = `Hello, please use the following code to verify your phone number: ${request.codeParameter}`
+                break
         }
     }
     return event

@@ -1,140 +1,141 @@
 import _ from "lodash";
 import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
-import {badRequestError, pipeline} from '@app/lambda'
-import Paths from "./tip-paths";
-import {SessionContext} from "@src/authorizer/session";
+import {Static, Type} from "@sinclair/typebox";
+import {moduleConfig, pipeline} from '@app/lambda'
+import {SessionContextSchema} from "@src/authorizer/types";
 import UserRepo from "@src/users/user";
-import {die} from "@app/util";
-import {Type} from "@sinclair/typebox";
-import {Value} from "@sinclair/typebox/value";
-import {intervalToDuration} from "date-fns";
-import Store from "./store";
-import {errorWithContext} from "@app/diagnostics";
+import Paths from "./tip-paths";
+import {toMembership} from "./util";
+import {MemberRepo} from "./member";
 
-const UserPoolId = process.env.USER_POOL_ID ?? die("USER_POOL_ID required")
-const DataTableName = process.env.DATA_TABLE ?? die("DATA_TABLE required")
 const dynamo = new DynamoDB()
 const cognito = new CognitoIdentityProvider()
 
-const RecipientSchema = Type.Object({
-    first_name: Type.String({minLength: 3, maxLength: 100}),
-    last_name: Type.String({minLength: 3, maxLength: 100}),
-    phone: Type.String({minLength: 3, pattern: "\\+\\d+", maxLength: 100}),
-    birthdate: Type.Number({minimum: 18, maximum: 200}),
-    address: Type.Object({
-        country: Type.String({minLength: 2, maxLength: 3})
-    }),
-    nationality: Type.String({minLength: 2, maxLength: 3}),
-    tos: Type.Object({
-        general: Type.Literal(true),
-        privacy: Type.Literal(true),
+const config = moduleConfig()
+    .parameters({
+        dynamodb: Type.Object({
+            locks: Type.String(),
+            users: Type.String(),
+            data: Type.String()
+        }),
+        oidc: Type.Object({
+            userPoolId: Type.String(),
+        })
     })
-})
+    .build()
+
+export function __init() {
+    return config.parameters.then(({dynamodb, oidc}) => {
+        const usersRepo = new UserRepo({
+            db: dynamo,
+            table: dynamodb.users,
+            locks: dynamodb.locks
+        })
+        const membersRepo = new MemberRepo({table: dynamodb.data})
+        return {usersRepo, membersRepo, userPoolId: oidc.userPoolId}
+    })
+}
 
 export const handler = pipeline()
     .handleErrors()
     .traceRequest()
-    .requireLambdaAuth<SessionContext>()
+    .requireLambdaAuth(SessionContextSchema)
     .withRoutes(Paths)
     .parseJsonBody()
     .done(async function (req) {
-        const store = new Store({table: DataTableName})
+        const {membersRepo, usersRepo, userPoolId} = await __init()
         switch (req.routeKey) {
             case 'POST /tip/registration': {
-                const username = req.user.profile['cognito:username']
-                const repo = new UserRepo({
-                    tracer: req.tracer,
-                    tag: req.requestContext.requestId,
-                    db: dynamo
-                })
-                const user = await repo.fetch(username)
-                const attributes = _(user.attributes).keyBy('name').mapValues('value').value()
-                const {
-                    first_name,
-                    last_name,
-                    phone: phone,
-                    birthdate: birthdateStr,
-                    address: addressJSON,
-                    nationality: nationality,
-                    tos: tosJSON
-                } = attributes
-                const address = JSON.parse(addressJSON)
-                const tos = JSON.parse(tosJSON)
-                const birthdate = Date.parse(birthdateStr)
-                const interval = intervalToDuration({
-                    start: birthdate,
-                    end: new Date(),
-                })
-                const age = (interval.years ?? 0) + 1
-
-                const userDetails = {
-                    first_name, last_name, phone, birthdate: age, address, nationality, tos
-                };
-                Value.Decode(RecipientSchema, userDetails)
-
-                await cognito.adminAddUserToGroup({
-                    GroupName: 'recipient',
-                    Username: user.username,
-                    UserPoolId
-                })
-
-                const pendingInvites = await store.memberships(username, {
-                    accepted: false,
-                    rejected: false
-                })
-
+                const username = req.principal.profile['cognito:username']
+                const [user, member] = await Promise.all([
+                    usersRepo.fetch(username),
+                    membersRepo.fetchOrCreate(username)
+                ])
+                await member.refresh(user.attributes)
+                const [_1, _2, invites] = await Promise.all([
+                    member.save(),
+                    cognito.adminAddUserToGroup({
+                        GroupName: 'recipient',
+                        Username: user.username,
+                        UserPoolId: userPoolId
+                    }),
+                    member.memberships({
+                        rejected: false
+                    })
+                ])
                 return {
-                    pendingInvites: _.map(pendingInvites, x => ({
-                        role: x.role,
-                        invited_at: x.invited_at,
-                        invited_by: x.invited_by,
-                        org: x.org
-                    }))
-                }
+                    invites: _.map(invites, toMembership)
+                } satisfies Static<typeof req.route.success>
             }
             case 'PUT /tip/invite/{id}': {
                 const {path: {id}} = req.parse()
-                const username = req.user.profile['cognito:username']
-                const store = new Store({table: DataTableName})
-                try {
-                    return await store.acceptInvite(username, id)
-                } catch (e: any) {
-                    switch (e.name) {
-                        case 'ConditionalCheckFailedException': {
-                            throw badRequestError('Invite already accepted or does not exists')
-                                .withContext('acceptInvite')
-                        }
-                        default:
-                            throw errorWithContext(e, 'acceptInvite')
-                    }
-                }
+                const username = req.principal.profile['cognito:username']
+                const member = membersRepo.newMember(username)
+                const membership = await member.acceptInvite(id)
+                return toMembership(membership) satisfies Static<typeof req.route.success>
             }
             case 'DELETE /tip/invite/{id}': {
                 const {path: {id}} = req.parse()
-                const username = req.user.profile['cognito:username']
-                try {
-                    return await store.rejectInvite(username, id)
-                } catch (e: any) {
-                    switch (e.name) {
-                        case 'ConditionalCheckFailedException': {
-                            throw badRequestError('Invite already does not exists')
-                                .withContext('rejectInvite')
-                        }
-                        default:
-                            throw errorWithContext(e, 'rejectInvite')
-                    }
-                }
+                const username = req.principal.profile['cognito:username']
+                const member = membersRepo.newMember(username)
+                const membership = await member.rejectInvite(id)
+                if (membership === undefined) return undefined
+                return toMembership(membership) satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/invite/{id}': {
                 const {path: {id}} = req.parse()
-                const username = req.user.profile['cognito:username']
-                return await store.fetchMember(username, id)
+                const username = req.principal.profile['cognito:username']
+                const member = membersRepo.newMember(username)
+                const membership = await member.fetchMembership(id)
+                return toMembership(membership) satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/invites': {
                 const {query} = req.parse()
-                const username = req.user.profile['cognito:username']
-                return await store.memberships(username, query)
+                const username = req.principal.profile['cognito:username']
+                const member = membersRepo.newMember(username)
+                const memberships = await member.memberships(query)
+                return _.map(memberships, toMembership) satisfies Static<typeof req.route.success>
+            }
+            case 'GET /tip/wallet': {
+                const username = req.principal.profile['cognito:username']
+                const member = await membersRepo.fetch(username)
+                return await member.fetchWallet() satisfies Static<typeof req.route.success>
+            }
+            case 'GET /tip/wallet/transactions': {
+                const {query} = req.parse()
+                const username = req.principal.profile['cognito:username']
+                const member = await membersRepo.fetch(username)
+                const [transactions, wallet] = await Promise.all([
+                    member.transactions(query),
+                    member.fetchWallet(),
+                ])
+                const senderIds = _(transactions).flatMap(x => [x.from, x.to]).uniq().compact().value()
+                const users = await usersRepo.batchFetch(senderIds)
+                return {
+                    transactions: transactions.map(function (trx) {
+
+                        function userInfo(x: 'from' | 'to') {
+                            const uid = trx[x];
+                            if (uid === undefined) return undefined
+                            const user = users[uid]
+                            if (user === undefined) return undefined
+                            const attributes = user.attributeMap
+                            return {
+                                email: attributes['email'] ?? user.username,
+                                first_name: attributes['first_name'],
+                                last_name: attributes['last_name'],
+                            }
+                        }
+
+                        return {
+                            ...trx,
+                            from: userInfo('from'),
+                            to: userInfo('to'),
+                        }
+                    }),
+                    wallet
+                } satisfies Static<typeof req.route.success>
             }
         }
     })

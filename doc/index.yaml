@@ -21,11 +21,9 @@ x-tagGroups:
   - name: Files
     tags:
       - Images
-  - name: Bill
+  - name: Bill & Tip
     tags:
       - Bill
-  - name: Tip
-    tags:
       - Tip
 
 components:

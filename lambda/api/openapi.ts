@@ -691,7 +691,10 @@ function makeOperationFromRoute(route: ApiOperation, routeKey: RouteKey) {
                     schema: route.body
                 }
                 break;
+            case 'success':
             case 'responses':
+                if (op.responses !== undefined) break
+
                 const successStatusCode = toStatusCode(route.successStatusCode ?? 200)
                 const success = route.success
                 const responses = route.responses !== undefined ? [...route.responses] : []

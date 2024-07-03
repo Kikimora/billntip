@@ -1,13 +1,13 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
-import {KeySchema, TableType, SchemaType, ExpressionGenerator, FilterConditionGenerator} from "./schema";
+import {TableType, ExpressionGenerator, FilterConditionGenerator, TableSchema, TableKey} from "./schema";
 import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
 /**
- * DynamoDb {@link ddb.ScanCommandInput} for a given {@link Table}
+ * DynamoDb {@link ddb.ScanCommandInput} for a given {@link TableSchema}
  */
-interface ScanCommand<Table, V> {
+interface ScanCommand<T extends TableSchema, V> {
     /**
      * See {@link ddb.ScanInput.IndexName}
      */
@@ -19,11 +19,11 @@ interface ScanCommand<Table, V> {
     /**
      * Function generating {@link ddb.ScanInput.FilterExpression}
      */
-    filter?: FilterConditionGenerator<Table, V>
+    filter?: FilterConditionGenerator<T, V>
     /**
      * Function generating {@link ddb.ScanInput.ProjectionExpression}
      */
-    projection?: ExpressionGenerator<Table, never>
+    projection?: ExpressionGenerator<T, never>
     /**
      * See {@link ddb.ScanInput.Select}
      */
@@ -35,7 +35,7 @@ interface ScanCommand<Table, V> {
     /**
      * See {@link ddb.ScanInput.ExclusiveStartKey}
      */
-    exclusiveStartKey?: SchemaType<KeySchema<Table>>,
+    exclusiveStartKey?: TableKey<T>,
     /**
      * See {@link ddb.ScanInput.Segment}
      */

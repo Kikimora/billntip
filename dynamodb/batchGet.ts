@@ -1,21 +1,21 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
-import {KeySchema, TableType, SchemaType, ProjectionGenerator} from "./schema";
+import {ProjectionGenerator, TableSchema, TableType, TableKey} from "./schema";
 import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
 /**
- * DynamoDb {@link ddb.KeysAndAttributes} for a given {@link Table}
+ * DynamoDb {@link ddb.KeysAndAttributes} for a given {@link TableSchema}
  */
-export interface BatchGetItem<Table> {
+export interface BatchGetItem<T extends TableSchema> {
     /**
      * See {@link ddb.BatchGetItemInput.Key}
      */
-    keys: Array<SchemaType<KeySchema<Table>>>,
+    keys: TableKey<T>[],
     /**
      * Function generating {@link ddb.BatchGetItemInput.ProjectionExpression}
      */
-    projection?: ProjectionGenerator<Table>
+    projection?: ProjectionGenerator<T>
     /**
      * See {@link ddb.BatchGetItemInput.ConsistentRead}
      */
@@ -31,7 +31,7 @@ export interface BatchGetBuilder {
      * @param tbl - target table
      * @param item - items batch (see {@link ddb.BatchGetItemInput.RequestItems }
      */
-    add<Table extends TableType<Table>>(tbl: Table, item: BatchGetItem<Table>): BatchGetBuilder
+    add<T extends TableType<T>>(tbl: T, item: BatchGetItem<T>): BatchGetBuilder
 
     /**
      * See {@link ddb.BatchGetItemCommandInput.ReturnConsumedCapacity}

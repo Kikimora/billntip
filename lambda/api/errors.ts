@@ -84,7 +84,7 @@ export class AppError extends Error implements HttpError {
     public readonly error?: object
     public readonly statusCode: string
 
-    constructor(message: string, details: ErrorDetails) {
+    constructor(message: string, details?: ErrorDetails) {
         super(message);
         if (details !== undefined) {
             const {statusCode, name, ...rest} = details
@@ -148,10 +148,16 @@ export class AppError extends Error implements HttpError {
     }
 }
 
-export function internalServerError(message: string, details?: object) {
+export function internalError(message: string, details?: object) {
     return new AppError(message, {
         ...details,
         statusCode: '500',
+        name: 'InternalServerError',
+    })
+}
+
+export function notImplementedError(message?: string) {
+    return new AppError(message ?? "Not Implemented", {
         name: 'InternalServerError',
     })
 }

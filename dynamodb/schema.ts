@@ -54,7 +54,7 @@ export type DynamoDbType = DynamoDbSchema
  *     }
  * }
  */
-export type SchemaType<T> = (
+export type Schema<T> = (
       T extends "S" ? string
     : T extends "N" ? number
     : T extends "B" ? Uint8Array
@@ -63,9 +63,9 @@ export type SchemaType<T> = (
     : T extends "BS" ? Set<Uint8Array>
     : T extends "NULL" ? undefined
     : T extends "BOOL" ? boolean
-    : T extends { $array: any } ? Array<SchemaType<T['$array']>>
-    : T extends { $map: any } ? {[key:string]: SchemaType<T['$map']>}
-    : T extends DynamoDbSchema ? { -readonly [k in keyof T] -?: SchemaType<T[k]>; }
+    : T extends { $array: any } ? Array<Schema<T['$array']>>
+    : T extends { $map: any } ? {[key:string]: Schema<T['$map']>}
+    : T extends DynamoDbSchema ? { -readonly [k in keyof T] -?: Schema<T[k]>; }
     : T extends string ? T
     : never
 )
@@ -213,18 +213,18 @@ export type ValuesGenerator<T> = {
  * Update expression context provides normal context variables (e.g. key, attr, val) as well as helper methods to
  * generate common update expression such as SET #x1=:x1, #x2=:x2 and REMOVE #x1, #x2
  */
-export class UpdateContext<T, V = unknown> {
+export class UpdateContext<T extends TableSchema, V = unknown> {
 
     public readonly ctx: UpdateContext<T, V>
 
     constructor(readonly val: ValuesGenerator<V>,
-                readonly key: AttributeGenerator<KeySchema<T>>,
-                readonly attr: AttributeGenerator<AttributesSchema<T>>) {
+                readonly key: AttributeGenerator<T['key']>,
+                readonly attr: AttributeGenerator<T['attributes']>) {
         this.ctx = this
     }
 
     updateMap(mode: 'create' | 'update',
-              key: keyof AttributeGenerator<AttributesSchema<T>>,
+              key: keyof AttributeGenerator<T['attributes']>,
               values: Record<string, unknown>) {
         return mode == 'update'
             ? _(values)
@@ -234,7 +234,7 @@ export class UpdateContext<T, V = unknown> {
             : `${this.attr[key]} = ${this.val(values)}`;
     }
 
-    set(collection: Partial<SchemaType<TableSchema<T>>>): string
+    set(collection: Partial<TableItem<T>>): string
     set(collection: unknown[], expressionGenerator: (value: any, index: number) => string): string
     set(collection: object, expressionGenerator: (value: any, key: string) => string): string
     set(collection: any, x?: (value: any, key?: any) => string): string {
@@ -389,7 +389,7 @@ interface BuilderHolder {
  *      {pk: D.String, sk:D.Number} as const,
  *      {name:D.String, age:D.Number} as const)
  */
-export interface Table<Key = any, Attributes = any> {
+export interface TableSchema<Key = any, Attributes = any> {
     /**
      * DynamoDB table name
      */
@@ -421,7 +421,7 @@ export interface Table<Key = any, Attributes = any> {
  */
 type DynamoDbSchemaType<T> = T extends DynamoDbSchema ? T : never
 /**
- * Require T to be {@link Table}, otherwise yield `never`.
+ * Require T to be {@link TableSchema}, otherwise yield `never`.
  *
  * In combination with {@link DynamoDbSchemaType} this type helps to simplify function signatures
  * @example
@@ -437,23 +437,27 @@ type DynamoDbSchemaType<T> = T extends DynamoDbSchema ? T : never
  *     readonly attributes: Attributes
  * }
  * function x<T extends DynamoDbSchema, K extends DynamoDbSchema>(table: Table<T, K>) {} */
-export type TableType<T> = Table<KeySchema<T>, AttributesSchema<T>>
+export type TableType<T> = TableSchema<KeySchema<T>, AttributesSchema<T>>
 /**
- * A key schema of the {@link Table}
+ * A key schema of the {@link TableSchema}
  */
-export type KeySchema<T> = T extends Table<any, any> ? T['key'] : never
+type KeySchema<T> = T extends TableSchema ? T['key'] : never
 /**
- * Attributes schema of the {@link Table}
+ * Attributes schema of the {@link TableSchema}
  */
-export type AttributesSchema<T> = T extends Table<any, any> ? T['attributes'] : never
+type AttributesSchema<T> = T extends TableSchema ? T['attributes'] : never
 /**
- * Combined key and attributes schema of the {@link Table}
+ * Combined key and attributes schema of the {@link TableSchema}
  */
-export type TableSchema<T> = T extends Table<any, any> ? (T['key'] & T['attributes']) : never
-
-export type TableSchemaType<T extends Table<any, any>> = SchemaType<T['key']> & Partial<SchemaType<T['attributes']>>
-export type AttributesSchemaType<T> = T extends Table<any, any> ? Partial<SchemaType<T['attributes']>> : never
-export type KeySchemaType<T> = T extends Table<any, any> ? SchemaType<T['key']> : never
+export type TableItem<T extends TableSchema> = Schema<T['key']> & Partial<Schema<T['attributes']>>
+/**
+ * Type of the table attributes.
+ */
+export type TableAttributes<T extends TableSchema> = Partial<Schema<T['attributes']>>
+/**
+ * Type of the table key attributes.
+ */
+export type TableKey<T extends TableSchema> = Schema<T['key']>
 
 /**
  * Make DynamoDB table definition.
@@ -479,7 +483,7 @@ export type KeySchemaType<T> = T extends Table<any, any> ? SchemaType<T['key']> 
  */
 export function table<Key, Attributes>(name: string,
                                        key: DynamoDbSchemaType<Key>,
-                                       attributes: DynamoDbSchemaType<Attributes>): Table<Key, Attributes> {
+                                       attributes: DynamoDbSchemaType<Attributes>): TableSchema<Key, Attributes> {
     return {
         name,
         key,
@@ -495,9 +499,9 @@ export function table<Key, Attributes>(name: string,
  * @param val - context values passed to the command
  * @return string - generated expression
  */
-export type ExpressionGenerator<Table, V> = (context: {
-    key: AttributeGenerator<KeySchema<Table>>,
-    attr: AttributeGenerator<AttributesSchema<Table>>,
+export type ExpressionGenerator<T extends TableSchema, V> = (context: {
+    key: AttributeGenerator<T['key']>,
+    attr: AttributeGenerator<T['attributes']>,
     val: ValuesGenerator<V>
 }) => string
 
@@ -507,9 +511,9 @@ export type ExpressionGenerator<Table, V> = (context: {
  * @param attributes - non-key attributes generator
  * @return string - generated expression
  */
-export type ProjectionGenerator<Table> = (context: {
-    key: AttributeGenerator<KeySchema<Table>>,
-    attr: AttributeGenerator<AttributesSchema<Table>>
+export type ProjectionGenerator<T extends TableSchema> = (context: {
+    key: AttributeGenerator<T['key']>,
+    attr: AttributeGenerator<T['attributes']>
 }) => string[]
 
 type SetExpression = string | Record<string, string> | (string | Record<string, string>)[];
@@ -565,7 +569,7 @@ export function updateExpression(exp: string | string[] | UpdateExpression) {
  * @param builder - update expression builder
  * @return string - generated expression
  */
-export type UpdateGenerator<Table, V> = (context: UpdateContext<Table, V>) => string | string[] | UpdateExpression
+export type UpdateGenerator<T extends TableSchema, V> = (context: UpdateContext<T, V>) => string | string[] | UpdateExpression
 
 
 /**
@@ -574,8 +578,8 @@ export type UpdateGenerator<Table, V> = (context: UpdateContext<Table, V>) => st
  * @param val - context values passed to the command
  * @return string - generated expression
  */
-export type KeyConditionGenerator<Table, V> = (context: {
-    key: AttributeGenerator<KeySchema<Table>>,
+export type KeyConditionGenerator<T extends TableSchema, V> = (context: {
+    key: AttributeGenerator<T['key']>,
     val: ValuesGenerator<V>
 }) => string
 /**
@@ -584,7 +588,7 @@ export type KeyConditionGenerator<Table, V> = (context: {
  * @param val - context values passed to the command
  * @return string - generated expression
  */
-export type FilterConditionGenerator<Table, V> = (context: {
-    attr: AttributeGenerator<AttributesSchema<Table>>,
+export type FilterConditionGenerator<T extends TableSchema, V> = (context: {
+    attr: AttributeGenerator<T['attributes']>,
     val: ValuesGenerator<V>
 }) => string

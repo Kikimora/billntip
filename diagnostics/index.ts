@@ -4,6 +4,7 @@ import {AsyncLocalStorage} from "node:async_hooks";
 import {Context, APIGatewayProxyEvent} from "aws-lambda"
 import _ from "lodash";
 import {CompiledSchema, compileSchema, Schema} from "./matcher";
+import {Static, Type} from "@sinclair/typebox";
 
 export type TraceAttributes = { [k: string]: Serializable | undefined | null }
 export type ErrorContext = { name: string, value?: TraceAttributes }
@@ -587,7 +588,7 @@ export class EventRecorder {
     }
 }
 
-const ErrorContext = Symbol('error_context')
+export const ErrorContext = Symbol('error_context')
 
 /**
  * Adds error context to the error and returns it
@@ -936,7 +937,7 @@ class TracingSession extends Tracer {
  * Configure tracing
  * @param options - tracing options
  */
-export function configure(options: TracingOptions) {
+export default function configure(options: TracingOptions) {
     DefaultRecorder?.flush()
     DefaultOptions = options;
     DefaultRecorder = new EventRecorder(DefaultOptions)

@@ -12,6 +12,7 @@ export default function () {
         .response(400, {schema: ErrorSchema})
         .response(401, {schema: ErrorSchema})
         .response(403, {schema: ErrorSchema})
+        .response(404, {schema: ErrorSchema})
     users(api)
     images(api)
     billntip(api)

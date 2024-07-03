@@ -1,14 +1,15 @@
 import * as pulumi from "@pulumi/pulumi";
 import {newPolicy} from "@aws/util";
 import authorizer from "@aws/api/authorizer";
-import {s3} from "@aws/index";
+import {bucket} from "@aws/s3";
 import Paths from "@src/images/paths";
+import {Lambdas} from "@aws/lambdas";
 
-const images = authorizer.newAuthLambda({module: "images", handler: "handler"})
+const images = authorizer.newAuthLambda(Lambdas['images.handler'])
     .args({
         environment: {
             variables: {
-                BUCKET: s3.bucket.id,
+                BUCKET: bucket.id,
             }
         }
     })
@@ -16,11 +17,12 @@ const images = authorizer.newAuthLambda({module: "images", handler: "handler"})
         .allow(
             "s3:PutObject",
             "s3:GetObject",
-            "s3:DeleteObject"
+            "s3:DeleteObject",
+            "s3:ListObjects"
         )
         .on(
-            pulumi.interpolate`${s3.bucket.arn}/public/*`,
-            pulumi.interpolate`${s3.bucket.arn}/uploads/*`,
+            pulumi.interpolate`${bucket.arn}/public/*`,
+            pulumi.interpolate`${bucket.arn}/uploads/*`,
         )
         .buildRoleInlinePolicy('S3Access'))
     .build()

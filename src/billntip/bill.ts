@@ -1,33 +1,75 @@
 import _ from "lodash";
+import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
+import {Context} from "aws-lambda";
+import {SES} from "@aws-sdk/client-ses";
 import {
     LambdaAuthorizedRequest,
     Middleware,
     pipeline,
     accessDeniedError,
-    TracedEvent, internalServerError, badRequestError, notFoundError
+    TracedEvent, internalError, badRequestError, notFoundError, moduleConfig
 } from '@app/lambda'
-import {configure, errorWithContext} from "@app/diagnostics";
-import {
-    CognitoIdentityProvider,
-    ListUsersCommand
-} from "@aws-sdk/client-cognito-identity-provider";
-import {SessionContext} from "@src/authorizer/session";
-import {Context} from "aws-lambda";
+import diagnostics, {errorWithContext, TracingOptions} from "@app/diagnostics";
+import {SessionContext, SessionContextSchema} from "@src/authorizer/types";
+import {onceAsync, toCamel} from "@app/util";
+import {keyToToken, tokenToKey, toMembership} from "./util";
 import Routes from "./bill-paths";
-import {die, toCamel} from "@app/util";
-import Store from "./store";
-
-const UserPoolId = process.env.USER_POOL_ID ?? die("USER_POOL_ID env variable is required")
-const DataTableName = process.env.DATA_TABLE ?? die("DATA_TABLE required")
+import Store, {InviteRequest} from "./store";
+import {fetchTemplate} from "@src/users/messages";
+import UserRepo, {UserAttribute} from "@src/users/user";
+import {DynamoDB} from "@aws-sdk/client-dynamodb";
+import {Static, Type} from "@sinclair/typebox";
 
 const cognito = new CognitoIdentityProvider()
+const dynamo = new DynamoDB()
+const ses = new SES()
 
-configure({triggers: {request: true}})
+const config = moduleConfig()
+    .parameters({
+        dynamodb: Type.Object({
+            locks: Type.String(),
+            users: Type.String(),
+            data: Type.String()
+        }),
+        oidc: Type.Object({
+            userPoolId: Type.String(),
+        }),
+        s3: Type.Object({
+            bucket: Type.String()
+        }),
+        'bill-diagnostics': Type.Object({}, {default: {relaxed: true, default: {triggers: {request: true}}}})
+    })
+    .build()
+
+/**
+ * Static initialisation.
+ */
+export function __init() {
+    return config.parameters.then(async function ({dynamodb, oidc, s3, 'bill-diagnostics': diag}) {
+        const userRepo = new UserRepo({
+            db: dynamo,
+            table: dynamodb.users,
+            locks: dynamodb.locks
+        })
+
+        const store = new Store({table: dynamodb.data})
+        fetchTemplate.defaults = {s3}
+
+        diagnostics(diag as TracingOptions)
+
+        return {
+            userPoolId: oidc.userPoolId,
+            fetchInviteTemplate: onceAsync(fetchTemplate, "AdminCreate"),
+            userRepo,
+            store
+        }
+    })
+}
 
 export const handler = pipeline()
     .handleErrors()
     .traceRequest()
-    .requireLambdaAuth<SessionContext>()
+    .requireLambdaAuth(SessionContextSchema)
     .withRoutes(Routes)
     .parseJsonBody()
     .do(async function (this: Middleware, e: TracedEvent, ctx: any) {
@@ -37,7 +79,7 @@ export const handler = pipeline()
         return toCamel(response)
     })
     .do(async function (this: Middleware, req: TracedEvent & LambdaAuthorizedRequest<SessionContext>, ctx: Context) {
-        const user = req.user.profile
+        const user = req.principal.profile
         const groups = user['cognito:groups']
         const isBusiness = _.includes(groups, 'business');
         const isAdmin = _.includes(groups, 'admin');
@@ -48,139 +90,217 @@ export const handler = pipeline()
         throw accessDeniedError()
     })
     .done(async function (req) {
-        const store = new Store({table: DataTableName})
+        const {store, userRepo, userPoolId, fetchInviteTemplate} = await __init()
 
         switch (req.routeKey) {
-            case 'GET /bill/{orgId}/invites': {
-                const {body: {startKey}, path: {orgId}} = req.parse()
-                const username = req.user.profile['cognito:username']
+            case 'GET /bill/{orgId}/members': {
+                const {query: {startKey}, path: {orgId}} = req.parse()
+                const username = req.principal.profile['cognito:username']
                 await assertOrgAdmin(username, orgId)
-                return await store.members(orgId, startKey)
+                const {members, lastKey} = await store.orgMembers(orgId, tokenToKey(startKey))
+                return {
+                    members: members?.map(toMembership) ?? [],
+                    lastKey: keyToToken(lastKey)
+                } satisfies Static<typeof req.route.success>
             }
-            case 'POST /bill/{orgId}/invite': {
+            case 'POST /bill/{orgId}/member': {
                 const {body, path: {orgId}} = req.parse()
-                const inviterUsername = req.user.profile['cognito:username']
-                const inviterEmail = req.user.profile['email']
+                const inviterUsername = req.principal.profile['cognito:username']
                 const inviteeEmail = body.email;
 
-                req.tracer.info("Fetch inviter role")
                 await assertOrgAdmin(inviterUsername, orgId)
-                req.tracer.info("Fetch org info")
-                const org = await store.orgInfo(orgId);
+                const inviter = await userRepo.fetch(inviterUsername)
+
+                const org = await store.fetchOrg(orgId);
                 if (org === undefined) {
                     throw notFoundError("Organisation does not exist.").withContext('orgInfo', {orgId})
                 }
-                req.tracer.info("Invite user")
-                const inviteeUsername = await inviteUser(inviteeEmail, body.resend ?? false);
+                const invitedBy = {
+                    username: inviter.username,
+                    email: inviter.attr('email', true) ?? '',
+                    first_name: inviter.attr('first_name') ?? '',
+                    last_name: inviter.attr('last_name') ?? '',
+                }
+                const invitedTo = {
+                    id: orgId,
+                    title: org.title ?? "NoName"
+                }
+                const inviteeUsername = await inviteUser(inviteeEmail, {
+                    ..._.mapKeys(invitedBy, (_1, key) => `invited_by_${key}`),
+                    ..._.mapKeys(invitedTo, (_1, key) => `org_${key}`)
+                });
                 if (inviteeUsername === undefined) {
-                    throw internalServerError("Cannot create nor find user with a given email.")
+                    throw internalError("Cannot create nor find user with a given email.")
                         .withContext('inviteUser', {inviteeEmail})
                 }
-                req.tracer.info("Create invite record in the db")
-                const request = {
-                    role: 'member',
-                    invited_by: {
-                        username: inviterUsername,
-                        display_name: inviterEmail
-                    },
-                    org: {
-                        id: orgId,
-                        title: org.title ?? "NoName"
-                    },
-                    username: inviteeUsername
-                };
-                try {
-                    await store.inviteMember(request)
-                } catch (e: any) {
-                    switch (e.name) {
-                        case 'ConditionalCheckFailedException': {
-                            throw badRequestError('Member already exists').withContext('createInvite', {
-                                request
-                            })
+
+                async function createMember(invite: InviteRequest) {
+                    try {
+                        return await store.inviteToOrg(invite)
+                    } catch (e: any) {
+                        switch (e.name) {
+                            case 'ConditionalCheckFailedException': {
+                                throw badRequestError('Member already exists').withContext('createInvite', {
+                                    invite
+                                })
+                            }
+                            default:
+                                throw errorWithContext(e, 'createInvite', {
+                                    invite
+                                })
                         }
-                        default:
-                            throw errorWithContext(e, 'createInvite', {
-                                request
-                            })
                     }
                 }
 
-                return
+                const invite = {
+                    role: 'member',
+                    invited_by: invitedBy,
+                    org: invitedTo,
+                    username: inviteeUsername
+                };
+
+                const member = await createMember(invite)
+                if (member === undefined)
+                    throw internalError("Create member failed with unexpected error").withContext('createInvite', {
+                        invite
+                    })
+
+                return toMembership(member) satisfies Static<typeof req.route.success>
             }
-            case 'GET /bill/invite/{orgId}/{id}': {
+            case 'GET /bill/{orgId}/member/{id}': {
                 const {path: {orgId, id}} = req.parse()
-                const username = req.user.profile['cognito:username']
+                const username = req.principal.profile['cognito:username']
                 await assertOrgAdmin(username, orgId)
-                return {id: orgId}
+                const member = await store.fetchMembership(id, orgId)
+                if (member === undefined) throw notFoundError()
+                return toMembership(member) satisfies Static<typeof req.route.success>
             }
-            case 'DELETE /bill/invite/{orgId}/{id}': {
+            case 'DELETE /bill/{orgId}/member/{id}': {
                 const {path: {orgId, id}} = req.parse()
-                const username = req.user.profile['cognito:username']
+                const username = req.principal.profile['cognito:username']
                 await assertOrgAdmin(username, orgId)
-                return {id: orgId}
+                const member = await store.removeMembership(id, orgId)
+                if (member === undefined) throw notFoundError()
+                return toMembership(member) satisfies Static<typeof req.route.success>
             }
-            case "PUT /bill/invite/{orgId}/{id}": {
-                const {path: {orgId, id}} = req.parse()
-                const username = req.user.profile['cognito:username']
+            case "PUT /bill/{orgId}/member/{id}": {
+                const {path: {orgId, id}, body} = req.parse()
+                const username = req.principal.profile['cognito:username']
                 await assertOrgAdmin(username, orgId)
-                return {id: "!!!!"}
+
+                const member = await store.updateMembership(id, orgId, body)
+                if (member === undefined) throw notFoundError()
+                return toMembership(member) satisfies Static<typeof req.route.success>
             }
         }
 
         async function assertOrgAdmin(inviterUsername: string, orgId: string) {
-            const inviterRole = await store.roleIn(inviterUsername, orgId)
-            if (inviterRole != 'admin') {
+            const member = await store.fetchMembership(inviterUsername, orgId)
+            if (member?.role != 'admin') {
                 throw accessDeniedError().withContext('roleIn', {
                     inviterUsername,
                     org: orgId
                 })
             }
         }
-    })
 
-/**
- * If user with a given email does not exist then send invite
- */
-async function inviteUser(email: string, resend: boolean) {
-    try {
-        const response = await cognito.adminCreateUser({
-            UserPoolId,
-            Username: email,
-            MessageAction: resend ? "RESEND" : undefined,
-            UserAttributes: [{
-                Name: 'email',
-                Value: email
-            }, {
-                Name: 'email_verified',
-                Value: 'true'
-            }]
-        })
-        return response.User?.Username
-    } catch (createUserError: any) {
-        switch (createUserError.name) {
-            //Cognito found that user with this username exists and confirmed
-            case 'UnsupportedUserStateException':
-            //PreSignup trigger found that user with this alias exists
-            case 'UserLambdaValidationException': {
+        /**
+         * If user with a given email does not exist then send invite
+         */
+        async function inviteUser(email: string, metadata: Record<string, string>) {
+            const user = await fetchUser(email)
+            const attributes = userRepo.normalAttributes(user?.attributes ?? [])
+            const context = {
+                username: user?.username,
+                email,
+                attributes,
+                metadata
+            }
+            try {
+                const resend = user !== undefined
+                const username = await adminCreateUser(email, resend, attributes, metadata)
+                if (user === undefined) {
+                    await userRepo.create(username, "trusted", [{name: "email", value: email, verified: true}])
+                }
+                return username
+            } catch (createUserError: any) {
+                const userConfirmed = user !== undefined && createUserError.name === 'UnsupportedUserStateException';
+                if (!userConfirmed)
+                    throw errorWithContext(createUserError, 'adminCreateUser', context)
+
                 try {
-                    const {Users: users} = await cognito.listUsers({
-                        UserPoolId,
-                        AttributesToGet: ['email'],
-                        Filter: `email = "${email}"`,
-                        Limit: 1
-                    })
-                    return users?.[0]?.Username
-                } catch (findUserError: any) {
-                    throw errorWithContext(findUserError, 'listUsers', {
-                        email,
+                    await sendInviteMessage(user.username, email, attributes, metadata)
+                    return user.username
+                } catch (sendInviteError: any) {
+                    throw errorWithContext(sendInviteError, 'sendInviteMessage', {
+                        ...context,
                         adminCreateUser: createUserError.toString(),
                     })
                 }
             }
-            default:
-                throw errorWithContext(createUserError, 'adminCreateUser', {email})
         }
 
-    }
-}
+        async function fetchUser(email: string) {
+            try {
+                return await userRepo.fetch(email, {allowUnverifiedAlias: true})
+            } catch (e: any) {
+                if (e.name === 'UserNotFoundException') {
+                    return undefined
+                }
+                throw e
+            }
+        }
 
+        async function adminCreateUser(email: string, resend: boolean, attributes: UserAttribute[], metadata: Record<string, string>) {
+            const response = await cognito.adminCreateUser({
+                UserPoolId: userPoolId,
+                Username: email,
+                MessageAction: resend ? "RESEND" : undefined,
+                UserAttributes: [{
+                    Name: 'email',
+                    Value: email
+                }, {
+                    Name: 'email_verified',
+                    Value: 'true'
+                }],
+                ClientMetadata: {
+                    ...metadata,
+                    _attributes: JSON.stringify(attributes)
+                }
+            })
+            if (response.User?.Username === undefined) throw internalError("adminCreateUser didn't return username.")
+            return response.User.Username
+        }
+
+        async function sendInviteMessage(username: string, email: string, attributes: UserAttribute[], metadata: Record<string, string>) {
+            //User with this username exists and confirmed
+            const template = await fetchInviteTemplate()
+            await ses.sendEmail({
+                Source: "no-reply@billntip.com",
+                Destination: {ToAddresses: [email]},
+                Message: {
+                    Body: {
+                        Html: {
+                            Charset: "utf8",
+                            Data: template({
+                                attributes: _(attributes)
+                                    .filter(x => x.verified || x.verified === undefined)
+                                    .keyBy('name')
+                                    .mapValues('value')
+                                    .value(),
+                                metadata,
+                                username: username,
+                                code: "",
+                                link: "",
+                                type: "Invite"
+                            })
+                        }
+                    },
+                    Subject: {
+                        Charset: "utf-8",
+                        Data: `${metadata['invited_by_first_name']} invited you to join the ${metadata['org_title']} team on Bill&Tip`
+                    }
+                }
+            })
+        }
+    })

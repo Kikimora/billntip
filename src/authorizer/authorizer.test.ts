@@ -1,7 +1,3 @@
-import {TokenEndpointResponse} from "@src/authorizer/oidc_tokens";
-
-jest.mock('@src/http');
-
 import 'jest-extended';
 import {
     APIGatewayAuthorizerEvent,
@@ -11,25 +7,20 @@ import {
 import _ from "lodash";
 import {LambdaRequest} from "@app/lambda"
 import http from "@src/http"
-import {init as cognitoInit, TestGroup, TestUser} from "@app/test/cognito"
 import {init as dynamoDbInit} from '@app/test/dynamodb'
+import {resources} from "@app/test/util";
+import {AxiosResponse} from "axios";
+import {makeLockStore} from "@app/dynamodb";
+import diagnostics from "@app/diagnostics";
+import {jwtDecode} from "jwt-decode";
+import {code, cookie, hooks, Metrics} from "@src/authorizer";
+import {TokenEndpointResponse} from "@src/authorizer/oidc_tokens";
+import {TestGroup, fetchCognitoDetails} from "@app/test/cognito";
 
 const httpMock = http as jest.Mocked<typeof http>;
 const {default: httpReal} = jest.requireActual('@src/http');
 const SessionKey = 'SID';
-import {resources} from "@app/test/util";
-import {AxiosResponse} from "axios";
-import {makeLockStore} from "@app/dynamodb";
-import {configure} from "@app/diagnostics";
-import {jwtDecode} from "jwt-decode";
-
-//Init authorizer module, this has to happen after prepareAuthorizerEnvironment
-//due to env var dependencies.
 const {dynamodb, api, cognito, tokenEndpoint} = prepareAuthorizerEnvironment();
-import {code, cookie, hooks} from "@src/authorizer";
-import {Metrics, useVariables} from "@src/authorizer/ctx";
-import SessionCookie from "@src/authorizer/cookie";
-
 const ddb = dynamoDbInit(dynamodb.sessionsTable.name)
 
 const event: LambdaRequest = {
@@ -103,15 +94,17 @@ const awsContext: Context = {
     }
 }
 
-const testContext: {
-    group?: TestGroup,
-    user?: TestUser
-} = {}
+async function initTestContext() {
+    const group = await TestGroup.fetch()
+    const user = await group.createUniqueUser()
+    const {refreshTokenTtl} = await fetchCognitoDetails()
+    return {group, user, refreshTokenTtl}
+}
+
+let testContext: Awaited<ReturnType<typeof initTestContext>>
 
 beforeAll(async () => {
-    const testCognitoModule = await cognitoInit(cognito.userPool.id, cognito.clients.api.id)
-    testContext.group = await testCognitoModule.loadTestGroup()
-    testContext.user = await testContext.group.createUniqueUser()
+    testContext = await initTestContext();
     httpMock.post.mockImplementation(cognitoMock);
 })
 
@@ -171,9 +164,6 @@ describe('OAuth callback', () => {
         )
     })
     it('creates session in dynamodb', async () => {
-        const now = Math.floor(Date.now() / 1000)
-        const lastPostResult = _.last(httpMock.post.mock.results)?.value;
-        const tokenResponse = await lastPostResult as AxiosResponse<TokenEndpointResponse>
         const sessionId = cookie[SessionKey]
         const session = await ddb.getSession(sessionId)
         expect(session).toEqual(expect.objectContaining({
@@ -186,10 +176,13 @@ describe('OAuth callback', () => {
             'cached_till': 0
         }))
         expect(session!['lock']).toBeUndefined()
+
+        const now = Math.floor(Date.now() / 1000)
         const sessionExpiresAt = session!['refresh_token_expires_at']
-        const {refreshTokenTtl} = useVariables()
-        expect(sessionExpiresAt).toBeCloseTo(now + refreshTokenTtl, -1)
+        expect(sessionExpiresAt).toBeCloseTo(now + testContext.refreshTokenTtl, -1)
         const expiresAt = session!['expires_at']
+        const refreshCall = _.last(httpMock.post.mock.results)?.value;
+        const tokenResponse = await refreshCall as AxiosResponse<TokenEndpointResponse>
         expect(expiresAt).toBeCloseTo(now + tokenResponse.data.expires_in, -1)
     })
     it('issues HTML redirect to configured return url', async () => {
@@ -222,7 +215,7 @@ describe('Lambda authorizer validation', () => {
 describe('Lambda authorizer', () => {
     let sessionId: string
     beforeEach(async () => {
-        configure({
+        diagnostics({
             triggers: {
                 info: true,
                 warn: true
@@ -286,7 +279,9 @@ describe('Lambda authorizer', () => {
         it('saves new tokens to dynamodb', async () => {
             const authResult = await authorize(sessionId)
             const {context} = authResult
-            const {id} = SessionCookie.load(context!.new_cookie!)!
+            const cookieHeader = parseSessionCookieHeader(context!.new_cookie!)
+            //const {id} = SessionCookie.load(context!.new_cookie!)!
+            const id = cookieHeader[SessionKey] as string
             const sessionAfter = (await ddb.getSession(id))!
             expect(hooks.cookieAuthorizerRefresh).toHaveBeenCalled()
             expect(sessionAfter.access_token).not.toEqual(sessionBefore['access'])
@@ -375,19 +370,6 @@ function prepareAuthorizerEnvironment() {
     const outputs = resources()
     const {dynamodb, api, cognito, s3} = outputs as any
     const tokenEndpoint = `https://${cognito.userPoolDomain.domain}.auth.eu-south-1.amazoncognito.com/oauth2/token`;
-    const oathIssuer = `https://cognito-idp.eu-south-1.amazonaws.com/${cognito.userPool.id}`;
-    Object.assign(process.env, {
-        COOKIE_NAME: SessionKey,
-        SESSION_TABLE: dynamodb.sessionsTable.name,
-        LOCKS_TABLE: dynamodb.locksTable.name,
-        USER_POOL_ID: cognito.userPool.id,
-        OAUTH_CLIENT_ID: cognito.clients.api.id, //user pool client id
-        OAUTH_ISSUER: oathIssuer,
-        OAUTH_TOKEN_ENDPOINT: tokenEndpoint,
-        POST_AUTH_REDIRECT_URL: "https://localhost",
-        AWS_REGION: "eu-south-1",
-        AUTHORIZER_CACHE_TTL: 120
-    })
     return {dynamodb, api, cognito, s3, tokenEndpoint};
 }
 
