@@ -148,6 +148,7 @@ const parameter = new aws.ssm.Parameter("s3-config", {
     type: "String",
     value: pulumi.jsonStringify({
         bucket: s3Bucket.id,
+        cdnRoot: domain
     }),
 })
 

@@ -1,48 +1,57 @@
-import {RequestBuilder, resources} from "@app/test/util";
 import {generateImage} from 'js-image-generator'
-import fs from "fs";
+import {CreateUploadResponse, handler, __init} from "@src/images/index";
+import {cognito, prepare, makeTestHandler} from "@app/test";
 
-const {
-    s3: {bucket: {id: Bucket}},
-} = resources()
-process.env.BUCKET = Bucket
-process.env.AWS_REGION = "eu-south-1"
-//Must be after process.env modifications
-import {CreateUploadResponse, handler} from "@src/images/index";
-import {newSession} from "@app/test/cognito";
-
-const sub = "test"
+const defaults = {
+    headers: {'content-type': 'application/json'},
+    authorizer: {lambda: cognito.newSession("test")}
+}
+const getUploads = makeTestHandler(handler, {
+    routeKey: 'GET /uploads',
+    ...defaults
+})
+const getUpload = makeTestHandler(handler, {
+    routeKey: 'GET /upload/{id}',
+    ...defaults
+})
+const deleteUpload = makeTestHandler(handler, {
+    routeKey: 'DELETE /upload/{id}',
+    ...defaults
+})
+const postUpload = makeTestHandler(handler, {
+    routeKey: 'POST /uploads',
+    ...defaults
+})
+const updateUpload = makeTestHandler(handler, {
+    routeKey: 'POST /upload/{id}',
+    ...defaults
+})
 
 describe("Uploads", () => {
 
-    let request!: RequestBuilder
-    beforeEach(() => {
-
-        request = new RequestBuilder({functionName: "images", functionVersion: "Test"})
-            .lambdaAuth(newSession("test"))
-    })
-
-    afterEach(async () => {
-        const {files} = await request
-            .route('GET /uploads')
-            .run(handler)
-        for (const file of files) {
-            await request
-                .route('DELETE /upload/{id}', {id: file})
-                .run(handler)
+    const fixture = prepare('Each', {
+        async before() {
+            return await __init()
+        },
+        async after() {
+            const {files} = await getUploads({})
+            for (const file of files) {
+                await deleteUpload({path: {id: file}})
+            }
         }
     })
 
     describe("POST /uploads", () => {
         it("return an upload URL with parameters", async () => {
+            const {s3: {bucket}} = fixture()
             const response = await createUpload()
             expect(response).toEqual({
                 type: 'profile_pic',
                 id: expect.toBeString(),
-                uploadUrl: `https://${Bucket}.s3.eu-south-1.amazonaws.com/`,
+                uploadUrl: `https://${bucket}.s3.eu-south-1.amazonaws.com/`,
                 uploadFields: {
-                    key: expect.stringMatching(`uploads/${sub}/*`),
-                    bucket: Bucket,
+                    key: expect.stringMatching(`uploads/test/*`),
+                    bucket,
                     'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
                     'X-Amz-Credential': expect.toBeString(),
                     'X-Amz-Date': expect.toBeString(),
@@ -59,12 +68,11 @@ describe("Uploads", () => {
 
     describe("POST /upload/{id}", () => {
         it("process (resize) uploaded images", async () => {
+            const {s3: {cdnRoot}} = fixture()
             const uploadResponse = await createUpload()
             await uploadImage(uploadResponse)
-            const imageResponse = await request
-                .route('POST /upload/{id}', {id: uploadResponse.id})
-                .run(handler)
-            const url = `https://${Bucket}.s3.eu-south-1.amazonaws.com/public/${sub}/profile_pic.png`;
+            const imageResponse = await updateUpload({path: {id: uploadResponse.id}})
+            const url = `https://static.${cdnRoot}/public/test/profile_pic.png`;
             expect(imageResponse).toEqual({
                 type: 'profile_pic',
                 id: 'profile_pic.png',
@@ -82,12 +90,8 @@ describe("Uploads", () => {
         it("return uploads", async () => {
             const uploadResponse = await createUpload()
             await uploadImage(uploadResponse)
-            await request
-                .route('POST /upload/{id}', {id: uploadResponse.id})
-                .run(handler)
-            const uploads = await request
-                .route('GET /uploads')
-                .run(handler)
+            await updateUpload({path: {id: uploadResponse.id}})
+            const uploads = await getUploads({})
             expect(uploads).toEqual({
                 lastKey: undefined,
                 files: [
@@ -99,30 +103,23 @@ describe("Uploads", () => {
 
     describe("GET /upload/{id}", () => {
         it("return upload", async () => {
+            const {s3: {cdnRoot}} = fixture()
             const uploadResponse = await createUpload()
             await uploadImage(uploadResponse)
-            const imageResponse = await request
-                .route('POST /upload/{id}', {id: uploadResponse.id})
-                .run(handler)
-            const upload = await request
-                .route('GET /upload/{id}', {id: imageResponse.id})
-                .run(handler)
+            const imageResponse = await updateUpload({path: {id: uploadResponse.id}})
+            const upload = await getUpload({path: {id: imageResponse.id}})
             expect(upload).toEqual({
                 contentType: 'image/png',
                 type: 'profile_pic',
                 id: 'profile_pic.png',
-                url: `https://${Bucket}.s3.eu-south-1.amazonaws.com/public/${sub}/profile_pic.png`,
+                url: `https://static.${cdnRoot}/public/test/profile_pic.png`,
                 image: {width: 100, height: 100}
             })
         })
     })
 
     async function createUpload() {
-        return await request
-            .route('POST /uploads')
-            .jsonBody({type: "profile_pic"})
-            .lambdaAuth({profile: {sub}})
-            .run(handler)
+        return await postUpload({body: {type: "profile_pic"}})
     }
 })
 

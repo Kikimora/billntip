@@ -2,10 +2,13 @@ import {Static} from "@sinclair/typebox";
 import {pipeline} from "@app/lambda";
 import {SessionContextSchema} from "@src/authorizer/operation";
 import Paths, {CreateEmptyImageResponse} from "./paths";
-import uploads from "./uploads"
+import uploads, {config} from "./uploads"
 
 export type CreateUploadResponse = Static<typeof CreateEmptyImageResponse>
 
+export async function __init() {
+    return await config.load()
+}
 
 //1. Create upload with unique name like profile_pic_XYZ.
 //2. Upload bytes.

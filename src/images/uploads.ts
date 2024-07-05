@@ -1,4 +1,3 @@
-import shortUUID from "short-uuid";
 import {Conditions as PolicyEntry} from "@aws-sdk/s3-presigned-post/dist-types/types";
 import sharp, {FormatEnum} from "sharp";
 import {createPresignedPost} from "@aws-sdk/s3-presigned-post";
@@ -7,18 +6,15 @@ import _ from "lodash";
 import {StreamingBlobPayloadOutputTypes} from "@smithy/types";
 import {Type} from "@sinclair/typebox";
 import {errorWithContext} from "@app/diagnostics";
-import {die} from "@app/util";
 import {moduleConfig} from "@app/lambda";
 
-const Region = process.env.AWS_REGION ?? die("AWS_REGION required")
-
-const shortUUIDGenerator = shortUUID(shortUUID.constants.flickrBase58)
 const s3 = new S3()
 
-const config = moduleConfig()
+export const config = moduleConfig()
     .parameters({
         s3: Type.Object({
-            bucket: Type.String()
+            bucket: Type.String(),
+            cdnRoot: Type.String(),
         })
     })
     .build()
@@ -72,7 +68,7 @@ function uploadPrefix(sub: string, type: UploadArea) {
 
 async function prepareUpload(sub: string, type: UploadType, area: UploadArea) {
     const prefix = uploadPrefix(sub, area)
-    const id = shortUUIDGenerator.generate()
+    const id = type
     const key = uploadKey(sub, id, area)
     const {expires, policy} = UploadConfigs[type]
     const {s3: {bucket}} = await config.parameters
@@ -130,12 +126,12 @@ interface Upload extends UploadMetadata {
 }
 
 async function readUpload(sub: string, id: string, area: UploadArea) {
-    const {s3: {bucket}} = await config.parameters
+    const {s3: {bucket, cdnRoot}} = await config.parameters
     const key = uploadKey(sub, id, area)
     try {
         const uploadObject = await s3.getObject({Bucket: bucket, Key: key})
         const type = uploadObject.Metadata?.['type'] as UploadType
-        const url = `https://${bucket}.s3.${Region}.amazonaws.com/${key}`;
+        const url = `https://static.${cdnRoot}/${key}`;
         const height = Number(uploadObject.Metadata?.['height'])
         const width = Number(uploadObject.Metadata?.['width'])
         const contentType = uploadObject.ContentType ?? 'application/octet-stream'
@@ -164,7 +160,7 @@ async function processUpload(type: UploadType, body?: StreamingBlobPayloadOutput
 
 async function saveUpload(sub: string, buffer: Buffer, upload: UploadMetadata, area: UploadArea) {
     const {id, type, contentType, image} = upload
-    const {s3: {bucket}} = await config.parameters
+    const {s3: {bucket, cdnRoot}} = await config.parameters
     const target = uploadKey(sub, id, area);
     try {
         const s3Metadata: Record<string, string> = {'type': type}
@@ -179,7 +175,7 @@ async function saveUpload(sub: string, buffer: Buffer, upload: UploadMetadata, a
             Metadata: s3Metadata,
             Body: buffer
         })
-        const url = `https://${bucket}.s3.${Region}.amazonaws.com/${target}`;
+        const url = `https://static.${cdnRoot}/${target}`;
         const metadata: Upload = {
             contentType,
             type,

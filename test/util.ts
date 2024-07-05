@@ -19,7 +19,7 @@ export function StaticAssert<T1, T2>() {
 
 interface RequestOptions {
     routeKey: string,
-    method: HttpMethod
+    method?: HttpMethod
     headers?: Record<string, string>
     cookies?: Record<string, string>
     path?: Record<string, string>
@@ -58,14 +58,15 @@ export function makeTestHandler<T extends Handler>(handler: T, defaults?: Reques
         }, options.routeKey ?? "")
         const cookies = Object.entries(options.cookies ?? {}).map(([k, v]) => `${k}=${v}`)
         const rawQueryString = Object.entries(options.query ?? {}).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
+        const routeKey = options.routeKey ?? ""
         const event: LambdaRequest = {
             version: "2.0",
             isBase64Encoded: false,
-            routeKey: options.routeKey ?? "",
+            routeKey,
             rawPath,
             pathParameters: options.path,
             cookies: cookies.length > 0 ? cookies : undefined,
-            headers: options.headers ?? {},
+            headers: _.mapKeys(options.headers, (v, k) => k.toLowerCase()),
             queryStringParameters: options.query,
             rawQueryString,
             body: typeof options.body === 'string' ? options.body : JSON.stringify(options.body),
@@ -81,7 +82,7 @@ export function makeTestHandler<T extends Handler>(handler: T, defaults?: Reques
                 domainName: "test",
                 domainPrefix: "",
                 http: {
-                    method: options.method,
+                    method: options.method ?? routeKey.split(' ')[0],
                     path: rawPath,
                     protocol: "https",
                     sourceIp: "127.0.0.1",
