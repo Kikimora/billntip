@@ -1,130 +1,135 @@
 import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
-import {makeTestHandler, TestHandler, cognito, mangopay} from "@app/test";
-import UserRepo, {User} from "@src/users/user";
-import {Org} from "./store";
+import {makeTestHandler, cognito, mangopay, prepare, merge, makeFixture} from "@app/test";
 import {__init, handler} from "./tip"
-import {MemberRepo} from "./member";
 
-let group: cognito.TestGroup
-let businessLogin: cognito.TestUser
-let waiterLogin: cognito.TestUser
-let org: Org
-let membersRepo: MemberRepo
-let usersRepo: UserRepo
-let businessUser: User
-let waiterUser: User
-let registration: TestHandler
-let transactions: TestHandler
-const adminAddUserToGroup = jest.spyOn(CognitoIdentityProvider.prototype, 'adminAddUserToGroup')
+const init = prepare('Once', async function () {
+    const [module, group] = await Promise.all([__init(), cognito.TestGroup.fetch()])
+    return {membersRepo: module.membersRepo, usersRepo: module.usersRepo, group}
+})
 
-beforeAll(async () => {
-    [{usersRepo, membersRepo}, group] = await Promise.all([
-        __init(),
-        cognito.TestGroup.fetch()
-    ]);
-    [businessLogin, waiterLogin, org] = await Promise.all([
-        group.createUniqueUser(),
-        group.createUniqueUser(),
-        membersRepo.createOrg({title: "Test"})
-    ]);
-    ([businessUser, waiterUser] = await Promise.all([
-        usersRepo.create(businessLogin.username, "trusted", [
-            {name: "first_name", value: "Business"},
-            {name: "last_name", value: "User"}
-        ]),
-        usersRepo.create(waiterLogin.username, "trusted", [
-            {name: "first_name", value: "Waiter"},
-            {name: "last_name", value: "User"},
-            {name: "phone", value: "+351111222333"},
-            {name: "birthdate", value: "1985-05-04"},
-            {
-                name: "address", value: JSON.stringify({
-                    street_address: "Rua dos Bill&Tip, 100, 2drt",
-                    locality: "Cascais",
-                    region: "Lisbon",
-                    postal_code: "2750-609",
-                    country: "PT"
-                })
-            },
-            {name: "nationality", value: "RU"},
-            {
-                name: "tos", value: JSON.stringify({
-                    general: true,
-                    privacy: true,
-                })
-            },
-        ]),
-    ]))
-    registration = makeTestHandler(handler, {
+const logins = prepare('Once', {
+    async before() {
+        const {group} = init()
+        const [businessLogin, waiterLogin] = await Promise.all([
+            group.createUniqueUser(),
+            group.createUniqueUser(),
+        ])
+        return {businessLogin, waiterLogin}
+    },
+    async after({businessLogin, waiterLogin}) {
+        await Promise.all([
+            waiterLogin?.delete(),
+            businessLogin?.delete()
+        ])
+    }
+})
+
+const data = prepare('Once', {
+    async before() {
+        const adminAddUserToGroup = jest.spyOn(CognitoIdentityProvider.prototype, 'adminAddUserToGroup')
+        const {businessLogin, waiterLogin} = logins()
+        const {usersRepo, membersRepo} = init()
+        const [org, admin, waiter] = await Promise.all([
+            membersRepo.createOrg({title: "Test"}),
+            usersRepo.create(businessLogin.username, "trusted", [
+                {name: "first_name", value: "Business"},
+                {name: "last_name", value: "User"}
+            ]),
+            usersRepo.create(waiterLogin.username, "trusted", [
+                {name: "first_name", value: "Waiter"},
+                {name: "last_name", value: "User"},
+                {name: "phone", value: "+351111222333"},
+                {name: "birthdate", value: "1985-05-04"},
+                {
+                    name: "address", value: JSON.stringify({
+                        street_address: "Rua dos Bill&Tip, 100, 2drt",
+                        locality: "Cascais",
+                        region: "Lisbon",
+                        postal_code: "2750-609",
+                        country: "PT"
+                    })
+                },
+                {name: "nationality", value: "RU"},
+                {
+                    name: "tos", value: JSON.stringify({
+                        general: true,
+                        privacy: true,
+                    })
+                },
+            ]),
+        ])
+        return {org, admin, waiter, adminAddUserToGroup}
+    },
+    async after({org, admin, waiter}) {
+        const {membersRepo} = init()
+        await Promise.all([
+            admin.delete(true),
+            waiter.delete(true),
+            membersRepo.deleteOrg(org.pk),
+        ])
+    }
+})
+
+const registration = makeTestHandler(handler, function () {
+    const {waiterLogin} = logins()
+    return {
         method: "POST",
         routeKey: "POST /tip/registration",
         authorizer: {lambda: cognito.newSession(waiterLogin.username)}
-    })
-    transactions = makeTestHandler(handler, {
-        method: "GET",
-        routeKey: "GET /tip/wallet/transactions",
-        authorizer: {lambda: cognito.newSession(waiterLogin.username)}
-    });
+    }
 })
 
-async function cleanupAfterRegistration() {
-    try {
-        const member = await membersRepo.fetch(waiterLogin.username)
+const inviteAndRegister = makeFixture({
+    async before() {
+        const {membersRepo} = init()
+        const {org, waiter, admin} = data()
+
+        const now = Date.now() / 1000
+        const inviteFromAdmin = await membersRepo.invite({
+            org: {
+                id: org.pk,
+                title: org.title ?? ""
+            },
+            username: waiter.username,
+            invited_by: {
+                username: admin.username,
+                email: admin.username,
+                first_name: "Business",
+                last_name: "User",
+            },
+            role: 'member'
+        })
+
+        const pendingInvites = await registration({})
+
+        return {now, pendingInvites, inviteFromAdmin}
+    },
+    async after() {
+        jest.clearAllMocks()
+        const {membersRepo} = init()
+        const {org, waiter} = data()
+        const member = await membersRepo.fetch(waiter.username)
         await Promise.all([
             member.removeMembership(org.pk),
             member.delete()
         ])
-    } catch (e: any) {
-        if (e.statusCode !== '404') throw e
     }
-}
-
-afterAll(async () => {
-    await Promise.all([
-        waiterLogin?.delete(),
-        businessLogin?.delete(),
-        businessUser?.delete(true),
-        waiterUser?.delete(true),
-        org !== undefined ? membersRepo.deleteOrg(org.pk) : Promise.resolve()
-    ])
-})
-
+});
 
 describe("POST /tip/registration", () => {
 
     describe("with valid user", () => {
 
-        afterAll(cleanupAfterRegistration)
-
         describe("first registration", () => {
-            let now: number = 0
-            let pendingInvites: any
-
-            beforeAll(async () => {
-                now = Date.now() / 1000
-                await membersRepo.invite({
-                    org: {
-                        id: org.pk.replace('O#', ''),
-                        title: org.title ?? ""
-                    },
-                    username: waiterLogin.username,
-                    invited_by: {
-                        username: businessLogin.username,
-                        email: businessLogin.username,
-                        first_name: "Business",
-                        last_name: "User",
-                    },
-                    role: 'member'
-                })
-                pendingInvites = await registration({})
-            })
+            const fixture = merge(data, prepare('Once', inviteAndRegister))
 
             it("creates MangoPay user", async () => {
+                const {waiter} = fixture()
                 expect(mangopay.createUser).toBeCalledWith({
                     PersonType: "NATURAL",
                     FirstName: "Waiter",
                     LastName: "User",
-                    Email: waiterLogin.username,
+                    Email: waiter.username,
                     Birthday: Date.parse("1985-05-04"),
                     Nationality: "RU",
                     CountryOfResidence: "PT",
@@ -152,54 +157,59 @@ describe("POST /tip/registration", () => {
             })
 
             it("creates member record", async () => {
-                const member = await membersRepo.fetch(waiterLogin.username)
+                const {membersRepo} = init()
+                const {now, org, waiter, admin} = fixture()
+
+                const member = await membersRepo.fetch(waiter.username)
                 expect(await member.fetch()).toEqual(expect.objectContaining({
-                    pk: `U#${waiterLogin.username}`,
-                    sk: "M",
+                    pk: waiter.username,
                     mangopayUid: expect.toStartWith("usr_"),
                     walletId: expect.toStartWith("wlt_")
                 }))
-                const membership = await member.fetchMembership(org.pk.replace('O#', ''))
+                const membership = await member.fetchMembership(org.pk)
                 expect(membership).toEqual(expect.objectContaining({
-                    pk: `U#${waiterLogin.username}`,
+                    pk: waiter.username,
                     sk: org.pk,
                     org: {
-                        id: org.pk.replace('O#', ''),
+                        id: org.pk,
                         title: "Test"
                     },
                     role: "member",
                     invited_by: {
-                        username: businessLogin.username,
+                        username: admin.username,
                         first_name: "Business",
                         last_name: "User",
-                        email: businessLogin.username,
+                        email: admin.username,
                     },
                     invited_at: expect.closeTo(now, -3)
                 }))
             })
 
             it("adds user to 'recipients' group", async () => {
+                const {adminAddUserToGroup, waiter} = fixture()
                 expect(adminAddUserToGroup).toHaveBeenCalledWith(expect.objectContaining({
                     GroupName: 'recipient',
-                    Username: waiterLogin.username,
+                    Username: waiter.username,
                     UserPoolId: expect.toBeString()
                 }))
             })
 
             it("returns pending invites", async () => {
+                const {now, pendingInvites, org, admin} = fixture()
+
                 expect(pendingInvites).toEqual({
                     invites: [{
                         invited_at: expect.closeTo(now, -3),
                         accepted_at: undefined,
                         rejected_at: undefined,
                         invited_by: {
-                            email: businessLogin.username,
-                            username: businessLogin.username,
+                            email: admin.username,
+                            username: admin.username,
                             first_name: "Business",
                             last_name: "User",
                         },
                         org: {
-                            id: org.pk.replace('O#', ''),
+                            id: org.pk,
                             title: "Test"
                         },
                         role: 'member'
@@ -210,14 +220,13 @@ describe("POST /tip/registration", () => {
 
         describe("subsequent registrations", () => {
 
-            beforeEach(async () => {
-                await registration({})
-            })
+            const fixture = merge(data, prepare('Each', inviteAndRegister))
 
             describe("with changed user", () => {
 
                 beforeEach(async () => {
-                    await waiterUser.updateAttributes("trusted", [{
+                    const {waiter} = fixture()
+                    await waiter.updateAttributes("trusted", [{
                         name: "first_name", value: "Bibabaka"
                     }])
                 })
@@ -231,7 +240,8 @@ describe("POST /tip/registration", () => {
                 })
 
                 afterEach(async () => {
-                    await waiterUser.updateAttributes("trusted", [{
+                    const {waiter} = fixture()
+                    await waiter.updateAttributes("trusted", [{
                         name: "first_name", value: "Waiter"
                     }])
                 })
@@ -245,18 +255,25 @@ describe("POST /tip/registration", () => {
     })
 })
 
-describe("GET /tip/wallet/transactions", () => {
-    beforeAll(async () => {
-        await registration({})
-    })
+const transactions = makeTestHandler(handler, function () {
+    const {waiterLogin} = logins()
+    return {
+        method: "GET",
+        routeKey: "GET /tip/wallet/transactions",
+        authorizer: {lambda: cognito.newSession(waiterLogin.username)}
+    }
+});
 
-    afterAll(cleanupAfterRegistration)
+describe("GET /tip/wallet/transactions", () => {
+
+    prepare('Once', inviteAndRegister)
 
     it("return user's wallet transactions", async () => {
+        const {admin, waiter} = data()
         mangopay.getTransactions.mockReturnValueOnce([
             {
                 "Id": "xfer_m_01HYX2AZM381923J2DNG5YV50B",
-                "Tag": `{ "from": "${businessUser.username}", "to": "${waiterUser.username}" }`,
+                "Tag": `{ "from": "${admin.username}", "to": "${waiter.username}" }`,
                 "AuthorId": "user_m_01HYX1T7R4ZC34YG4EMJYA9AGQ",
                 "CreditedUserId": "user_m_01HYX1T7R4ZC34YG4EMJYA9AGQ",
                 "DebitedFunds": {
@@ -296,12 +313,12 @@ describe("GET /tip/wallet/transactions", () => {
                 credit: {amount: 99, currency: "EUR"},
                 debit: {amount: 100, currency: "EUR"},
                 from: {
-                    email: businessUser.username,
+                    email: admin.username,
                     first_name: "Business",
                     last_name: "User",
                 },
                 to: {
-                    email: waiterUser.username,
+                    email: waiter.username,
                     first_name: "Waiter",
                     last_name: "User",
                 },
@@ -316,7 +333,7 @@ describe("GET /tip/wallet/transactions", () => {
             wallet: {
                 description: "Bill&Tip recipient wallet.",
                 created_at: 1720045732,
-                id: waiterUser.username,
+                id: waiter.username,
                 balance: {amount: 10, currency: "EUR"}
             }
         })

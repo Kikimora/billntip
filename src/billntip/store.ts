@@ -2,7 +2,7 @@ import * as ddb from "@app/dynamodb";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {unmarshall} from "@aws-sdk/util-dynamodb";
 import _ from "lodash";
-import {Schema, TableItem, TableSchema} from "@app/dynamodb";
+import {Schema, TableAttributes, TableSchema} from "@app/dynamodb";
 import {uuid} from "short-uuid";
 import {internalError} from "@app/lambda";
 
@@ -17,7 +17,7 @@ const MemberAttributes = {
 } as const
 
 type MemberTable = TableSchema<typeof MemberKey, typeof MemberAttributes>;
-export type MemberItem = TableItem<MemberTable>
+export type MemberItem = TableAttributes<MemberTable> & { pk: string }
 
 const MemberhipKey = {
     pk: ddb.Type.String as `U#${string}`,
@@ -42,7 +42,7 @@ const MembershipAttributes = {
 } as const
 
 type MembershipsTable = TableSchema<typeof MemberhipKey, typeof MembershipAttributes>;
-export type MembershipItem = TableItem<MembershipsTable>
+export type MembershipItem = TableAttributes<MembershipsTable> & { pk: string, sk: string }
 
 const OrgKey = {
     pk: ddb.Type.String as `O#${string}`,
@@ -57,8 +57,8 @@ const OrgAttributes = {
     created_at: ddb.Type.Number
 } as const
 
-export type OrgsTable = TableSchema<typeof OrgKey, typeof OrgAttributes>;
-export type Org = TableItem<OrgsTable>
+type OrgsTable = TableSchema<typeof OrgKey, typeof OrgAttributes>;
+export type Org = TableAttributes<OrgsTable> & { pk: string }
 
 export interface OrgRequest {
     title: string
@@ -162,7 +162,9 @@ export default class Store {
             condition: ({attr}) => `attribute_not_exists(${attr.accepted_at}) OR attribute_exists(${attr.rejected_at})`,
         }))
         return {
-            ...key, ...item
+            ...item,
+            pk: request.username,
+            sk: request.org.id
         }
     }
 
@@ -182,7 +184,11 @@ export default class Store {
         });
         const {Attributes: invite} = await this.db.updateItem(item)
         if (invite === undefined) throw internalError("Unexpected error accepting invite")
-        return unmarshall(invite) as MembershipItem
+        return {
+            ...unmarshall(invite),
+            pk: username,
+            sk: org
+        }
     }
 
     /**
@@ -198,7 +204,11 @@ export default class Store {
         });
         const {Attributes: invite} = await this.db.updateItem(item)
         if (invite === undefined) throw internalError("Unexpected error rejecting invite")
-        return unmarshall(invite) as MembershipItem
+        return {
+            ...unmarshall(invite),
+            pk: username,
+            sk: org
+        }
     }
 
     /**
@@ -240,7 +250,10 @@ export default class Store {
         });
         const {Attributes: invite} = await this.db.updateItem(item)
         if (invite === undefined) throw internalError("Unexpected error updating membership")
-        return unmarshall(invite) as MembershipItem
+        return {
+            ...unmarshall(invite),
+            pk: username, sk: org
+        }
     }
 
     /**
@@ -251,18 +264,24 @@ export default class Store {
             key: {pk: `U#${username}`, sk: `O#${org}`},
         }))
         if (item === undefined) return undefined
-        return unmarshall(item) as MembershipItem
+        return {
+            ...unmarshall(item),
+            pk: username, sk: org
+        }
     }
 
     /**
      * Fetch member record.
      */
-    async fetchMember(username: string) {
+    async fetchMember(username: string): Promise<MemberItem | undefined> {
         const {Item: item} = await this.db.getItem(ddb.get(this.members, {
             key: {pk: `U#${username}`, sk: `M`},
         }))
         if (item === undefined) return undefined
-        return unmarshall(item) as MemberItem
+        return {
+            ...unmarshall(item),
+            pk: username
+        }
     }
 
     /**
@@ -271,13 +290,13 @@ export default class Store {
      */
     createMember(username: string): MemberItem {
         return {
-            pk: `U#${username}`, sk: 'M'
+            pk: username
         }
     }
 
-    async updateMember({pk, sk, ...member}: MemberItem) {
+    async updateMember({pk, ...member}: MemberItem) {
         const item = ddb.update(this.members, {
-            key: {pk, sk},
+            key: {pk: `U#${pk}`, sk: 'M'},
             values: member,
             expression: ({attr, val}) => ({
                 set: {
@@ -295,7 +314,10 @@ export default class Store {
         });
         const {Attributes: invite} = await this.db.updateItem(item)
         if (invite === undefined) throw internalError("Unexpected error updating membership")
-        return unmarshall(invite) as MembershipItem
+        return {
+            ...unmarshall(invite),
+            pk
+        }
     }
 
     async removeMember(username: string) {
@@ -304,7 +326,10 @@ export default class Store {
             return: "ALL_OLD"
         }))
         if (item === undefined) return undefined
-        return unmarshall(item) as MemberItem
+        return {
+            ...unmarshall(item),
+            pk: username
+        }
     }
 
     /**
@@ -316,7 +341,10 @@ export default class Store {
             return: "ALL_OLD"
         }))
         if (item === undefined) return undefined
-        return unmarshall(item) as MembershipItem
+        return {
+            ...unmarshall(item),
+            pk: username, sk: org
+        }
     }
 
     /**
@@ -327,7 +355,10 @@ export default class Store {
             key: {pk: `O#${orgId}`, sk: `info`},
         }))
         if (item === undefined) return undefined
-        return unmarshall(item) as Org
+        return {
+            ...unmarshall(item),
+            pk: orgId
+        }
     }
 
     /**
@@ -356,11 +387,15 @@ export default class Store {
         const members = batchResult[this.membership.name]
         return {
             lastKey: lastKey !== undefined ? unmarshall(lastKey) as OrgKey : lastKey,
-            members: members.map(x => unmarshall(x)) as MembershipItem[]
+            members: members.map(x => unmarshall(x)).map(x => ({
+                ...x,
+                pk: x.pk.substring(0, 2 /*U#.length*/),
+                sk: x.sk.substring(0, 2 /*O#.length*/)
+            })) as MembershipItem[]
         }
     }
 
-    async createOrg(request: OrgRequest): Promise<Org> {
+    async createOrg(request: OrgRequest) {
         const orgId = uuid()
         const key = {pk: `O#${orgId}`, sk: `info`} as const;
         const item = {
@@ -369,7 +404,7 @@ export default class Store {
         } as const;
         await this.db.putItem(ddb.put(this.orgs, {key, item}))
         return {
-            ...key,
+            pk: orgId,
             ...item
         }
     }
@@ -380,6 +415,9 @@ export default class Store {
             return: "ALL_OLD"
         }))
         if (item === undefined) return undefined
-        return unmarshall(item) as Org
+        return {
+            ...unmarshall(item),
+            pk: orgId
+        }
     }
 }

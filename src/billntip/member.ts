@@ -76,7 +76,7 @@ export class MemberRepo {
         try {
             return await this.store.removeOrg(orgId)
         } catch (e: any) {
-            throw internalError("Unexpected error removing organisation").withContext("removeOrg", {orgId, cause: e})
+            throw internalError("Unexpected error removing organisation").withContext("deleteOrg", {orgId, cause: e})
         }
     }
 
@@ -91,6 +91,18 @@ export class MemberRepo {
                 default:
                     throw internalError("Unexpected error inviting a user").withContext('invite', {invite, cause: e})
             }
+        }
+    }
+
+    async deleteInvite(username: string, orgId: string) {
+        try {
+            return await this.store.removeMembership(username, orgId)
+        } catch (e: any) {
+            throw internalError("Unexpected error removing invite").withContext("deleteInvite", {
+                username,
+                orgId,
+                cause: e
+            })
         }
     }
 }

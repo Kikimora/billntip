@@ -4,13 +4,13 @@ import {
     AdminDeleteUserCommand,
     AdminInitiateAuthCommand,
     AdminSetUserPasswordCommand, CognitoIdentityProvider,
-    CreateGroupCommand, DescribeUserPoolClientCommand,
+    CreateGroupCommand,
     GetGroupCommand, GetUserCommandOutput,
     GroupType
 } from "@aws-sdk/client-cognito-identity-provider";
 import {createHmac} from 'crypto';
 import {TokenEndpointResponse} from "@src/authorizer/oidc_tokens";
-import {die, retry, toSeconds} from "@app/util";
+import {toSeconds} from "@app/util";
 import shortUUID from "short-uuid";
 import {Profile, SessionContext} from "@src/authorizer/types";
 import * as jwt from "jsonwebtoken";
@@ -97,8 +97,12 @@ export class TestGroup {
     constructor(public readonly group: GroupType) {
     }
 
+    private static _group?: Promise<TestGroup>
+
     public static async fetch() {
-        return retry(async () => {
+        return this._group ?? (this._group = fetchGroup())
+
+        async function fetchGroup() {
             try {
                 const getGroupCommand = new GetGroupCommand({
                     UserPoolId: UserPoolId,
@@ -115,7 +119,7 @@ export class TestGroup {
                 const group = await cognito.send(createGroupCommand)
                 return new TestGroup(group.Group!)
             }
-        }, {maxIterations: 3, delay: 1000})
+        }
     }
 
     async createUniqueUser() {
