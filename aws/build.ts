@@ -1,10 +1,11 @@
 import {program} from 'commander';
 import * as _ from "lodash";
-import * as dotenv from 'dotenv';
+import * as dotenv from '@dotenvx/dotenvx';
 import {LambdaSource, pickLambdas} from "@app/lambda/builder";
-import {Lambdas, makeBuilder} from "@aws/lambdas";
+import {Lambdas, makeBuilder} from "./lambdas";
 
 dotenv.config();
+
 
 program
     .option('-b, --build', 'Build lambda functions code')

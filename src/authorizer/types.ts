@@ -4,7 +4,7 @@ export const ProfileSchema = T.Object({
     "at_hash": T.Optional(T.String()),
     "aud": T.String(),
     "auth_time": T.Number(),
-    "cognito:groups": T.Array(T.String()),
+    "cognito:groups": T.Optional(T.Array(T.String())),
     "cognito:username": T.String(),
     "email": T.String(),
     "email_verified": T.Boolean(),

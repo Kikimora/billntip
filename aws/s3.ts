@@ -144,7 +144,7 @@ export const cdn = {
 }
 
 const parameter = new aws.ssm.Parameter("s3-config", {
-    name: `${configFolder}/s3`,
+    name: `/${configFolder}/s3`,
     type: "String",
     value: pulumi.jsonStringify({
         bucket: s3Bucket.id,

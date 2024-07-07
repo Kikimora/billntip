@@ -3,7 +3,7 @@ import * as pulumi from "@pulumi/pulumi";
 import {grantInvoke, newLambda, newLambdaRole, newPolicy} from "@aws/util";
 import {Lambdas} from "@aws/lambdas";
 import ddb, {DynamoDbCRUDActions} from "@aws/dynamodb";
-import {smsExternalId, tags} from "@aws/config"
+import {configFolder, region, smsExternalId, tags} from "@aws/config"
 import {bucket} from "@aws/s3";
 
 const cognitoAssumeRolePolicy = JSON.stringify({
@@ -128,18 +128,7 @@ const pool = new aws.cognito.UserPool('cognito-user-pool-v3', {
     },
     {retainOnDelete: true})
 
-const userPool = {
-    type: "userpool",
-    id: pool.id,
-    arn: pool.arn,
-    principal: "cognito-idp.amazonaws.com",
-    sourceArn: pool.arn,
-    urn: pool.urn
-}
-grantInvoke(triggers, userPool)
-
-export default userPool
-
+const accountId = aws.getCallerIdentity().then(x => x.accountId)
 const manageUsersPolicy = new aws.iam.Policy("cognito-manage-users-policy", {
     namePrefix: "ManageUsers",
     policy: newPolicy()
@@ -155,29 +144,46 @@ const manageUsersPolicy = new aws.iam.Policy("cognito-manage-users-policy", {
         )
         .on(pool)
         .sid("DynamoDB").allow(...DynamoDbCRUDActions).on(ddb.usersTable, ddb.locksTable)
-        .sid("S3Access").allow('s3:GetObject').on(pulumi.interpolate`${bucket.arn}/emails/*`)
+        .sid("S3Access").allow('s3:GetObject').on(pulumi.interpolate`${bucket.arn}/templates/*`)
+        .sid("SSM").allow('ssm:GetParameters').on(pulumi.interpolate`arn:aws:ssm:${region}:${accountId}:parameter/${configFolder}/*`)
         .buildPolicy()
 })
 
-new aws.iam.RolePolicyAttachment("cognito-manage-users-policy-attachment", {
+export const triggersPolicy = new aws.iam.RolePolicyAttachment("cognito-manage-users-policy-attachment", {
     role: manageUsersRole,
     policyArn: manageUsersPolicy.arn
 })
 
-new aws.cognito.UserGroup("cognito-recipient-group", {
+const recipients = new aws.cognito.UserGroup("cognito-recipient-group", {
     name: "recipient",
-    userPoolId: userPool.id,
+    userPoolId: pool.id,
     description: "Recipients are users who can receive tips with Tip app."
 }, {retainOnDelete: true})
 
-new aws.cognito.UserGroup("cognito-business-group", {
+const business = new aws.cognito.UserGroup("cognito-business-group", {
     name: "business",
-    userPoolId: userPool.id,
+    userPoolId: pool.id,
     description: "Businesses are users who can create and manage organisation in Bill app."
 }, {retainOnDelete: true})
 
-new aws.cognito.UserGroup("cognito-admin-group", {
+const admins = new aws.cognito.UserGroup("cognito-admin-group", {
     name: "admin",
-    userPoolId: userPool.id,
+    userPoolId: pool.id,
     description: "Admins are users who can manage both Bill and Tip applications",
 }, {retainOnDelete: true})
+
+const userPool = {
+    type: "userpool",
+    id: pool.id,
+    arn: pool.arn,
+    principal: "cognito-idp.amazonaws.com",
+    sourceArn: pool.arn,
+    urn: pool.urn,
+    triggersRole: manageUsersRole.arn,
+    triggersPolicy: manageUsersPolicy.arn,
+    triggersPolicyAttachment: triggersPolicy.id,
+    groups: [recipients.id, business.id, admins.id]
+}
+grantInvoke(triggers, userPool)
+
+export default userPool

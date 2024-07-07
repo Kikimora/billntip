@@ -90,7 +90,7 @@ export function allowCrud() {
 }
 
 const config = new aws.ssm.Parameter("dynamodb-config", {
-    name: `${configFolder}/dynamodb`,
+    name: `/${configFolder}/dynamodb`,
     type: "String",
     value: pulumi.jsonStringify({
         sessions: sessions.name,

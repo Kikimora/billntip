@@ -259,7 +259,7 @@ export default class Store {
     /**
      * Fetch membership record.
      */
-    async fetchMembership(username: string, org: string) {
+    async fetchMembership(username: string, org: string) : Promise<MembershipItem | undefined> {
         const {Item: item} = await this.db.getItem(ddb.get(this.membership, {
             key: {pk: `U#${username}`, sk: `O#${org}`},
         }))
@@ -350,7 +350,7 @@ export default class Store {
     /**
      * Fetch organisation information.
      */
-    async fetchOrg(orgId: string) {
+    async fetchOrg(orgId: string) : Promise<Org | undefined> {
         const {Item: item} = await this.db.getItem(ddb.get(this.orgs, {
             key: {pk: `O#${orgId}`, sk: `info`},
         }))

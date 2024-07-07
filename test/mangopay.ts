@@ -2,29 +2,6 @@ import mangopay from "mangopay2-nodejs-sdk";
 
 const {Wallets, Users} = require("mangopay2-nodejs-sdk/lib/services")
 
-export const NaturalUser: mangopay.user.CreateUserNaturalOwnerData = {
-    PersonType: "NATURAL",
-    FirstName: "string",
-    LastName: "string",
-    Email: "example@example.com",
-    Birthday: 1,
-    Nationality: "PT",
-    CountryOfResidence: "PT",
-    TermsAndConditionsAccepted: true,
-    Address: {
-        AddressLine1: "1",
-        AddressLine2: "string",
-        City: "sss",
-        Region: "aaa",
-        PostalCode: "2750-609",
-        Country: "PT"
-    },
-    Tag: "Test",
-    Occupation: "string",
-    IncomeRange: 3,
-    UserCategory: "OWNER",
-}
-
 export const createUser = jest.spyOn(Users.prototype, 'create').mockImplementation(async (user: any) => {
     return {
         Id: `usr_${user.Email}`,

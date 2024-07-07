@@ -13,7 +13,7 @@ import {configFolder} from "@aws/config";
 import * as pulumi from "@pulumi/pulumi";
 
 const config = new aws.ssm.Parameter("api-config", {
-    name: `${configFolder}/api`,
+    name: `/${configFolder}/api`,
     type: "String",
     value: pulumi.jsonStringify({
         cookieName: 'SID',

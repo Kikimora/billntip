@@ -11,11 +11,11 @@ import {
 } from '@app/lambda'
 import diagnostics, {errorWithContext, TracingOptions} from "@app/diagnostics";
 import {SessionContext, SessionContextSchema} from "@src/authorizer/types";
-import {onceAsync, toCamel} from "@app/util";
+import {toCamel} from "@app/util";
 import {keyToToken, tokenToKey, toMembership} from "./util";
 import Routes from "./bill-paths";
 import Store, {InviteRequest} from "./store";
-import {fetchTemplate} from "@src/users/messages";
+import {TemplateRepo} from "@src/templates";
 import UserRepo, {UserAttribute} from "@src/users/user";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {Static, Type} from "@sinclair/typebox";
@@ -37,7 +37,7 @@ const config = moduleConfig()
         s3: Type.Object({
             bucket: Type.String()
         }),
-        'bill-diagnostics': Type.Object({}, {default: {relaxed: true, default: {triggers: {request: true}}}})
+        'bill-diagnostics': Type.Object({}, {relaxed: true, default: {triggers: {request: true}}})
     })
     .build()
 
@@ -52,18 +52,30 @@ export function __init() {
             locks: dynamodb.locks
         })
 
+        const templates = new TemplateRepo({
+            bucket: s3.bucket,
+            prefix: "templates"
+        })
+
         const store = new Store({table: dynamodb.data})
-        fetchTemplate.defaults = {s3}
 
         diagnostics(diag as TracingOptions)
 
         return {
             userPoolId: oidc.userPoolId,
-            fetchInviteTemplate: onceAsync(fetchTemplate, "AdminCreate"),
+            templates,
             userRepo,
             store
         }
     })
+}
+
+function principalGroups(s: SessionContext) {
+    const user = s.profile
+    const groups = user['cognito:groups'] ?? []
+    const isBusiness = _.includes(groups, 'business');
+    const isAdmin = _.includes(groups, 'admin');
+    return {isBusiness, isAdmin, groups}
 }
 
 export const handler = pipeline()
@@ -79,10 +91,7 @@ export const handler = pipeline()
         return toCamel(response)
     })
     .do(async function (this: Middleware, req: TracedEvent & LambdaAuthorizedRequest<SessionContext>, ctx: Context) {
-        const user = req.principal.profile
-        const groups = user['cognito:groups']
-        const isBusiness = _.includes(groups, 'business');
-        const isAdmin = _.includes(groups, 'admin');
+        const {isBusiness, isAdmin, groups} = principalGroups(req.principal)
         req.tracer.info("User credentials", {groups, isBusiness, isAdmin})
         if (isBusiness || isAdmin) {
             return await this.next(req as any, ctx)
@@ -90,13 +99,12 @@ export const handler = pipeline()
         throw accessDeniedError()
     })
     .done(async function (req) {
-        const {store, userRepo, userPoolId, fetchInviteTemplate} = await __init()
+        const {store, userRepo, userPoolId, templates} = await __init()
 
         switch (req.routeKey) {
             case 'GET /bill/{orgId}/members': {
                 const {query: {startKey}, path: {orgId}} = req.parse()
-                const username = req.principal.profile['cognito:username']
-                await assertOrgAdmin(username, orgId)
+                await assertOrgAdmin(req.principal, orgId)
                 const {members, lastKey} = await store.orgMembers(orgId, tokenToKey(startKey))
                 return {
                     members: members?.map(toMembership) ?? [],
@@ -108,7 +116,7 @@ export const handler = pipeline()
                 const inviterUsername = req.principal.profile['cognito:username']
                 const inviteeEmail = body.email;
 
-                await assertOrgAdmin(inviterUsername, orgId)
+                await assertOrgAdmin(req.principal, orgId)
                 const inviter = await userRepo.fetch(inviterUsername)
 
                 const org = await store.fetchOrg(orgId);
@@ -127,7 +135,8 @@ export const handler = pipeline()
                 }
                 const inviteeUsername = await inviteUser(inviteeEmail, {
                     ..._.mapKeys(invitedBy, (_1, key) => `invited_by_${key}`),
-                    ..._.mapKeys(invitedTo, (_1, key) => `org_${key}`)
+                    ..._.mapKeys(invitedTo, (_1, key) => `org_${key}`),
+                    env: process.env.ENV ?? "dev"
                 });
                 if (inviteeUsername === undefined) {
                     throw internalError("Cannot create nor find user with a given email.")
@@ -169,24 +178,21 @@ export const handler = pipeline()
             }
             case 'GET /bill/{orgId}/member/{id}': {
                 const {path: {orgId, id}} = req.parse()
-                const username = req.principal.profile['cognito:username']
-                await assertOrgAdmin(username, orgId)
+                await assertOrgAdmin(req.principal, orgId)
                 const member = await store.fetchMembership(id, orgId)
                 if (member === undefined) throw notFoundError()
                 return toMembership(member) satisfies Static<typeof req.route.success>
             }
             case 'DELETE /bill/{orgId}/member/{id}': {
                 const {path: {orgId, id}} = req.parse()
-                const username = req.principal.profile['cognito:username']
-                await assertOrgAdmin(username, orgId)
+                await assertOrgAdmin(req.principal, orgId)
                 const member = await store.removeMembership(id, orgId)
                 if (member === undefined) throw notFoundError()
                 return toMembership(member) satisfies Static<typeof req.route.success>
             }
             case "PUT /bill/{orgId}/member/{id}": {
                 const {path: {orgId, id}, body} = req.parse()
-                const username = req.principal.profile['cognito:username']
-                await assertOrgAdmin(username, orgId)
+                await assertOrgAdmin(req.principal, orgId)
 
                 const member = await store.updateMembership(id, orgId, body)
                 if (member === undefined) throw notFoundError()
@@ -194,13 +200,13 @@ export const handler = pipeline()
             }
         }
 
-        async function assertOrgAdmin(inviterUsername: string, orgId: string) {
-            const member = await store.fetchMembership(inviterUsername, orgId)
-            if (member?.role != 'admin') {
-                throw accessDeniedError().withContext('roleIn', {
-                    inviterUsername,
-                    org: orgId
-                })
+        async function assertOrgAdmin(sessions: SessionContext, orgId: string) {
+            const {isBusiness, isAdmin, groups} = principalGroups(sessions)
+            if (isAdmin) return
+            const username = sessions.profile['cognito:username'];
+            const member = await store.fetchMembership(username, orgId)
+            if (!isBusiness || member?.role != 'admin') {
+                throw accessDeniedError().withContext('assertOrgAdmin', {username, orgId, groups})
             }
         }
 
@@ -274,7 +280,7 @@ export const handler = pipeline()
 
         async function sendInviteMessage(username: string, email: string, attributes: UserAttribute[], metadata: Record<string, string>) {
             //User with this username exists and confirmed
-            const template = await fetchInviteTemplate()
+            const template = await templates.fetchTemplate("admin-create-user-email.html")
             await ses.sendEmail({
                 Source: "no-reply@billntip.com",
                 Destination: {ToAddresses: [email]},
@@ -292,7 +298,7 @@ export const handler = pipeline()
                                 username: username,
                                 code: "",
                                 link: "",
-                                type: "Invite"
+                                type: "invite"
                             })
                         }
                     },

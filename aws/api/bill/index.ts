@@ -31,7 +31,7 @@ const lambda = authorizer.gateway.newLambda(Lambdas['billntip/bill.handler'])
             .buildRoleInlinePolicy('UserPoolAccess')
     )
     .inlinePolicy(
-        newPolicy().allow('s3:GetObject').on(pulumi.interpolate`${bucket.arn}/emails/*`).buildRoleInlinePolicy('S3Access')
+        newPolicy().allow('s3:GetObject').on(pulumi.interpolate`${bucket.arn}/templates/*`).buildRoleInlinePolicy('S3Access')
     )
     .inlinePolicy(
         newPolicy().allow('ses:SendEmail').on('*').buildRoleInlinePolicy('SESAccess')

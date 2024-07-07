@@ -1,13 +1,38 @@
-import mangopay from 'mangopay2-nodejs-sdk'
-import { randomBytes } from '@noble/ciphers/webcrypto';
-import {v4, parse as uuidParse} from 'uuid'
+import mangopay, {base} from 'mangopay2-nodejs-sdk'
+import {randomBytes} from '@noble/ciphers/webcrypto';
+import {parse as uuidParse, v4} from 'uuid'
 import crypto from 'crypto'
-import {NaturalUser, Api} from "@app/test/mangopay";
+import {Api} from "@app/test/mangopay";
+import MethodOverload = base.MethodOverload;
+
 const shorter = require('shorter');
 
 describe("MangoPay", () => {
     it("Create user", async () => {
-        const response = await Api.Users.create(NaturalUser)
+        //createUser.mockRestore()
+
+        const response = await Api.Users.create({
+            PersonType: "NATURAL",
+            FirstName: "string",
+            LastName: "string",
+            Email: "example@example.com",
+            Birthday: 1,
+            Nationality: "PT",
+            CountryOfResidence: "PT",
+            TermsAndConditionsAccepted: true,
+            Address: {
+                AddressLine1: "1",
+                AddressLine2: "string",
+                City: "sss",
+                Region: "aaa",
+                PostalCode: "2750-609",
+                Country: "PT"
+            },
+            Tag: "Test",
+            Occupation: "string",
+            IncomeRange: 3,
+            UserCategory: "OWNER",
+        })
         console.log(response)
     })
 
@@ -98,3 +123,21 @@ describe("MangoPay", () => {
     })
 })
 
+interface RegulatoryData {
+    Id: string
+    ActionCode: string
+    ScopeBlocked: {
+        Inflows: boolean
+        Outflows: boolean
+    }
+}
+
+interface RegulatoryDataProvider {
+    getRegulatory: MethodOverload<string, RegulatoryData>;
+}
+
+it("fetches regulatory status", async () => {
+    const Users = await Api.Users as unknown as RegulatoryDataProvider
+    const r = await Users.getRegulatory("user_m_01HYX1T7R4ZC34YG4EMJYA9AGQ")
+    console.log(JSON.stringify(r, null, 2))
+})

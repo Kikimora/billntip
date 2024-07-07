@@ -13,6 +13,16 @@ if (app.__init instanceof Promise) {
 } else {
     init = Promise.resolve()
 }
+
+let extensionId
+async function runExtension(baseUrl) {
+    //1. Register internal extension
+    extensionId = await register(baseUrl)
+    //2. Let Runtime know extension exists
+    // noinspection JSUnusedLocalSymbols
+    const _ = next(baseUrl, extensionId)
+}
+
 //Register internal extension to receive SIGTERM and SIGINT
 let extension
 if (process.env.AWS_LAMBDA_RUNTIME_API !== undefined) {
@@ -25,14 +35,6 @@ if (process.env.AWS_LAMBDA_RUNTIME_API !== undefined) {
 //Wait for all initialization to complete
 await Promise.all([init, extension])
 
-let extensionId
-async function runExtension(baseUrl) {
-    //1. Register internal extension
-    extensionId = await register(baseUrl)
-    //2. Let Runtime know extension exists
-    // noinspection JSUnusedLocalSymbols
-    const _ = next(baseUrl, extensionId)
-}
 
 async function register(baseUrl) {
     const res = await fetch(`${baseUrl}/register`, {

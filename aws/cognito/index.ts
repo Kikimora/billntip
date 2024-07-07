@@ -8,7 +8,7 @@ import {appleIdp, facebookIdp, googleIdp} from "./idps";
 const issuer = pulumi.interpolate`https://cognito-idp.${region}.amazonaws.com/${userPool.id}`
 const cognitoDomain = pulumi.interpolate`https://${userPoolDomain.domain}.auth.${region}.amazoncognito.com`
 const config = new aws.ssm.Parameter("oidc-config", {
-    name: `${configFolder}/oidc`,
+    name: `/${configFolder}/oidc`,
     type: "String",
     value: pulumi.jsonStringify({
         userPoolId: userPool.id,

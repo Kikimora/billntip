@@ -1,6 +1,6 @@
 import * as pulumi from "@pulumi/pulumi";
 
-const config = new pulumi.Config();
+const config = new pulumi.Config('BillAndTip');
 export const domain = config.require('domain')
 export const regionalCertificate = config.require('cert-regional')
 export const useast1Certificate = config.require('cert-us-east-1')
@@ -19,7 +19,7 @@ export const stack = pulumi.getStack()
 const awsConfig = new pulumi.Config("aws");
 export const region = awsConfig.require('region')
 export const profile = awsConfig.require('profile')
-export const configFolder = `/${pulumi.getOrganization()}/${pulumi.getProject()}/${pulumi.getStack()}`
+export const configFolder = `${pulumi.getOrganization()}/${pulumi.getProject()}/${pulumi.getStack()}`
 
 export const tags = {
     'env': stack,

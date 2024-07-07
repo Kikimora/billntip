@@ -1,9 +1,6 @@
 import * as upath from "upath";
 import fs from 'fs'
 import _ from "lodash";
-import * as aws from "@pulumi/aws";
-import {newLambda} from "@aws/util";
-import {configFolder, stack, tags} from "@aws/config";
 import {Builder, LambdaSource, lambdaSet} from "@app/lambda/builder";
 
 export const Authorizer = {
@@ -46,12 +43,6 @@ export const Lambdas = lambdaSet()
     .add(Images)
     .build()
 
-export const Modules = [
-    'authorizer.code',
-    'authorizer.tokens',
-    'authorizer.cookie',
-]
-
 function makeLambdaNamer(stack: string) {
     return function (lambda: LambdaSource) {
         const {module, handler} = lambda
@@ -89,23 +80,3 @@ export const makeBuilder = _.memoize(function (stack) {
         lambdaName: makeLambdaNamer(stack)
     })
 })
-
-const nodejs20xRuntime = "nodejs20.x" as aws.lambda.Runtime;
-newLambda.defaults = {
-    runtime: nodejs20xRuntime,
-    architectures: ["arm64"],
-    memorySize: 256,
-    loggingConfig: {
-        logFormat: "JSON",
-        systemLogLevel: stack == "dev" ? "DEBUG" : "WARN",
-    },
-    environment: {
-        variables: {
-            NODE_OPTIONS: '--enable-source-maps',
-            SSM_PREFIX: configFolder
-        }
-    },
-    timeout: 10,
-    tags
-}
-newLambda.builder = makeBuilder(stack)

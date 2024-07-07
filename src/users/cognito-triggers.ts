@@ -11,7 +11,7 @@ import {generate} from "generate-password";
 import {Type} from "@sinclair/typebox";
 import diagnostics, {errorWithContext, Tracer, TracingOptions} from "@app/diagnostics";
 import {moduleConfig, pipeline, TracedEvent} from "@app/lambda";
-import {fetchTemplate} from "./messages";
+import {TemplateRepo} from "../templates";
 import {UserAttribute} from "./attributes";
 
 const cognito = new CognitoIdentityProvider()
@@ -21,13 +21,18 @@ const config = moduleConfig()
         s3: Type.Object({bucket: Type.String()}),
         'cognito-triggers': Type.Object({}, {relaxed: true, default: {triggers: {request: true}}}),
     })
-    .bind(config => {
-        fetchTemplate.defaults = {s3: config.s3}
-        diagnostics(config['cognito-triggers'] as TracingOptions)
-    })
     .build()
+
 // noinspection JSUnusedGlobalSymbols
-export const __init = config.load()
+export async function __init() {
+    return config.parameters.then(function ({s3, 'cognito-triggers': diag}) {
+        const templates = new TemplateRepo({
+            bucket: s3.bucket
+        })
+        diagnostics(diag as TracingOptions)
+        return {templates}
+    })
+}
 
 function eventTriggerSource(event: BaseTriggerEvent<string>) {
     return event.triggerSource.split('_')[0]
@@ -54,6 +59,8 @@ function isCustomMessageTriggerEvent(event: BaseTriggerEvent<string>): event is 
 }
 
 export const trigger = async function (event: BaseTriggerEvent<any> & TracedEvent, context: any) {
+    const {templates} = await __init()
+
     if (isPreSignUpTriggerEvent(event)) {
         switch (event.triggerSource) {
             /**
@@ -136,16 +143,18 @@ export const trigger = async function (event: BaseTriggerEvent<any> & TracedEven
         //> event, cognito will silently throw an error if you use event.userName in the template. Instead
         //> use event.request.usernameParameter and it will work
         let context = {
-            metadata,
+            metadata: {
+                ...metadata,
+                env: process.env.ENV ?? "dev"
+            },
             attributes,
             username: request.usernameParameter ?? '',
             code: request.codeParameter,
             link: request.linkParameter,
-            type: event.triggerSource.substring(14/*"CustomMessage_".length*/),
+            type: _.kebabCase(event.triggerSource.substring(14/*"CustomMessage_".length*/)),
             attribute: targetAttribute()
         }
-        const {s3: {bucket}} = await config.parameters
-        const messageTemplate = await fetchTemplate(bucket, context.type)
+        const messageTemplate = await templates.fetchTemplate(context.type + "-email.html")
         response.emailMessage = messageTemplate(context)
 
         switch (event.triggerSource) {

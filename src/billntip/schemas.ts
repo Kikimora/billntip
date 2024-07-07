@@ -66,8 +66,8 @@ export const TransferSchema = Type.Object({
         description: "The date and time at which the object was created.",
         examples: [1716814592]
     }),
-    from: Type.Optional(ShortUserInfo),
-    to: Type.Optional(ShortUserInfo),
+    org: Type.Optional(Type.String({description:"Organisation id"})),
+    loc: Type.Optional(Type.String({description:"Location id"})),
     debit: AmountSchema,
     credit: AmountSchema,
     fee: AmountSchema,

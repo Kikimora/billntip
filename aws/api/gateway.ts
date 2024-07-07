@@ -1,8 +1,10 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import {domain, stack, tags} from "@aws/config";
-import {newLambda} from "@aws/util";
+import {configFolder, domain, region, stack, tags} from "@aws/config";
+import {newLambda, newPolicy} from "@aws/util";
 import {LambdaSource} from "@app/lambda/builder";
+
+aws.account
 
 const apiGw = new aws.apigatewayv2.Api('api', {
     name: `billntip-${stack}`,
@@ -11,7 +13,7 @@ const apiGw = new aws.apigatewayv2.Api('api', {
     corsConfiguration: {
         allowCredentials: true,
         allowHeaders: ['content-type'],
-        allowOrigins: [`https://tip.${domain}`, `https://bill.${domain}`],
+        allowOrigins: [`https://tip.${domain}`, `https://bill.${domain}`, `https://tip.dev.billntip.com`, `https://bill.dev.billntip.com`],
         allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
         exposeHeaders: ['*'],
         maxAge: 3600
@@ -26,6 +28,8 @@ const lambdaCaller = {
     principal: "apigateway.amazonaws.com",
 }
 
+const accountId = aws.getCallerIdentity().then(x => x.accountId)
+
 export default {
     type: "gateway",
     name: "api",
@@ -37,6 +41,12 @@ export default {
     authCallback: pulumi.interpolate`${url}/auth/cognito/idpresponse`,
 
     newLambda(lambda: LambdaSource) {
-        return newLambda(lambda).grantInvoke(lambdaCaller)
+        return newLambda(lambda)
+            .grantInvoke(lambdaCaller)
+            .inlinePolicy(newPolicy()
+                .allow('ssm:GetParameters')
+                .on(pulumi.interpolate`arn:aws:ssm:${region}:${accountId}:parameter/${configFolder}/*`)
+                .buildRoleInlinePolicy("SSM")
+            )
     }
 }

@@ -7,8 +7,7 @@ import _ from '@app/util';
 import {RouteMap} from "@app/lambda";
 import {IntegrationArgs} from "@pulumi/aws/apigatewayv2/integration";
 import {RequiredKeysOf} from "type-fest";
-import {Conditions, Principal} from "@pulumi/aws/iam/documents";
-import {Input} from "@pulumi/pulumi";
+import {Principal} from "@pulumi/aws/iam/documents";
 
 /**
  * Details of an AWS service that wants to call a Lambda function.
@@ -147,8 +146,6 @@ interface NewLambdaModule {
     defaults: Partial<FunctionArgs>
 
     builder?: Builder | (() => Builder)
-
-    role(name: string, ...settings: iam.RoleInlinePolicy[]): aws.iam.Role
 }
 
 const newLambdaModule = function (src: LambdaSource) {
@@ -229,7 +226,6 @@ const newLambdaModule = function (src: LambdaSource) {
     return lambdaBuilder
 }
 newLambdaModule.defaults = {} as Partial<FunctionArgs>
-newLambdaModule.role = newLambdaRole
 newLambdaModule.builder = undefined
 export const newLambda: NewLambdaModule = newLambdaModule
 
