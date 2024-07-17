@@ -3,7 +3,11 @@ import fs from "fs";
 import {IsEqual, Merge} from "type-fest";
 import _ from "lodash";
 import {Handler, HttpMethod, LambdaRequest} from "@app/lambda";
-import {Context} from "aws-lambda";
+import {APIGatewayAuthorizerEvent, Context} from "aws-lambda";
+import {
+    APIGatewayRequestAuthorizerEventV2,
+    APIGatewayTokenAuthorizerEvent
+} from "aws-lambda/trigger/api-gateway-authorizer";
 
 export function resources() {
     const o = upath.join(__dirname, "..", "out", `resources.${process.env.TEST_STACK}.json`)
@@ -24,12 +28,15 @@ interface RequestOptions {
     cookies?: Record<string, string>
     path?: Record<string, string>
     query?: Record<string, string>
+}
+
+export interface HttpRequestOptions extends RequestOptions {
     body?: any
     authorizer?: any
 }
 
 export interface TestHandler {
-    (options: Partial<RequestOptions>): Promise<any>
+    (options: Partial<HttpRequestOptions>): Promise<any>
 }
 
 /**
@@ -47,105 +54,99 @@ export interface TestHandler {
  *     }
  * })
  */
-export function makeTestHandler<T extends Handler>(handler: T, defaults?: RequestOptions | (() => RequestOptions)): TestHandler {
-    return function (options: Partial<RequestOptions>) {
+export function makeTestHandler<T extends Handler>(handler: T, defaults?: HttpRequestOptions | (() => HttpRequestOptions)): TestHandler {
+    return function (options: Partial<HttpRequestOptions>) {
         const defaultValues = typeof defaults === 'function' ? defaults() : defaults
         options = _.defaults({}, options, defaultValues)
         const context = {functionName: "Test", functionVersion: "Test"};
-        const now = new Date()
-        const rawPath = Object.entries(options.path ?? []).reduce(function (path, [key, value]) {
-            return path.replace(`{${key}}`, value)
-        }, options.routeKey ?? "")
-        const cookies = Object.entries(options.cookies ?? {}).map(([k, v]) => `${k}=${v}`)
-        const rawQueryString = Object.entries(options.query ?? {}).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
-        const routeKey = options.routeKey ?? ""
+        const payload = commonRequestPayload(options);
+        if (options.authorizer !== undefined) {
+            payload.requestContext.authorizer = options.authorizer
+        }
         const event: LambdaRequest = {
-            version: "2.0",
+            ...payload,
             isBase64Encoded: false,
-            routeKey,
-            rawPath,
-            pathParameters: options.path,
-            cookies: cookies.length > 0 ? cookies : undefined,
-            headers: _.mapKeys(options.headers, (v, k) => k.toLowerCase()),
-            queryStringParameters: options.query,
-            rawQueryString,
             body: typeof options.body === 'string' ? options.body : JSON.stringify(options.body),
-            requestContext: {
-
-                authorizer: options.authorizer,
-
-                accountId: "123",
-                apiId: "345",
-                authentication: {
-                    clientCert: undefined
-                },
-                domainName: "test",
-                domainPrefix: "",
-                http: {
-                    method: options.method ?? routeKey.split(' ')[0],
-                    path: rawPath,
-                    protocol: "https",
-                    sourceIp: "127.0.0.1",
-                    userAgent: "Test Browser"
-                },
-                requestId: "TEST REQUEST",
-                routeKey: options.routeKey,
-                stage: "TEST",
-                time: now.toString(),
-                timeEpoch: now.getTime() / 1000
-
-            } as any,
         }
         return handler(event, context as any)
     }
 }
 
-export class RequestBuilder {
+export interface AuthorizerOptions extends RequestOptions {
+    identitySource: string[]
+}
 
-    constructor(context: Partial<Context>) {
-        this.context = context
-    }
+export interface TestAuthorizer {
+    (options: Partial<AuthorizerOptions>): Promise<any>
+}
 
-    public readonly event: any = {}
-    public readonly context: any = {}
-
-    run<T extends Handler>(handler: T) {
-        return handler(this.event, this.context)
-    }
-
-    build() {
-        return [this.event, this.context]
-    }
-
-    route(key: string, params?: Record<string, string>) {
-        _.merge(this.event, {
-            routeKey: key,
-            pathParameters: params
-        })
-        return this
-    }
-
-    lambdaAuth(lambda: object) {
-        _.merge(this.event, {
-            requestContext: {
-                authorizer: {
-                    lambda
-                }
-            }
-        })
-        return this
-    }
-
-    jsonBody(body: any) {
-        _.merge(this.event, {
-            body: JSON.stringify(body),
-            headers: {
-                'content-type': 'application/json'
-            }
-        })
-        return this
+export function makeTestAuthorizer<T extends Handler>(handler: T, defaults?: AuthorizerOptions | (() => AuthorizerOptions)): TestAuthorizer {
+    return async function (options: Partial<AuthorizerOptions>) {
+        const context = {functionName: "Test", functionVersion: "Test"}
+        const defaultValues = typeof defaults === 'function' ? defaults() : defaults
+        options = _.defaults({}, options, defaultValues)
+        const common = commonRequestPayload(options);
+        const event : APIGatewayRequestAuthorizerEventV2 = {
+            ...common,
+            cookies: common.cookies ?? [],
+            type: "REQUEST",
+            routeArn: `arn:aws:execute-api:eu-south-1:381491945919:ddbdzsrp48/$default/${common.routeKey.replace(' ', '')}`,
+            identitySource: options.identitySource ?? []
+        }
+        return await handler(event, context as any)
     }
 }
+
+
+function commonRequestPayload(options: Partial<HttpRequestOptions> | Partial<AuthorizerOptions>) {
+    const now = new Date()
+    const rawPath = Object.entries(options.path ?? []).reduce(function (path, [key, value]) {
+        return path.replace(`{${key}}`, value)
+    }, options.routeKey ?? "")
+    const cookies = Object.entries(options.cookies ?? {}).map(([k, v]) => `${k}=${v}`)
+    if (cookies.length > 0) {
+        options.headers = options.headers ?? {}
+        options.headers.cookie = cookies.join('; ')
+    } else {
+        delete options.headers?.cookie
+    }
+    const rawQueryString = Object.entries(options.query ?? {}).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
+    const routeKey = options.routeKey ?? ""
+    return {
+        version: "2.0",
+        routeKey,
+        rawPath,
+        pathParameters: options.path,
+        cookies: cookies.length > 0 ? cookies : undefined,
+        headers: _.mapKeys(options.headers, (v, k) => k.toLowerCase()),
+        queryStringParameters: options.query,
+        rawQueryString,
+        stageVariables: {},
+        requestContext: {
+
+            accountId: "123",
+            apiId: "345",
+            authentication: {
+                clientCert: undefined
+            },
+            domainName: "test",
+            domainPrefix: "",
+            http: {
+                method: options.method ?? routeKey.split(' ')[0],
+                path: rawPath,
+                protocol: "https",
+                sourceIp: "127.0.0.1",
+                userAgent: "Test Browser"
+            },
+            requestId: "TEST REQUEST",
+            routeKey: options.routeKey,
+            stage: "TEST",
+            time: now.toString(),
+            timeEpoch: now.getTime() / 1000
+        } as any,
+    }
+}
+
 
 /**
  * Test hooks runbning before and after tests.

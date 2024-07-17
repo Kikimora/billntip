@@ -130,7 +130,7 @@ describe("POST /tip/registration", () => {
                     FirstName: "Waiter",
                     LastName: "User",
                     Email: waiter.username,
-                    Birthday: Date.parse("1985-05-04"),
+                    Birthday: Date.parse("1985-05-04") / 1000,
                     Nationality: "RU",
                     CountryOfResidence: "PT",
                     TermsAndConditionsAccepted: true,
@@ -259,18 +259,18 @@ const transactions = makeTestHandler(handler, function () {
     const {waiterLogin} = logins()
     return {
         method: "GET",
-        routeKey: "GET /tip/wallet/transactions",
+        routeKey: "GET /tip/transactions",
         authorizer: {lambda: cognito.newSession(waiterLogin.username)}
     }
 });
 
-describe("GET /tip/wallet/transactions", () => {
+describe("GET /tip/transactions", () => {
 
     prepare('Once', inviteAndRegister)
 
     it("return user's wallet transactions", async () => {
         const {admin, waiter} = data()
-        mangopay.getTransactions.mockReturnValueOnce([
+        mangopay.getTransactions.mockReturnValueOnce(Promise.resolve([
             {
                 "Id": "xfer_m_01HYX2AZM381923J2DNG5YV50B",
                 "Tag": `{ "from": "${admin.username}", "to": "${waiter.username}" }`,
@@ -299,29 +299,21 @@ describe("GET /tip/wallet/transactions", () => {
                 "DebitedWalletId": "wlt_m_01HYX1ZERF8SC8D8SGZSHANCA7",
                 "DepositId": null
             }
-        ])
-        mangopay.getWallet.mockReturnValueOnce({
+        ]))
+        mangopay.getWallet.mockReturnValueOnce(Promise.resolve({
             Description: "Bill&Tip recipient wallet.",
             CreationDate: 1720045732,
             Id: `wlt_mangopay_id`,
             Balance: {Amount: 10, Currency: "EUR"}
-        })
+        }))
         const walletTransactions = await transactions({})
         expect(walletTransactions).toEqual({
             transactions: [{
                 id: "xfer_m_01HYX2AZM381923J2DNG5YV50B",
                 credit: {amount: 99, currency: "EUR"},
                 debit: {amount: 100, currency: "EUR"},
-                from: {
-                    email: admin.username,
-                    first_name: "Business",
-                    last_name: "User",
-                },
-                to: {
-                    email: waiter.username,
-                    first_name: "Waiter",
-                    last_name: "User",
-                },
+                from: admin.username,
+                to: waiter.username,
                 type: "TRANSFER",
                 execution_date: 1720045246,
                 created_at: 1720045246,
@@ -331,10 +323,7 @@ describe("GET /tip/wallet/transactions", () => {
                 status: "SUCCEEDED"
             }],
             wallet: {
-                description: "Bill&Tip recipient wallet.",
-                created_at: 1720045732,
-                id: waiter.username,
-                balance: {amount: 10, currency: "EUR"}
+                amount: 10, currency: "EUR"
             }
         })
     })

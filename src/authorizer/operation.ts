@@ -32,10 +32,11 @@ export const AuthOptionsSchema = {
     api: Type.Object({
         clientId: Type.String(),
         cookieName: Type.String(),
+        sessionInactivityTimeout: Type.Number({default: 3 * 24 * 3600}),
         /**
          * Session cookie SameSite: strict, none or Lax
          */
-        sameSite:  Type.Union([Type.Literal("none"), Type.Literal("strict"), Type.Literal("lax")]),
+        sameSite: Type.Union([Type.Literal("none"), Type.Literal("strict"), Type.Literal("lax")]),
         postAuthRedirectUrl: Type.String({format: "uri"}),
         /**
          * Authorizer cache TTL in seconds
@@ -47,9 +48,9 @@ const config = moduleConfig().parameters(AuthOptionsSchema).build()
 
 export type AuthOptions = Static<TObject<typeof AuthOptionsSchema>>
 
-async function buildAuthModule({dynamodb, oidc, api} : AuthOptions, requestId?: string) {
-    const {userPoolId} = oidc
-    const {clientId} = api
+async function buildAuthModule({dynamodb, oidc, api}: AuthOptions, requestId?: string) {
+    const {userPoolId, tokenEndpoint} = oidc
+    const {clientId, sessionInactivityTimeout, cookieName, sameSite, postAuthRedirectUrl, authorizerCacheTtl} = api
     const userPoolClient = await userPoolClientDetails(userPoolId, clientId)
     const units = userPoolClient.TokenValidityUnits ?? _.throw("User pool must have tokens validity setting.")
     const accessTokenTtl = userPoolClient.AccessTokenValidity ?? _.throw("User pool must have access token validity setting.");
@@ -62,14 +63,15 @@ async function buildAuthModule({dynamodb, oidc, api} : AuthOptions, requestId?: 
         now: Math.floor((performance.now() + performance.timeOrigin) / 1000),
         requestId: requestId ?? "",
         refreshTokenTtl: toSeconds(refreshTokenTtl, refreshTokenUnits),
-        authorizerCacheTtl: api.authorizerCacheTtl,
+        authorizerCacheTtl,
         accessTokenTtl: toSeconds(accessTokenTtl, accessTokenUnits),
-        clientId:clientId,
+        clientId,
         clientSecret,
-        tokenEndpoint: oidc.tokenEndpoint,
-        postAuthRedirectUrl: api.postAuthRedirectUrl,
-        cookieName: api.cookieName,
-        sameSite: api.sameSite
+        tokenEndpoint,
+        postAuthRedirectUrl,
+        cookieName,
+        sameSite,
+        sessionInactivityTimeout
     }
 
     const cookies = new SessionCookieRepo(ctx)
@@ -102,7 +104,7 @@ async function buildAuthModule({dynamodb, oidc, api} : AuthOptions, requestId?: 
  * @param options - auth module options, default - load options from the parameter store
  * @returns authentication module
  */
-export default async function(requestId?: string, options?: AuthOptions) {
+export default async function (requestId?: string, options?: AuthOptions) {
     if (options !== undefined) return buildAuthModule(options, requestId)
     return await config.parameters.then(x => buildAuthModule(x, requestId))
 }

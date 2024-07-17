@@ -64,7 +64,7 @@ export default {
     gateway,
     integrationArgs: {
         //Set-Cookie on successful responses if authorizer context has new_cookie value.
-        responseParameters: [200, 201, 204, 206].map(SetCookie)
+        responseParameters: [200, 201, 204, 206, 400, 403, 404, 500].map(SetCookie)
     },
     apiRouteArgs: {
         authorizationType: "CUSTOM",

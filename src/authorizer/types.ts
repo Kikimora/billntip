@@ -1,4 +1,5 @@
 import {Static, Type as T} from "@sinclair/typebox";
+import {CognitoIdTokenPayload} from "aws-jwt-verify/jwt-model";
 
 export const ProfileSchema = T.Object({
     "at_hash": T.Optional(T.String()),
@@ -24,13 +25,17 @@ export const SessionContextSchema = T.Object({
      */
     id: T.String(),
     /**
+     * Session update timestamp.
+     */
+    updated_at: T.Number(),
+    /**
      * Access Token from OIDC provider initiated the session.
      */
     access_token: T.String(),
     /**
      * Parsed Access token.
      */
-    access: T.Record(T.String(), T.Any()),
+    access_token_json: T.Record(T.String(), T.Any()),
     /**
      * ID Token from OIDC provider initiated the session.
      */
@@ -38,28 +43,39 @@ export const SessionContextSchema = T.Object({
     /**
      * Parsed ID Token
      */
-    profile: ProfileSchema,
+    id_token_json: ProfileSchema,
     /**
      * Access token expiration time as **seconds** since the [epoch]{@link https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date#the_epoch_timestamps_and_invalid_date}.
      * Calculated at tokens arrival as "{@link now} + {@link OidcTokens.expiresIn}".
      */
-    expires_at: T.Number()
+    access_token_expires_at: T.Number(),
+    /**
+     * Session cookie expiration time as **seconds** since the [epoch]{@link https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date#the_epoch_timestamps_and_invalid_date}.
+     */
+    session_expires_at: T.Number()
 })
 
 export type SessionContext = Static<typeof SessionContextSchema>
 
 export interface OperationContext {
     readonly requestId: string
+    /**
+     * Operation start time in **seconds**.
+     */
     readonly now: number
     readonly authorizerCacheTtl: number
     readonly refreshTokenTtl: number
     readonly accessTokenTtl: number
-    readonly clientSecret:string
+    readonly clientSecret: string
     readonly tokenEndpoint: string
     readonly postAuthRedirectUrl: string
     readonly clientId: string
-    readonly cookieName:string
-    readonly sameSite: "none" | "strict" | "lax"
+    readonly cookieName: string
+    readonly sameSite: "none" | "strict" | "lax",
+    /**
+     * Cookie time to live in **seconds**. Default is 3 days. Cannot be more than the {@link refreshTokenTtl}.
+     */
+    readonly sessionInactivityTimeout: number
 }
 
 export interface TokenVerifier<T> {

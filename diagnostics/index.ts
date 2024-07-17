@@ -943,6 +943,8 @@ export default function configure(options: TracingOptions) {
     DefaultRecorder = new EventRecorder(DefaultOptions)
 }
 
+configure.OptionsSchema = Type.Object({}, {relaxed: true, default: {triggers: {request: true}}})
+
 function printEvent(event: TimestampedTrace) {
     if (event.error !== undefined) {
         console.error({

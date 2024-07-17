@@ -5,6 +5,7 @@ import _ from "lodash";
 import {Schema, TableAttributes, TableSchema} from "@app/dynamodb";
 import {uuid} from "short-uuid";
 import {internalError} from "@app/lambda";
+import {ValuesGenerator} from "@app/dynamodb/schema";
 
 const MemberKey = {
     pk: ddb.Type.String as `U#${string}`,
@@ -13,11 +14,13 @@ const MemberKey = {
 
 const MemberAttributes = {
     mangopayUid: ddb.Type.String,
-    walletId: ddb.Type.String
+    walletId: ddb.Type.String,
+    kycDocumentId: ddb.Type.String,
 } as const
 
 type MemberTable = TableSchema<typeof MemberKey, typeof MemberAttributes>;
 export type MemberItem = TableAttributes<MemberTable> & { pk: string }
+export type RegisteredMemberItem = TableAttributes<MemberTable> & { pk: string, walletId: string, mangopayUid: string }
 
 const MemberhipKey = {
     pk: ddb.Type.String as `U#${string}`,
@@ -107,14 +110,14 @@ export default class Store {
     table: string;
     membership: MembershipsTable;
     members: MemberTable;
-    orgs: OrgsTable;
+    prefix: OrgsTable;
 
     constructor(options: StoreOptions) {
         this.db = options.db ?? new DynamoDB()
         this.table = options.table
         this.membership = ddb.table(this.table, MemberhipKey, MembershipAttributes)
         this.members = ddb.table(this.table, MemberKey, MemberAttributes)
-        this.orgs = ddb.table(this.table, OrgKey, OrgAttributes)
+        this.prefix = ddb.table(this.table, OrgKey, OrgAttributes)
     }
 
     async memberships(username: string, filters: MembershipFilters = {
@@ -127,8 +130,9 @@ export default class Store {
         } as const
         const pk = `U#${username}`
         const pendingInvites = ddb.query(this.membership, {
-            keyCondition: ({key, val}) =>
-                `${key.pk} = ${val(pk)} AND begins_with(${key.sk}, ${val('O#')})`,
+            values: {pk, prefix: "O#"},
+            keyCondition: ({key, ref}) =>
+                `${key.pk} = ${ref('pk')} AND begins_with(${key.sk}, ${ref('prefix')})`,
             filter: ({attr}) => Object
                 .entries(attributes)
                 .filter(([_1, value]) => value !== undefined)
@@ -174,8 +178,9 @@ export default class Store {
     async acceptInvite(username: string, org: string) {
         const item = ddb.update(this.membership, {
             key: {pk: `U#${username}`, sk: `O#${org}`},
-            expression: ({attr, val}) => ({
-                set: `${attr.accepted_at} = ${val(Date.now() / 1000)}`,
+            values: {date: Date.now() / 1000},
+            expression: ({attr, ref}) => ({
+                set: `${attr.accepted_at} = ${ref('date')}`,
                 remove: attr.rejected_at
             }),
             condition: ({attr, key}) =>
@@ -197,7 +202,8 @@ export default class Store {
     async rejectInvite(username: string, org: string) {
         const item = ddb.update(this.membership, {
             key: {pk: `U#${username}`, sk: `O#${org}`},
-            expression: ({attr, val}) => `SET ${attr.rejected_at} = ${val(Date.now() / 1000)}`,
+            values: {date: Date.now() / 1000},
+            expression: ({attr, ref}) => `SET ${attr.rejected_at} = ${ref('date')}`,
             condition: ({key}) =>
                 `attribute_exists(${key.pk}) AND attribute_exists(${key.sk})`,
             return: "ALL_NEW"
@@ -215,30 +221,35 @@ export default class Store {
      * Update membership record.
      */
     async updateMembership(username: string, org: string, request: UpdateMembershipRequest) {
+
+        const values = {
+            title: request.org?.title,
+            firstName: request.invited_by?.first_name,
+            lastName: request.invited_by?.last_name,
+            email: request.invited_by?.email,
+            role: request.role,
+        }
+
         const item = ddb.update(this.membership, {
             key: {pk: `U#${username}`, sk: `O#${org}`},
-            expression: ({attr, val}) => {
+            values,
+            expression: ({attr, ref}) => {
                 const updates = []
 
-                const title = request.org?.title
-                if (title !== undefined)
-                    updates.push(`${attr.org.title} = ${val(title)}`)
+                if (values.title !== undefined)
+                    updates.push(`${attr.org.title} = ${ref('title')}`)
 
-                const firstName = request.invited_by?.first_name
-                if (firstName !== undefined)
-                    updates.push(`${attr.invited_by.first_name} = ${val(firstName)}`)
+                if (values.firstName !== undefined)
+                    updates.push(`${attr.invited_by.first_name} = ${ref('firstName')}`)
 
-                const lastName = request.invited_by?.last_name
-                if (lastName !== undefined)
-                    updates.push(`${attr.invited_by.last_name} = ${val(lastName)}`)
+                if (values.lastName !== undefined)
+                    updates.push(`${attr.invited_by.last_name} = ${ref('lastName')}`)
 
-                const email = request.invited_by?.email
-                if (email !== undefined)
-                    updates.push(`${attr.invited_by.email} = ${val(email)}`)
+                if (values.email !== undefined)
+                    updates.push(`${attr.invited_by.email} = ${ref('email')}`)
 
-                const role = request.role
-                if (role !== undefined)
-                    updates.push(`${attr.role} = ${val(role)}`)
+                if (values.role !== undefined)
+                    updates.push(`${attr.role} = ${ref('role')}`)
 
                 return {
                     set: updates
@@ -259,7 +270,7 @@ export default class Store {
     /**
      * Fetch membership record.
      */
-    async fetchMembership(username: string, org: string) : Promise<MembershipItem | undefined> {
+    async fetchMembership(username: string, org: string): Promise<MembershipItem | undefined> {
         const {Item: item} = await this.db.getItem(ddb.get(this.membership, {
             key: {pk: `U#${username}`, sk: `O#${org}`},
         }))
@@ -295,20 +306,26 @@ export default class Store {
     }
 
     async updateMember({pk, ...member}: MemberItem) {
+
         const item = ddb.update(this.members, {
             key: {pk: `U#${pk}`, sk: 'M'},
-            values: member,
-            expression: ({attr, val}) => ({
+            values: {
+                walletId: member.walletId ?? null,
+                mangopayUid: member.mangopayUid ?? null,
+                kycDocumentId: member.kycDocumentId ?? null,
+            },
+            expression: ({attr, ref}) => ({
                 set: {
-                    [attr.walletId]: val.walletId,
-                    [attr.mangopayUid]: val.mangopayUid
+                    [attr.walletId]: ref('walletId'),
+                    [attr.mangopayUid]: ref('mangopayUid'),
+                    [attr.kycDocumentId]: ref('kycDocumentId')
                 }
             }),
-            condition: ({attr, val}) =>
+            condition: ({attr, ref}) =>
                 `
-                attribute_not_exists(${attr.walletId}) OR ${attr.walletId} = ${val.walletId}
+                attribute_not_exists(${attr.walletId}) OR ${attr.walletId} = ${ref('walletId')}
                 AND
-                attribute_not_exists(${attr.mangopayUid}) OR ${attr.mangopayUid} = ${val.mangopayUid}
+                attribute_not_exists(${attr.mangopayUid}) OR ${attr.mangopayUid} = ${ref('mangopayUid')}
                 `,
             return: "ALL_NEW"
         });
@@ -350,8 +367,8 @@ export default class Store {
     /**
      * Fetch organisation information.
      */
-    async fetchOrg(orgId: string) : Promise<Org | undefined> {
-        const {Item: item} = await this.db.getItem(ddb.get(this.orgs, {
+    async fetchOrg(orgId: string): Promise<Org | undefined> {
+        const {Item: item} = await this.db.getItem(ddb.get(this.prefix, {
             key: {pk: `O#${orgId}`, sk: `info`},
         }))
         if (item === undefined) return undefined
@@ -369,9 +386,10 @@ export default class Store {
         members?: MembershipItem[]
     }> {
         const orgPk = `O#${orgId}`;
-        const membersQuery = ddb.query(this.orgs, {
-            keyCondition: ({key, val}) =>
-                `${key.pk} = ${val(orgPk)} AND begins_with(${key.sk}, ${val('U#')})`,
+        const membersQuery = ddb.query(this.prefix, {
+            values: {orgPk, prefix: 'U#'},
+            keyCondition: ({key, ref}) =>
+                `${key.pk} = ${ref('orgPk')} AND begins_with(${key.sk}, ${ref('prefix')})`,
             exclusiveStartKey: startKey
         })
         const {Items: memberIds, LastEvaluatedKey: lastKey} = await this.db.query(membersQuery)
@@ -402,7 +420,7 @@ export default class Store {
             title: request.title,
             created_at: Date.now() / 1000,
         } as const;
-        await this.db.putItem(ddb.put(this.orgs, {key, item}))
+        await this.db.putItem(ddb.put(this.prefix, {key, item}))
         return {
             pk: orgId,
             ...item
@@ -410,7 +428,7 @@ export default class Store {
     }
 
     async removeOrg(orgId: string) {
-        const {Attributes: item} = await this.db.deleteItem(ddb.deleteItem(this.orgs, {
+        const {Attributes: item} = await this.db.deleteItem(ddb.deleteItem(this.prefix, {
             key: {pk: `O#${orgId}`, sk: `info`},
             return: "ALL_OLD"
         }))

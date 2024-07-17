@@ -3,21 +3,15 @@ import {
     APIGatewaySimpleAuthorizerWithContextResult,
     APIGatewayProxyStructuredResultV2
 } from "aws-lambda";
-import diagnostics, {EMF, findErrorContext, Tracer} from '@app/diagnostics'
-import {internalError, pipeline} from "@app/lambda";
-import startAuthOperation, {SessionData, SessionContext, SessionContextSchema} from "./operation";
+import diagnostics, {EMF, errorWithContext, findErrorContext, Tracer} from '@app/diagnostics'
+import {pipeline} from "@app/lambda";
+import startAuthOperation, {SessionContext, SessionContextSchema} from "./operation";
 
 const Unauthorized = {isAuthorized: false, context: undefined}
 const BadRequest = {statusCode: 400, body: JSON.stringify({'error': 'Invalid request parameters.'})}
-type AuthContext = (SessionContext & { new_cookie?: string }) | undefined;
+type AuthContext = SessionContext | undefined;
 type AuthResult = APIGatewaySimpleAuthorizerWithContextResult<AuthContext>
 
-type AuthorizerHooks = {
-    cookieAuthorizerStart?: () => Promise<void>,
-    cookieAuthorizerRefresh?: () => Promise<void>;
-    cookieAuthorizerFinish?: () => Promise<void>,
-}
-export const hooks: AuthorizerHooks = {}
 diagnostics({
     triggers: {
         info: true, error: true, warn: true, request: true
@@ -34,35 +28,21 @@ export const Metrics = EMF.namespace("authorizer")
  * Authorize request based on a cookie value. The authorizer performs following steps:
  * 1. Check cookies for a valid session identifier.
  * 2. Find corresponding session data with OIDC refresh and access tokens.
- * 3. If access token is about to expire or expired then refresh the session using OpenId token endpoint and rotate cookie.
+ * 3. Verifies that session has not expired.
+ * 3. If associated access token is about to expire or expired then refresh the session using OIDC token endpoint.
  * 4. Populate `context.access_token` and `context.id_token` values. These variables can be accessed by the endpoint handler.
  *
- * **Important!** Authorizer requires proper API GW configuration:
- * 1. API GW Integration on a route protected with authorizer MUST map `header.Set-Cookie` to `$context.authorizer.new_cookie`
- * 2. Authorizer identity source MUST be `$request.header.Cookie`.
+ * Note: authorizer does not issue new cookies, nor it extends cookie lifetime. However, it does return unauthorized if
+ * session is expired. This happens when cookie is present but, it was not used for the inactivity period.
  *
- * Session data contains access token issued by the OIDC server. This token controls access to the OIDC server API for
- * things like profile access, password change, etc. Access token refresh happens if
- * `access token expiration < now + authorizer cache ttl - 10 sec`. In other words it is possible that cache would hold expired tokens.
- * Note how this condition guarantees that `context.access_token` contains valid
- * access token at all times. This is because authorizer cache always expires before the token and authorizer called
- * before request handler (giving it a chance to populate `context.access_token` with a fresh value). If `cache ttl` is 0
- * meaning there is no cache and authorizer called on every request then access token refresh happens when token is about to expire.
- *
- * Together with token refresh authorizer rotates cookie. Next request with a new cookie which triggers authorizer call
- * again (because of how identity source configured). These two requests would leave two entries in the authorizer cache:
- * 1. Old Cookie -> { new_cookie:"...", access_token:"new token", id_token:"new token", refresh_token:"new token" }
- * 2. New Cookie -> { access_token:"new token", id_token:"new token", refresh_token:"new token" }
- * If client keeps using old cookie then every response will have Set-Cookie header until authorizer cache entry is not
- * expired. After it expires client with old cookie would get 401 Unauthorized or 403 Forbidden.
- *
+ * Usually you would want to issue cookies with expiration equal to the refresh token expiration (aka require login period).
  */
 export const cookie = pipeline<APIGatewayAuthorizerEvent>()
     .traceRequest({tracer: AuthTracer, tag: "cookie"})
     .done(async function (event, context): Promise<AuthResult> {
         const {tracer} = event
 
-        const {tokens: oidc, sessions, cookies, ctx} = await startAuthOperation(context.awsRequestId)
+        const {tokens: oidc, sessions, cookies} = await startAuthOperation(context.awsRequestId)
         switch (event.type) {
             case "REQUEST": {
                 const cookieHeader = event.headers?.cookie
@@ -75,75 +55,57 @@ export const cookie = pipeline<APIGatewayAuthorizerEvent>()
                     tracer.info("cookie header present, but invalid", {cookieHeader})
                     return Unauthorized
                 }
-                const session = await sessions.fetchLocked(sessionCookie.id)
-                if (session == null || session.refreshTokenExpiresAt < ctx.now) {
-                    tracer.info("session not found or expired", {sessionId: sessionCookie.id, ...session?.info})
+                const session = await sessions.fetch(sessionCookie)
+                if (session === null) {
+                    tracer.info("session not found", {sessionId: sessionCookie.value})
                     return Unauthorized
                 }
-                tracer.info("start", {session: session.info})
+                if (session.isSessionExpired) {
+                    tracer.info("session expired", {...session.info})
+                    return Unauthorized
+                }
+
                 try {
-                    return await authenticateSession(session)
+                    tracer.info("start", {session: session.info})
+
+                    session.bump()
+
+                    if (session.isTimeToRefreshTokens) {
+                        tracer.info("tokens expired, refreshing using refresh token", {session: session.info})
+
+                        const tokens = await oidc.refresh(session.refreshToken)
+                        if (tokens == null) {
+                            tracer.warn("OIDC server refused to refresh tokens")
+                            await session.remove();
+                            return Unauthorized
+                        }
+
+                        session.updateTokens(tokens)
+                    }
+
+                    const newSession = session.applyUpdates()
+                    //Fail if after refresh the session still can expire while being cached.
+                    if (newSession.isTimeToRefreshTokens) {
+                        tracer.warn("access token is about to expire right after refresh", {updatedSession: newSession.info})
+                        return Unauthorized
+                    }
+                    await newSession.save()
+                    tracer.info("done", {session: newSession.info})
+                    return {
+                        isAuthorized: true,
+                        context: {
+                            ...newSession.context()
+                        }
+                    }
                 } catch (e: any) {
-                    throw tracer.errorWithContext(e, {session: session.info, sessionCookie})
+                    throw errorWithContext(e, tracer.tag, {session: session.info, sessionCookie})
                 } finally {
                     tracer.info("cleanup")
                     await session.release()
-                    if (hooks.cookieAuthorizerFinish) {
-                        await hooks.cookieAuthorizerFinish()
-                    }
                 }
             }
             default:
                 return Unauthorized
-        }
-
-        async function authenticateSession(session: SessionData) {
-            let response: AuthResult = {isAuthorized: false, context: undefined}
-            if (hooks.cookieAuthorizerStart) {
-                await hooks.cookieAuthorizerStart()
-            }
-            session.updateCacheTtl()
-            if (session.isTimeToRefresh) {
-                tracer.info("tokens expired, refreshing using refresh token", {session: session.info})
-                if (hooks.cookieAuthorizerRefresh) {
-                    await hooks.cookieAuthorizerRefresh()
-                }
-                const tokens = await oidc.refresh(session.refreshToken)
-                if (tokens == null) {
-                    tracer.info("OIDC server refused to refresh tokens")
-                    await session.remove();
-                    return Unauthorized
-                }
-
-                const newSession = session.withTokens(tokens)
-                //Fail if after refresh the session still can expire while being cached.
-                if (newSession.isTimeToRefresh) {
-                    throw internalError("Configuration issue: API Gateway will cache tokens for over their lifetime.")
-                        .withContext("authenticateSession", {updatedSession: newSession.info})
-                }
-
-                tracer.info("session refreshed", {session: newSession.info})
-                const newCookie = newSession.makeCookie()
-                await Promise.all([newSession.create(), session.remove()])
-                response = {
-                    isAuthorized: true,
-                    context: {
-                        new_cookie: newCookie.makeHeaderValue(),
-                        ...newSession.context()
-                    }
-                }
-                tracer.info("done", {session: newSession.info, sessionCookie: newCookie})
-            } else {
-                tracer.info("tokens are valid (not expired)")
-                response = {
-                    isAuthorized: true,
-                    context: {
-                        ...session.context()
-                    }
-                }
-                tracer.info("done", {session: session.info})
-            }
-            return response
         }
     })
 
@@ -165,9 +127,9 @@ export const code = pipeline()
         const start = performance.now()
         await Promise.all([tokens.verifyIdToken(), tokens.verifyAccessToken()])
         Metrics.tokenVerificationLatency(performance.now() - start)
-        const session = sessions.createWithTokens(tokens)
-        const cookie = session.makeCookie()
-        await session.create()
+        const session = await sessions.createWithTokens(tokens)
+        const cookie = session.newSessionCookie()
+        await session.save()
         tracer.info("new session", {
             sessionId: session.sessionId,
             refreshBefore: session.accessExpiresAt,
@@ -217,9 +179,9 @@ export const tokens = pipeline()
                 body: JSON.stringify({
                     access_token: authContext.access_token,
                     id_token: authContext.id_token,
-                    profile: authContext.profile,
-                    access: authContext.access,
-                    expires_at: authContext.expires_at
+                    id_token_json: authContext.id_token_json,
+                    access_token_json: authContext.access_token_json,
+                    expires_at: authContext.access_token_expires_at
                 })
             }
         }

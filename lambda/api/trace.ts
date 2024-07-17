@@ -26,7 +26,7 @@ const defaultApiTracer = new Tracer("api");
  */
 export function traceRequest(options: RequestTracingOptions = {}): MiddlewareFunction<TracedEvent> {
     const requestTracer = options.tracer ?? defaultApiTracer
-    let {tag, options:tracingOptions} = options
+    let {tag, options: tracingOptions} = options
     if (tag === undefined) {
         tag = function (_, ctx) {
             return `${ctx.functionName}.${ctx.functionVersion}`
@@ -41,9 +41,9 @@ export function traceRequest(options: RequestTracingOptions = {}): MiddlewareFun
 
     return async function (this: Middleware<TracedEvent>, e: any, ctx: Context) {
         const tracer = e.tracer ?? requestTracer.startSession(tag(e, ctx), e, ctx, tracingOptions)
+        const event = e as TracedEvent
         try {
-            tracer.info("Started", {event: eventData(e), context: {...ctx}})
-            const event = e as TracedEvent
+            tracer.info("Started", {event: eventData(event), context: {...ctx}})
             //Define property such that it does not show up in JSON serialisation.
             //This is critical in some cases such as Cognito Lambda Triggers which return event (their input) as their response.
             //If returned event contains 'tracer' property then some Lambda Triggers fail.
@@ -65,16 +65,15 @@ export function traceRequest(options: RequestTracingOptions = {}): MiddlewareFun
     }
 
     function eventData(e: any) {
-        if ('requestContext' in e) {
-            //Remove authorizer from API GW request
+        if ('requestContext' in e && e.requestContext !== undefined) {
             const {requestContext: {authorizer, ...requestContext}, ...rest} = e
-            return {
-                ...rest,
-                requestContext: {...requestContext}
-            }
-        } else {
-            return e
+            e = {...rest, requestContext}
         }
+        if ('body' in e && e.body?.length > 200) {
+            const {body, ...rest} = e
+            e = {...rest, body: `<${body?.length} characters>: ${body.substring(0, 100)}...`}
+        }
+        return e
     }
 }
 

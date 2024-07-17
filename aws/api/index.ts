@@ -22,6 +22,8 @@ const config = new aws.ssm.Parameter("api-config", {
         postAuthRedirectUrl: gateway.authCallback,
         //Cache tokens for almost entire lifetime
         authorizerCacheTtl: authorizer.authorizerCacheTtl,
+        //Session valid for 3 days
+        sessionInactivityTimeout: 3 * 24 * 3600
     })
 })
 

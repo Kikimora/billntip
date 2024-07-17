@@ -40,6 +40,7 @@ export class OIDCTokensRepo {
         const config = {
             headers: {'Content-Type': 'application/x-www-form-urlencoded'}
         };
+
         const response = await http.post(tokenEndpoint, params, config)
         switch (response.status) {
             case 200:

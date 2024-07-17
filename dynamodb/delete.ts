@@ -51,14 +51,14 @@ export function deleteItem<T extends TableType<T>, V>(tbl: T, command: DeleteCom
         attributeValues,
         key,
         attr,
-        val
+        ref
     } = prepareCommand(tbl, context, dynamoKey);
     const {condition} = command
 
     return {
         TableName: tbl.name,
         Key: marshall(command.key, MarshalOptions),
-        ConditionExpression: condition?.({key, attr, val}),
+        ConditionExpression: condition?.({key, attr, ref: ref}),
         ReturnValues: command.return,
         ReturnValuesOnConditionCheckFailure: command.returnOnConditionFailure,
         ReturnItemCollectionMetrics: command.returnItemsCollectionMetrics,

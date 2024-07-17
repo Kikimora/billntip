@@ -17,7 +17,7 @@ describe("User", () => {
             locks: locksTable.name
         })
 
-        const cleanup = ['user.test.user@example.com', 'user.test@example.com', 'user.test.anotherUser@example.com', 'user.test.new@example.com']
+        const cleanup = ['user.test.user@example.com', 'user.test@example.com', 'user.test.anotherUser@example.com', 'user.test.new@example.com', 'test', 'test1']
             .map(async function (uname) {
                 try {
                     console.log('Cleanup: ', uname)
@@ -47,7 +47,7 @@ describe("User", () => {
 
     describe("create", () => {
         it("creates new user", async () => {
-            user = await repo.create("test", 'user', [
+            user = await repo.create("user.test@example.com", 'user', [
                 {name: "attr", value: "value"}
             ])
             expect(user.isLocked).toBeFalse()
@@ -56,11 +56,11 @@ describe("User", () => {
             ])
         })
         it("creates locked user if requested", async () => {
-            user = await repo.createLocked("test")
+            user = await repo.createLocked("user.test@example.com")
             expect(user.isLocked).toBeTrue()
         })
         it("creates new user", async () => {
-            user = await repo.create("test", 'user', [
+            user = await repo.create("user.test@example.com", 'user', [
                 {name: "attr", value: "value"}
             ])
             expect(user.isLocked).toBeFalse()

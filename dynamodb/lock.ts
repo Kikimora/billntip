@@ -1,9 +1,9 @@
 import {ConditionalCheckFailedException, CreateTableCommand, DynamoDB} from "@aws-sdk/client-dynamodb";
 import {unmarshall} from "@aws-sdk/util-dynamodb";
 import {TableSchema, table, Type} from "./schema";
-import {update, updateCommand} from "./update";
+import {update,} from "./update";
 import {Just, repeat, retry} from "@app/util";
-import {deleteCommand} from "./delete";
+import {deleteItem} from "./delete";
 import {Tracer, errorWithContext} from "@app/diagnostics";
 import {get} from "./get";
 
@@ -126,7 +126,7 @@ type Lock = Readonly<{
      */
     owner: string
     /**
-     * Lease duration in milliseconds. The lease can be extended for another {@link leaseDuration} by {@link LockStore.bumpLock}
+     * Lease duration in milliseconds. The lease can be extended for another {@link leaseDuration} by {@link LockHandle.bump}
      */
     leaseDuration: number,
 }>
@@ -280,7 +280,7 @@ class LockImpl implements LockHandle {
         return this._lock
     }
 
-    async unlock(): Promise<boolean> {
+    async unlock(clean: boolean = true): Promise<boolean> {
         const {locker} = this
         if (!this.locked) return false
         //Bump task changes lock and interfere with delete, read it after bump task finishes
@@ -289,7 +289,7 @@ class LockImpl implements LockHandle {
         //2. Wait until the most recent bump finishes
         await this.heartbeatTask
         //3. Delete lock ignoring any errors
-        const lock = await locker.deleteLock(this._lock).catch()
+        const lock = clean ? await locker.deleteLock(this._lock).catch() : this._lock
         //4. finally, record a trace
         tracer.info("unlocked", this._lock)
         return this._lock.version === lock.version
@@ -308,7 +308,11 @@ class LockImpl implements LockHandle {
                 this.heartbeatTask = this.bump()
                 await this.heartbeatTask
             } catch (e: any) {
-                heartbeatTracer.info(e.message, this.lock)
+                heartbeatTracer.warn(e.message, this.lock)
+                //there is a problem with lock or we cannot reach lock storage
+                //either way lock is in undefined state and we should release it.
+                //don't delete the lock since it might be taken by other process.
+                await this.unlock(false)
             }
         }
         // noinspection ES6MissingAwait,JSIgnoredPromiseFromCall
@@ -345,15 +349,15 @@ class Locker {
             const lockItem = update(this.table, {
                 key: {pk: lock.pk},
                 return: "ALL_NEW",
-                values: lock,
+                values: {...lock, expiresAt},
                 returnOnConditionFailure: "ALL_OLD",
-                expression: ({attr, val}) => `SET
-                            ${attr.version} = ${val.version},
-                            ${attr.lease_ms} = ${val.leaseDuration},
-                            ${attr.ttl} = ${val(expiresAt)},
-                            ${attr.owner} = ${val.owner}`,
-                condition: ({key, attr, val}) => `
-                           attribute_not_exists(${key.pk}) OR ${attr.version} < ${val.version}`
+                expression: ({attr, ref}) => `SET
+                            ${attr.version} = ${ref('version')},
+                            ${attr.lease_ms} = ${ref('leaseDuration')},
+                            ${attr.ttl} = ${ref('expiresAt')},
+                            ${attr.owner} = ${ref('owner')}`,
+                condition: ({key, attr, ref}) => `
+                           attribute_not_exists(${key.pk}) OR ${attr.version} < ${ref('version')}`
             });
             const {Attributes: attributes} = await this.dynamoDb.updateItem(lockItem)
             if (attributes === undefined) break tryLock;
@@ -382,16 +386,17 @@ class Locker {
     async bump(lock: Lock): Promise<Lock> {
         const {pk, version} = lock
         const expiresAt = lockExpiration(lock)
-        const command = updateCommand(this.table, {
+        const command = update(this.table, {
             key: {pk},
+            values: {expiresAt, version, one: 1},
             return: "ALL_NEW",
-            expression: ({attr, val}) => `SET 
-                            ${attr.version} = ${attr.version} + ${val(1)},
-                            ${attr.ttl} = ${val(expiresAt)}`,
-            condition: ({key, attr, val}) =>
-                `attribute_exists(${key.pk}) AND ${attr.version} = ${val(version)}`
+            expression: ({attr, ref}) => `SET 
+                            ${attr.version} = ${attr.version} + ${ref('one')},
+                            ${attr.ttl} = ${ref('expiresAt')}`,
+            condition: ({key, attr, ref}) =>
+                `attribute_exists(${key.pk}) AND ${attr.version} = ${ref('version')}`
         });
-        const {Attributes: attributes} = await this.dynamoDb.send(command)
+        const {Attributes: attributes} = await this.dynamoDb.updateItem(command)
         if (attributes === undefined) throw new Error("Unexpected condition while bumping a lock version")
         const item = unmarshall(attributes)
         return fromDynamoDb(item)
@@ -399,11 +404,12 @@ class Locker {
 
     async deleteLock(lock: Lock) {
         const {pk, version} = lock
-        const {Attributes: attributes} = await this.dynamoDb.send(deleteCommand(this.table, {
+        const {Attributes: attributes} = await this.dynamoDb.deleteItem(deleteItem(this.table, {
             key: {pk},
+            values: {version},
             return: "ALL_OLD",
-            condition: ({key, attr, val}) =>
-                `attribute_exists(${key.pk}) AND ${attr.version} = ${val(version)}`
+            condition: ({key, attr, ref}) =>
+                `attribute_exists(${key.pk}) AND ${attr.version} = ${ref('version')}`
         }))
         if (attributes === undefined) {
             throw new Error("Unexpected condition while removing a lock")

@@ -62,15 +62,21 @@ export function update<T extends TableType<T>, V>(tbl: T, command: UpdateCommand
         attributeValues,
         key,
         attr,
-        val
+        ref
     } = prepareCommand(tbl, context, dynamoKey);
     const {expression, condition} = command
-    const update = expression?.(new UpdateContext(val, key, attr))
+    const update = expression?.(new UpdateContext(ref, key, attr))
+
+    /**
+     * set: {
+     *     [attr.visit_count]: `if_not_exists(${attr.visit_count}, ${val.start}<--undefined here!!!)`
+     * }
+     */
     return {
         TableName: tbl.name,
         Key: dynamoKey,
         UpdateExpression: update !== undefined ? updateExpression(update) : undefined,
-        ConditionExpression: condition?.({key, attr, val}) ?? undefined,
+        ConditionExpression: condition?.({key, attr, ref: ref}) ?? undefined,
         ExpressionAttributeValues: !_.isEmpty(attributeValues) ? attributeValues : undefined,
         ExpressionAttributeNames: !_.isEmpty(attributeNames) ? attributeNames : undefined,
         ReturnValuesOnConditionCheckFailure: command.returnOnConditionFailure,

@@ -8,7 +8,7 @@ import {createHmac} from "crypto";
 import {jwtDecode} from "jwt-decode";
 import {Static, Type} from "@sinclair/typebox";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
-import _, {die, toCamel} from "@app/util";
+import _, {die, toCamelCase} from "@app/util";
 import {
     badRequestError,
     HttpError,
@@ -31,6 +31,7 @@ const dynamo = new DynamoDB()
 const config = moduleConfig()
     .parameters(AuthOptionsSchema)
     .parameters({dynamodb: Type.Object({users: Type.String()})})
+    .parameters({'users-diagnostics': diagnostics.OptionsSchema})
     .build()
 
 /**
@@ -38,7 +39,9 @@ const config = moduleConfig()
  */
 export function __init() {
     return config.parameters.then(async function (options) {
-        const {dynamodb, oidc, api} = options
+        const {dynamodb, oidc, api, 'users-diagnostics': diagnosticsConfig} = options
+        diagnostics(diagnosticsConfig)
+
         const [{UserPoolClient}, {UserPool}] = await Promise.all([
             cognito.describeUserPoolClient({UserPoolId: oidc.userPoolId, ClientId: api.clientId}),
             cognito.describeUserPool({UserPoolId: oidc.userPoolId})
@@ -71,7 +74,6 @@ Object.defineProperty(UnauthorizedException.prototype, 'statusCode', {
     value: '401', writable: false
 })
 
-diagnostics({triggers: {request: true}})
 
 export const handler = pipeline()
     .handleErrors()
@@ -79,10 +81,16 @@ export const handler = pipeline()
     .withRoutes(Paths)
     .parseJsonBody()
     .do(async function (this: Middleware, e: TracedEvent, ctx: any) {
-        const response = await this.next(e, ctx)
+        let response = await this.next(e, ctx)
         //cleanup AWS noise
         delete response?.$metadata
-        return toCamel(response)
+        if ('statusCode' in response) {
+            if (response.body !== undefined && typeof response.body !== 'string')
+                response.body = toCamelCase(response.body)
+        } else {
+            response = toCamelCase(response)
+        }
+        return response
     })
     .done(async function (req) {
         const {ClientSecret, UserPoolId, ClientId, UsernameAttributes, userRepo, options} = await __init()
@@ -145,40 +153,41 @@ export const handler = pipeline()
             case "GET /user/session": {
                 requireLambdaAuth(req, SessionContextCheck)
                 const session = req.principal;
+                /*
+                This endpoint returns cached session. For this reason `POST /user/session` handler creates new session cookie
+                with a slightly different identifier to bypass cache and force this endpoint return the most recent
+                information.
+                 */
                 return {
                     accessToken: session.access_token,
                     idToken: session.id_token,
-                    profile: session.profile,
-                    expiresAt: session.expires_at
+                    profile: session.id_token_json,
+                    expiresAt: session.access_token_expires_at
                 } satisfies Static<typeof Schemas.GetSessionResponse>
             }
             case 'POST /user/session': {
                 requireLambdaAuth(req, SessionContextCheck)
                 const {sessions, tokens: oidc} = await startAuthOperation(req.requestContext.requestId, options)
-
                 const session = await sessions.fetch(req.principal.id)
                 if (session === null) throw new Error("Cannot find user session")
 
                 const tokens = await oidc.refresh(session.refreshToken)
                 if (tokens === null) throw badRequestError("Cannot refresh session.")
-
-                const newSession = session.withTokens(tokens)
-                await Promise.all([newSession.create(), session.remove()])
-
+                const newSession = await session.updateTokens(tokens).applyUpdates().save()
                 return refreshSessionResponse(newSession)
             }
             case "DELETE /user/session": {
                 requireLambdaAuth(req, SessionContextCheck)
-                const user = req.principal;
+                const principal = req.principal;
                 await cognito.globalSignOut({
-                    AccessToken: user.access_token
+                    AccessToken: principal.access_token
                 })
                 const {sessions, cookies} = await startAuthOperation(req.requestContext.requestId, options)
                 const session = await sessions.fetch(req.principal.id)
                 if (session !== null) {
                     await session.remove()
                 }
-                const cookie = cookies.create(user.id, new Date(0))
+                const cookie = cookies.create(principal.id, new Date(0))
                 return {
                     statusCode: 200,
                     headers: {'Set-Cookie': cookie.makeHeaderValue()},
@@ -188,7 +197,6 @@ export const handler = pipeline()
 //#region SignUp
             case "POST /user": {
                 const {body} = req.parse()
-
 
                 async function signUp(username: string) {
                     const attributes = body.userAttributes ?? [];
@@ -296,14 +304,14 @@ export const handler = pipeline()
 //#region Attributes
             case 'GET /user/attributes': {
                 requireLambdaAuth(req, SessionContextCheck)
-                const username = req.principal.profile['cognito:username']
+                const username = req.principal.id_token_json['cognito:username']
                 const user = await userRepo.fetch(username)
                 return user.attributes satisfies Readonly<Static<typeof req.route.success>>
             }
             case "PUT /user/attributes": {
                 requireLambdaAuth(req, SessionContextCheck)
                 const {body} = req.parse()
-                const username = req.principal.profile['cognito:username']
+                const username = req.principal.id_token_json['cognito:username']
                 let codeDeliveryDetailsList
 
                 const user = await userRepo.fetchLocked(username)
@@ -334,7 +342,7 @@ export const handler = pipeline()
             case 'DELETE /user/attributes': {
                 requireLambdaAuth(req, SessionContextCheck)
                 const {body} = req.parse()
-                const username = req.principal.profile['cognito:username']
+                const username = req.principal.id_token_json['cognito:username']
                 const user = await userRepo.fetchLocked(username)
                 try {
                     const aliasAttributes = userRepo.aliases(body.userAttributesNames)
@@ -460,13 +468,17 @@ export const handler = pipeline()
         async function createNewSession(RefreshToken: string, IdToken: string, AccessToken: string, ExpiresIn: number) {
             const {sessions, tokens: oidc} = await startAuthOperation(req.requestContext.requestId, options)
             const tokens = oidc.createTokens(RefreshToken, IdToken, AccessToken, ExpiresIn)
-            const session = sessions.createWithTokens(tokens)
-            await session.create()
+            await Promise.all([tokens.verifyIdToken(), tokens.verifyAccessToken()])
+            const session = await sessions.createWithTokens(tokens)
+            await session.save()
             return refreshSessionResponse(session);
         }
 
+        /**
+         * Create new session cookie to replace the old and invalidate Authorizer cache.
+         */
         function refreshSessionResponse(session: SessionData) {
-            const cookie = session.makeCookie()
+            const cookie = session.newSessionCookie()
             return {
                 statusCode: 200,
                 headers: {'Set-Cookie': cookie.makeHeaderValue()},

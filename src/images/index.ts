@@ -118,7 +118,7 @@ export const handler = pipeline()
     .withRoutes(Paths)
     .done(async function (req) {
         //TODO: owner can be user or organisation.
-        const owner = req.principal.profile.sub
+        const owner = req.principal.id_token_json.sub
         switch (req.routeKey) {
             case 'GET /uploads': {
                 const {query: {startKey}} = req.parse()

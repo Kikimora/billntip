@@ -40,10 +40,10 @@ describe("Update Command", () => {
         const {input} = updateCommand(Table, {
                 key: {session_id: "SESSION ID"},
                 values: {lockValue: "ABC", newSession: "NEW SESSION"},
-                expression: ({key, attr, val}) =>
-                    `SET ${key.session_id}=${val.newSession}, ${attr.lock}=${val.lockValue}`,
-                condition: ({key: {session_id}, attr: {lock}, val}) =>
-                    `${lock} = ${val.lockValue}, ${session_id} = ${val.session_id}`,
+                expression: ({key, attr, ref}) =>
+                    `SET ${key.session_id}=${ref('newSession')}, ${attr.lock}=${ref('lockValue')}`,
+                condition: ({key: {session_id}, attr: {lock}, ref}) =>
+                    `${lock} = ${ref('lockValue')}, ${session_id} = ${ref('session_id')}`,
             }
         )
         expect(input).toEqual(expect.objectContaining({
@@ -82,10 +82,10 @@ describe("Update Command", () => {
         const {input} = updateCommand(Table, {
                 key: {session_id: "SESSION ID"},
                 values: {age: 30},
-                expression: ({attr, val}) => ({
+                expression: ({attr, ref}) => ({
                     set: {
-                        [attr.age]: val.age,
-                        [attr.name]: val("New Name"),
+                        [attr.age]: ref('age'),
+                        [attr.name]: ref.val("New Name"),
                     }
                 }),
             }
@@ -128,8 +128,8 @@ describe("Put Command", () => {
                 key: {session_id: "SESSION ID"},
                 item: {name: "Hello", age: 10},
                 values: {lockValue: "ABC"},
-                condition: ({key: {session_id}, attr: {lock, name, age}, val}) =>
-                    `${lock} = ${val.lockValue} AND ${session_id} = ${val.session_id} AND ${name}='A' AND ${age}=10`,
+                condition: ({key: {session_id}, attr: {lock, name, age}, ref}) =>
+                    `${lock} = ${ref('lockValue')} AND ${session_id} = ${ref('session_id')} AND ${name}='A' AND ${age}=10`,
             }
         )
         expect(input).toEqual(expect.objectContaining({
@@ -184,8 +184,8 @@ describe("Delete Command", () => {
         const {input} = deleteCommand(Table, {
                 key: {session_id: "SESSION ID"},
                 values: {lockValue: "ABC"},
-                condition: ({key: {session_id}, attr: {lock, name, age}, val}) =>
-                    `${lock} = ${val.lockValue} AND ${session_id} = ${val.session_id} AND ${name}='A' AND ${age}=10`,
+                condition: ({key: {session_id}, attr: {lock, name, age}, ref}) =>
+                    `${lock} = ${ref('lockValue')} AND ${session_id} = ${ref('session_id')} AND ${name}='A' AND ${age}=10`,
             }
         )
         expect(input).toEqual(expect.objectContaining({
@@ -446,29 +446,29 @@ describe("Transact Write Command", () => {
                 key: {session_id: "1"},
                 item: {age: 10, name: "Andrey"},
                 values: {lockValue: "1"},
-                condition: ({key, attr, val}) => `${key.session_id}=1 AND ${attr.lock} = ${val.lockValue}`,
+                condition: ({key, attr, ref}) => `${key.session_id}=1 AND ${attr.lock} = ${ref('lockValue')}`,
                 returnOnConditionFailure: "ALL_OLD",
             })
             .add(Table, {
                 action: "update",
                 key: {session_id: "1"},
                 values: {age: 10, name: "Andrey", lockValue: "1"},
-                expression: ({attr, val}) => `SET ${attr.name} = ${val.name}, ${attr.age} = ${val.age}`,
-                condition: ({attr, val}) => `${attr.lock} = ${val.lockValue}`,
+                expression: ({attr, ref}) => `SET ${attr.name} = ${ref('name')}, ${attr.age} = ${ref('age')}`,
+                condition: ({attr, ref}) => `${attr.lock} = ${ref('lockValue')}`,
                 returnOnConditionFailure: "ALL_OLD",
             })
             .add(AnotherTable, {
                 action: "delete",
                 key: {id: 1},
                 values: {lock: "1"},
-                condition: ({val}) => `${val.lock} = 2`,
+                condition: ({ref}) => `${ref('lock')} = 2`,
                 returnOnConditionFailure: "ALL_OLD",
             })
             .add(Table, {
                 action: "check",
                 key: {session_id: "2"},
                 values: {lock: "1"},
-                condition: ({attr, val}) => `${attr.lock} = ${val.lock}`,
+                condition: ({attr, ref}) => `${attr.lock} = ${ref('lock')}`,
                 returnOnConditionFailure: "ALL_OLD",
             })
             .returnConsumedCapacity("INDEXES")
@@ -557,10 +557,10 @@ describe("Query Command", () => {
     it("expose attributes to expressions", () => {
         const {input} = queryCommand(Table, {
                 values: {session_id: "ABC", sid: "XYZ", name: "Andrey"},
-                keyCondition: ({key, val}) => `${key.session_id} >= ${val.sid}`,
-                filter: ({attr, val}) => `${attr.name} = ${val.name}`,
+                keyCondition: ({key, ref}) => `${key.session_id} >= ${ref('sid')}`,
+                filter: ({attr, ref}) => `${attr.name} = ${ref('name')}`,
                 projection: ({key: {session_id}, attr: {name, age}}) =>
-                    `${session_id}, ${name}, ${age}`,
+                    [session_id, name, age],
             }
         )
         expect(input).toEqual(expect.objectContaining({
@@ -607,9 +607,9 @@ describe("Scan Command", () => {
     it("expose attributes to expressions", () => {
         const {input} = scanCommand(Table, {
                 values: {session_id: "ABC", sid: "XYZ", name: "Andrey"},
-                filter: ({attr, val}) => `${attr.name} = ${val.name}`,
+                filter: ({attr, ref}) => `${attr.name} = ${ref('name')}`,
                 projection: ({key: {session_id}, attr: {name, age}}) =>
-                    `${session_id}, ${name}, ${age}`,
+                    [session_id, name, age],
             }
         )
         expect(input).toEqual(expect.objectContaining({

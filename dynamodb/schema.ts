@@ -1,4 +1,5 @@
 import _ from "lodash";
+import {OptionalKeysOf, RequiredKeysOf} from "type-fest";
 
 /**
  * Describes structure of a DynamoDB record. That is, any entries except [`x:{$array:...}`]{@link DynamoDbArraySchema} or [`x:{$map:...}`]{@link DynamoDbMapSchema}.
@@ -198,40 +199,34 @@ export function attributeGenerator<T>(schema: T, callback?: (path: string[]) => 
 }
 
 /**
- * A shallow mirrors (no nested properties) of the shape of a {@link DynamoDbSchema} with props generating DynamoDb value expressions.
- * @example (MySchema described in the example section [here]{@link DynamoDbSchema})
- * const user = valueGenerator({uid:"Some string", "firstName":"Andrey", "lastName":"Verbin"})
- * console.log(user.uid) //logs :uid
- * console.log(user.firstName) //logs :firstName
- * console.log(user.lastName) //logs :lastName
+ * Helper function to generate property values for the DynamoDB expressions. See {@link valueGenerator} for details.
  */
-export type ValuesGenerator<T> = {
-    [key in KeyOf<T>]-?: string
-} & ((val: any, key?: string) => string)
+export interface ValuesGenerator<T> {
+    /**
+     * Reference named value from values, items or similar part of the DynamoDB expression.
+     * @param key value key
+     */
+    (key: keyof T & string): string
+
+    /**
+     * Create DynamoDB expression variable named `__valN` with a given value. N starts with 1.
+     * @param value value to assign to a new variable.
+     */
+    val(value: any): string
+}
 
 /**
  * Update expression context provides normal context variables (e.g. key, attr, val) as well as helper methods to
  * generate common update expression such as SET #x1=:x1, #x2=:x2 and REMOVE #x1, #x2
  */
-export class UpdateContext<T extends TableSchema, V = unknown> {
+export class UpdateContext<T extends TableSchema, V> {
 
     public readonly ctx: UpdateContext<T, V>
 
-    constructor(readonly val: ValuesGenerator<V>,
+    constructor(readonly ref: ValuesGenerator<V>,
                 readonly key: AttributeGenerator<T['key']>,
                 readonly attr: AttributeGenerator<T['attributes']>) {
         this.ctx = this
-    }
-
-    updateMap(mode: 'create' | 'update',
-              key: keyof AttributeGenerator<T['attributes']>,
-              values: Record<string, unknown>) {
-        return mode == 'update'
-            ? _(values)
-                .mapKeys((_1, name) => this.attr[key](name))
-                .mapValues((value) => this.val(value))
-                .value()
-            : `${this.attr[key]} = ${this.val(values)}`;
     }
 
     set(collection: Partial<TableItem<T>>): string
@@ -242,9 +237,9 @@ export class UpdateContext<T extends TableSchema, V = unknown> {
         if (x === undefined) {
             expressions = _.map(collection, (value, name) => {
                 if (name in this.attr) {
-                    return `${this.attr[name]} = ${this.val(value)}`
+                    return `${this.attr[name]} = ${this.ref(value)}`
                 }
-                return `${this.key[name]} = ${this.val(value)}`
+                return `${this.key[name]} = ${this.ref(value)}`
             })
         } else {
             expressions = _.map(collection, x)
@@ -265,25 +260,18 @@ export class UpdateContext<T extends TableSchema, V = unknown> {
  * @param callback - callback function called every time a value expression is generated.
  */
 export function valueGenerator<T>(values: T, callback: (key: string, value: any) => void): ValuesGenerator<T> {
-    let valIndex = 1;
-    const result = function (val: any, key?: string) {
-        key = key ?? ":__val" + valIndex++;
-        callback(key, val)
-        return key
+    const generator = function (key: keyof T & string) {
+        const valueKey = ':' + key
+        callback(valueKey, values[key])
+        return valueKey
     }
-    if (typeof values === "object") {
-        for (const [key, value] of Object.entries(values as object)) {
-            const dynamoKey = ":" + key
-            Object.defineProperty(result, key, {
-                get: function () {
-                    callback(dynamoKey, value)
-                    return dynamoKey
-                }
-            })
-        }
+    let valIndex = 1
+    generator.val = function (value: any) {
+        const valueKey = ':__val' + valIndex++
+        callback(valueKey, value)
+        return valueKey
     }
-
-    return result as ValuesGenerator<T>
+    return generator
 }
 
 type CollectionAttributes<T> = { item(builder: Builder): AttributeGenerator<T> }
@@ -502,7 +490,7 @@ export function table<Key, Attributes>(name: string,
 export type ExpressionGenerator<T extends TableSchema, V> = (context: {
     key: AttributeGenerator<T['key']>,
     attr: AttributeGenerator<T['attributes']>,
-    val: ValuesGenerator<V>
+    ref: ValuesGenerator<V>
 }) => string
 
 /**
@@ -516,12 +504,11 @@ export type ProjectionGenerator<T extends TableSchema> = (context: {
     attr: AttributeGenerator<T['attributes']>
 }) => string[]
 
-type SetExpression = string | Record<string, string> | (string | Record<string, string>)[];
 /**
  * DynamoDB update expression
  */
 type UpdateExpression = {
-    set?: SetExpression,
+    set?: string | Record<string, string> | (string | Record<string, string>)[],
     add?: string | string[],
     remove?: string | string[],
     delete?: string | string[],
@@ -532,6 +519,7 @@ export function updateExpression(exp: string | string[] | UpdateExpression) {
     if (typeof exp === "string") return exp
     if (Array.isArray(exp))
         return _.compact(exp).join(", ")
+
 
     //deal with UpdateExpression
     const expression = []
@@ -580,7 +568,7 @@ export type UpdateGenerator<T extends TableSchema, V> = (context: UpdateContext<
  */
 export type KeyConditionGenerator<T extends TableSchema, V> = (context: {
     key: AttributeGenerator<T['key']>,
-    val: ValuesGenerator<V>
+    ref: ValuesGenerator<V>
 }) => string
 /**
  * Function generating a DynamoDB query filter condition expression.
@@ -590,5 +578,5 @@ export type KeyConditionGenerator<T extends TableSchema, V> = (context: {
  */
 export type FilterConditionGenerator<T extends TableSchema, V> = (context: {
     attr: AttributeGenerator<T['attributes']>,
-    val: ValuesGenerator<V>
+    ref: ValuesGenerator<V>
 }) => string

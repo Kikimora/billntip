@@ -5,7 +5,7 @@ import {retry} from "@app/util";
 
 beforeAll(async () => {
     try {
-        await createLockStore("Locks")
+        await createLockStore("TestLocks")
     } catch (e) {
         //ignore
     }
@@ -16,7 +16,7 @@ describe("DynamoDb locks", () => {
     let store: LockStore
     let handles: LockHandle[] = []
     beforeAll(() => {
-        store = makeLockStore("Locks")
+        store = makeLockStore("TestLocks")
     })
 
     afterAll(() => {

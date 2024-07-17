@@ -11,7 +11,7 @@ import {
 import {createHmac} from 'crypto';
 import {TokenEndpointResponse} from "@src/authorizer/oidc_tokens";
 import {toSeconds} from "@app/util";
-import shortUUID from "short-uuid";
+import shortUUID, {uuid} from "short-uuid";
 import {Profile, SessionContext} from "@src/authorizer/types";
 import * as jwt from "jsonwebtoken";
 import _ from "lodash";
@@ -158,7 +158,10 @@ interface TestSessionOptions {
 
 export function newSession(username: string, options?: TestSessionOptions): SessionContext {
     const private_key = 'private_key';
-    const access = {};
+    const originJti = uuid()
+    const access = {
+        "origin_jti": originJti
+    };
     const accessToken = jwt.sign(access, private_key, {algorithm: 'HS256'});
     const expiresIn = 3600;
     const profile = _.defaults(options?.profile, {
@@ -174,14 +177,17 @@ export function newSession(username: string, options?: TestSessionOptions): Sess
         "iat": 1,
         "iss": "",
         "jti": "",
+        "origin_jti": originJti
     });
     const idToken = jwt.sign(profile, private_key, {algorithm: 'HS256'});
     return {
         id: "SessionId:123",
-        access,
+        updated_at: Date.now(),
+        access_token_json: access,
         access_token: accessToken,
-        profile,
+        id_token_json: profile,
         id_token: idToken,
-        expires_at: Date.now() / 1000 + expiresIn,
+        access_token_expires_at: Date.now() / 1000 + expiresIn,
+        session_expires_at: Date.now() / 1000 + expiresIn
     } satisfies SessionContext;
 }

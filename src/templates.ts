@@ -8,6 +8,7 @@ const s3 = new S3()
 export const TemplateRepoOptions = Type.Object({
     bucket: Type.String(),
     prefix: Type.Optional(Type.String()),
+    cache: Type.Optional(Type.Boolean()),
 })
 
 export type TemplateRepoOptions = Static<typeof TemplateRepoOptions>
@@ -15,29 +16,40 @@ export type TemplateRepoOptions = Static<typeof TemplateRepoOptions>
 export class TemplateRepo {
     bucket: string
     prefix: string
-    _cache: LRUCache<string, _.TemplateExecutor>
+    _cache?: LRUCache<string, _.TemplateExecutor>
 
     constructor(options: TemplateRepoOptions) {
         this.bucket = options.bucket
         this.prefix = options.prefix ?? "templates"
-        this._cache = new LRUCache({
-            ttl: 300,
-            ttlAutopurge: false,
-            max: 1000
-        })
+        const cache = options.cache ?? true
+        if (cache) {
+            this._cache = new LRUCache({
+                ttl: 300,
+                ttlAutopurge: false,
+                max: 1000
+            })
+        }
     }
 
     async fetchTemplate(name: string) {
-        let template = this._cache.get(name)
-        if (template === undefined) {
+        if (this._cache !== undefined) {
+            let template = this._cache.get(name)
+            if (template === undefined) {
+                template = await fetchTemplate(this.bucket, this.prefix)
+            }
+            this._cache.set(name, template)
+            return template
+        } else {
+            return await fetchTemplate(this.bucket, this.prefix)
+        }
+
+        async function fetchTemplate(bucket: string, prefix: string) {
             const {Body: body} = await s3.getObject({
-                Bucket: this.bucket,
-                Key: _([this.prefix, name]).compact().join('/')
+                Bucket: bucket,
+                Key: _([prefix, name]).compact().join('/')
             })
             const templateBody = await body?.transformToString()
-            template = _.template(templateBody)
+            return _.template(templateBody)
         }
-        this._cache.set(name, template)
-        return template
     }
 }

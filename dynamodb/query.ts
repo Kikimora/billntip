@@ -2,10 +2,8 @@ import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
 import {
     TableType,
-    Schema,
-    ExpressionGenerator,
     FilterConditionGenerator,
-    KeyConditionGenerator, TableSchema, TableKey
+    KeyConditionGenerator, TableSchema, TableKey, ProjectionGenerator
 } from "./schema";
 import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
@@ -25,15 +23,15 @@ interface QueryCommand<T extends TableSchema, V> {
     /**
      * Function generating {@link ddb.QueryInput.KeyConditionExpression}
      */
-    keyCondition?: KeyConditionGenerator<T, V>
+    keyCondition?: KeyConditionGenerator<T, Partial<V>>
     /**
      * Function generating {@link ddb.QueryInput.FilterExpression}
      */
-    filter?: FilterConditionGenerator<T, V>
+    filter?: FilterConditionGenerator<T, Partial<V>>
     /**
      * Function generating {@link ddb.QueryInput.ProjectionExpression}
      */
-    projection?: ExpressionGenerator<T, never>
+    projection?: ProjectionGenerator<T>
     /**
      * See {@link ddb.QueryInput.Select}
      */
@@ -66,23 +64,23 @@ interface QueryCommand<T extends TableSchema, V> {
  * @param command - command parameters
  */
 export function query<T extends TableType<T>, V>(tbl: T, command: QueryCommand<T, V>): ddb.QueryCommandInput {
-    const context = command.values
+    const context = {...command.values}
     const {
         attributeNames,
         attributeValues,
         key,
         attr,
-        val
-    } = prepareCommand(tbl, context as NonNullable<V>)
+        ref
+    } = prepareCommand(tbl, context)
     const {keyCondition, filter, projection} = command
 
-    let filterExpression = filter?.({attr, val});
+    let filterExpression = filter?.({attr, ref: ref});
     if (filterExpression?.trim() === '') filterExpression = undefined
     return {
         TableName: tbl.name,
         IndexName: command.indexName,
-        KeyConditionExpression: keyCondition?.({key, val}),
-        ProjectionExpression: projection?.({key, attr, val}),
+        KeyConditionExpression: keyCondition?.({key, ref: ref}),
+        ProjectionExpression: projection?.({key, attr}).join(', '),
         FilterExpression: filterExpression,
         Select: command.select,
         Limit: command.limit,

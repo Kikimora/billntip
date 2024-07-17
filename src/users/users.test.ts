@@ -9,6 +9,9 @@ import UserRepo from "./user";
 import FunctionPropertyNames = jest.FunctionPropertyNames;
 import {resources} from "@app/test/util";
 import {newSession} from "@app/test/cognito";
+import {CognitoJwtVerifier} from "aws-jwt-verify";
+import {when} from "jest-when";
+import {CognitoIdTokenPayload} from "aws-jwt-verify/jwt-model";
 
 diagnostics({
     triggers: {request: true}
@@ -260,7 +263,7 @@ describe("Session", () => {
 
     beforeEach(async () => {
         setupConfirmSignup({UserAttributes: [{Name: 'email', Value: email}, {Name: 'email_verified', Value: 'true'}]})
-        await confirmSignup({username})
+        await confirmSignup({username, confirmationCode: "123456"})
     })
 
     describe("POST /user/signin", () => {
@@ -275,7 +278,7 @@ describe("Session", () => {
             expect(response).toEqual(expect.objectContaining({
                 statusCode: 200,
                 headers: {
-                    'set-Cookie': expect.stringMatching(/SID=.*; Path=\/; Expires=.*; HttpOnly; Secure; Partitioned; SameSite=None/)
+                    'Set-Cookie': expect.stringMatching(/SID=.*; Path=\/; Expires=.*; HttpOnly; Secure; Partitioned; SameSite=None/)
                 },
                 body: {
                     authenticationResult: {
@@ -335,7 +338,7 @@ describe("Session", () => {
             expect(response).toEqual(expect.objectContaining({
                 statusCode: 200,
                 headers: {
-                    'set-Cookie': expect.stringMatching(/SID=.*; Path=\/; Expires=.*; HttpOnly; Secure; Partitioned; SameSite=None/)
+                    'Set-Cookie': expect.stringMatching(/SID=.*; Path=\/; Expires=.*; HttpOnly; Secure; Partitioned; SameSite=None/)
                 },
                 body: {
                     authenticationResult: {
@@ -391,12 +394,15 @@ function setupAuthResponse(method: FunctionPropertyNames<Required<CognitoIdentit
                            email: string,
                            profile?: any) {
     const session = newSession(username, {email, profile})
+    const verify = jest.spyOn(CognitoJwtVerifier.prototype, 'verify')
+    when(verify).calledWith(session.id_token).mockReturnValue(session.id_token_json as any)
+    when(verify).calledWith(session.access_token).mockReturnValue(session.access_token_json as any)
 
     const mock = jest.spyOn(CognitoIdentityProvider.prototype, method)
         .mockReturnValue({
             AuthenticationResult: {
                 AccessToken: session.access_token,
-                ExpiresIn: session.profile.exp,
+                ExpiresIn: session.id_token_json.exp,
                 RefreshToken: "Cognito Refresh Token",
                 IdToken: session.id_token
             }

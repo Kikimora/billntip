@@ -1,14 +1,21 @@
-import {Type} from "@sinclair/typebox";
-import mangopay, {base, kycDocument} from "mangopay2-nodejs-sdk";
-import Store, {InviteRequest, MemberItem, MembershipFilters, OrgRequest} from "./store";
-import {badRequestError, internalError, notFoundError} from "@app/lambda";
 import _ from "lodash";
 import {intervalToDuration} from "date-fns";
+import {Type} from "@sinclair/typebox";
 import {Value} from "@sinclair/typebox/value";
+import mangopay, {bankAccount, base, CountryISO, kycDocument} from "mangopay2-nodejs-sdk";
+import {badRequestError, internalError, notFoundError} from "@app/lambda";
+import {TraceAttributes} from "@app/diagnostics";
+import {toCamelCase} from "@app/util";
 import {UserAttribute} from "@src/users/attributes";
-import {type TransactionsQuery} from "@src/billntip/schemas";
-import {die, toCamel} from "@app/util";
-import KycDocumentData = kycDocument.KycDocumentData;
+import Store, {InviteRequest, MemberItem, MembershipFilters, OrgRequest, RegisteredMemberItem} from "./store";
+import {
+    type BankAccount,
+    type BankAccountsQuery,
+    CreateBankAccountRequest,
+    KYCProcessSchema,
+    type TransactionsQuery
+} from "./schemas";
+import map, {Mapping} from "@app/lambda/mapper";
 
 interface RegulatoryData {
     Id: string
@@ -20,7 +27,7 @@ interface RegulatoryData {
 }
 
 interface RegulatoryDataProvider {
-    getRegulatory: MethodOverload<string, RegulatoryData>;
+    getRegulatory: base.MethodOverload<string, RegulatoryData>;
 }
 
 const RecipientSchema = Type.Object({
@@ -121,7 +128,7 @@ export class MemberRepo {
     }
 }
 
-function toKycProcess(doc: KycDocumentData) {
+function toKycProcess(doc: kycDocument.KycDocumentData) {
     return {
         process_id: doc.Id,
         created_at: doc.CreationDate,
@@ -132,13 +139,33 @@ function toKycProcess(doc: KycDocumentData) {
     }
 }
 
-function mangopayError(e: any, context: string, attributes: TraceAttributes) {
-    return internalError(e.Message ?? "Unexpected error").withContext(context, {
+//path, value, message
+
+function mangopayError(e: any, name: string, attributes: TraceAttributes, mapping?: Mapping) {
+    const value = {
         ...attributes,
-        errors: e.errors,
-        type: e.Type,
+        message: e.Message ?? "Unexpected error.",
+        errors: e.errors ?? {},
+        type: e.Type ?? "",
         id: e.Id
-    });
+    }
+
+    if (value.type === 'param_error') {
+        let [path, message] = Object.entries(value.errors)[0]
+
+        const propertyMapping = _.find(mapping, function (mapping) {
+            const [p1] = mapping
+            return p1[p1.length - 1] === path
+        })
+
+        if (propertyMapping !== undefined) {
+            path = '/' + propertyMapping[1].join('/')
+        }
+
+        return badRequestError(message ?? value.message, {path}).withContext({name, value})
+    }
+
+    return internalError(value.message, value.errors).withContext({name, value});
 }
 
 export class Member {
@@ -165,9 +192,22 @@ export class Member {
         return this.member = member
     }
 
+    /**
+     * Assert member exists and has all attributes.
+     */
     private requireMember() {
         if (this.member === undefined) throw internalError("Unexpected error: member data is not loaded.")
         return this.member
+    }
+
+    /**
+     * Assert member exists and has all attributes.
+     */
+    private requireRegisteredMember(): RegisteredMemberItem {
+        const {mangopayUid, walletId} = this.requireMember()
+        if (mangopayUid === undefined) throw internalError("User not registered.")
+        if (walletId === undefined) throw internalError("User does not have a wallet.")
+        return this.member as RegisteredMemberItem
     }
 
     /**
@@ -286,8 +326,8 @@ export class Member {
             nationality: nationality,
             tos: tosJSON
         } = attributes
-        const address = JSON.parse(addressJSON ?? "")
-        const tos = JSON.parse(tosJSON)
+        const address = JSON.parse(addressJSON ?? "{}")
+        const tos = JSON.parse(tosJSON ?? "{}")
         const birthdate = Date.parse(birthdateStr) / 1000
         const interval = intervalToDuration({
             start: birthdate,
@@ -347,9 +387,7 @@ export class Member {
     }
 
     async fetchWallet() {
-        const member = this.requireMember()
-        if (member.walletId === undefined)
-            throw internalError("User does not have a wallet").withContext("fetchWallet", {member})
+        const member = this.requireRegisteredMember()
         const response = await paymentApi.Wallets.get(member.walletId)
             .catch(function (e) {
                 throw mangopayError(e, "fetchWallet", {member})
@@ -363,23 +401,23 @@ export class Member {
     }
 
     async fetchUser() {
-        const {mangopayUid} = this.requireMember()
-        if (mangopayUid === undefined) throw internalError("User not registered")
+        const {mangopayUid} = this.requireRegisteredMember()
         const response = await paymentApi.Users.get(mangopayUid)
             .catch(function (e) {
                 throw mangopayError(e, "fetchUser", {mangopayUid})
-            })
+            }) as mangopay.models.UserNatural
         return {
             id: this.username,
             created_at: response.CreationDate,
             kycLevel: response.KYCLevel,
-            category: response.UserCategory
+            category: response.UserCategory,
+            proofOfIdentity: response.ProofOfIdentity !== null ? response.ProofOfIdentity : undefined,
+            proofOfAddress: response.ProofOfAddress !== null ? response.ProofOfAddress : undefined,
         }
     }
 
     async fetchRegulatoryStatus() {
-        const {mangopayUid} = this.requireMember()
-        if (mangopayUid === undefined) throw internalError("User not registered")
+        const {mangopayUid} = this.requireRegisteredMember()
         const users = paymentApi.Users as unknown as RegulatoryDataProvider;
         const response = await users.getRegulatory(mangopayUid)
             .catch(function (e) {
@@ -387,7 +425,7 @@ export class Member {
             })
         return {
             action_code: response.ActionCode,
-            scope: {
+            blocked: {
                 inflows: response.ScopeBlocked.Inflows,
                 outflows: response.ScopeBlocked.Outflows,
             }
@@ -395,8 +433,7 @@ export class Member {
     }
 
     async transactions(query: TransactionsQuery) {
-        const member = this.requireMember()
-        if (member.walletId === undefined) throw internalError("User does not have a wallet")
+        const member = this.requireRegisteredMember()
 
         function parseTag(tag: string) {
             try {
@@ -429,8 +466,8 @@ export class Member {
     }
 
     async startVerification(pages: string[]) {
-        const {mangopayUid} = this.requireMember()
-        if (mangopayUid === undefined) throw internalError("User not registered")
+        const member = this.requireRegisteredMember()
+        const {mangopayUid} = member
 
         let doc = await paymentApi.Users.createKycDocument(mangopayUid, {Type: "IDENTITY_PROOF"}).catch(function e() {
             throw mangopayError(e, "createKycDocument", {mangopayUid})
@@ -451,33 +488,106 @@ export class Member {
             throw mangopayError(e, "updateKycDocument", {doc, updateDocRequest})
         })
 
+        member.kycDocumentId = doc.Id
+        await this.save()
+
         return toKycProcess(doc);
     }
 
-    async fetchVerificationStatus() {
-        const {mangopayUid} = this.requireMember()
-        if (mangopayUid === undefined) throw internalError("User not registered")
-
-        const processId = await paymentApi.Users.get(mangopayUid).catch(function (e) {
-            throw mangopayError(e, "fetchProcessId", {mangopayUid})
-        })
-            .then(function ({ProofOfIdentity}) {
-                if (ProofOfIdentity === null) throw notFoundError().withContext("fetchProcessId", {mangopayUid})
-                return ProofOfIdentity
+    async fetchVerificationStatus(): Promise<Partial<KYCProcessSchema>> {
+        let {mangopayUid, kycDocumentId} = this.requireRegisteredMember()
+        if (kycDocumentId === undefined) {
+            kycDocumentId = await paymentApi.Users.get(mangopayUid).catch(function (e) {
+                throw mangopayError(e, "fetchProcessId", {mangopayUid})
+            }).then(function ({ProofOfIdentity}) {
+                return ProofOfIdentity === null ? undefined : ProofOfIdentity
             })
-
-        const doc = await paymentApi.KycDocuments.get(processId).catch(function (e) {
-            throw mangopayError(e, "fetchVerificationStatus", {mangopayUid, processId})
+        }
+        if (kycDocumentId === undefined) {
+            return {
+                status: "NOT_STARTED"
+            }
+        }
+        const doc = await paymentApi.KycDocuments.get(kycDocumentId).catch(function (e) {
+            throw mangopayError(e, "fetchVerificationStatus", {mangopayUid, kycDocumentId})
         })
         return toKycProcess(doc)
     }
+
+    async fetchBankAccounts(query: BankAccountsQuery): Promise<BankAccount[]> {
+        const {mangopayUid} = this.requireRegisteredMember()
+        const request = {parameters: toQuery(query),};
+        const accounts = await paymentApi.Users.getBankAccounts(mangopayUid, request).catch(function (e) {
+            throw mangopayError(e, "fetchBankAccounts", {mangopayUid, query}, bankAccountMapper.mapping)
+        })
+        return accounts.map(x => bankAccountMapper.mapDirect(x) as BankAccount)
+    }
+
+    async fetchBankAccount(bankAccountId: string): Promise<BankAccount> {
+        const {mangopayUid} = this.requireRegisteredMember()
+        const account = await paymentApi.Users.getBankAccount(mangopayUid, bankAccountId).catch(function (e) {
+            throw mangopayError(e, "fetchBankAccount", {mangopayUid, bankAccountId}, bankAccountMapper.mapping)
+        })
+        return bankAccountMapper.mapDirect(account) as BankAccount
+    }
+
+    async deactivateBankAccount(bankAccountId: string): Promise<BankAccount> {
+        const {mangopayUid} = this.requireRegisteredMember()
+        const account = await paymentApi.Users.deactivateBankAccount(mangopayUid, bankAccountId).catch(function (e) {
+            throw mangopayError(e, "deactivateBankAccount", {mangopayUid, bankAccountId}, bankAccountMapper.mapping)
+        })
+        return bankAccountMapper.mapDirect(account) as BankAccount
+    }
+
+    async createBankAccount(body: CreateBankAccountRequest): Promise<BankAccount> {
+        const {mangopayUid} = this.requireRegisteredMember()
+        const mangoPayRequest = bankAccountRequestMapper.mapInverse(body);
+        const account = await paymentApi.Users.createBankAccount(mangopayUid, mangoPayRequest as any).catch(function (e) {
+            throw mangopayError(e, "createBankAccount", {
+                mangopayUid,
+                mangoPayRequest
+            }, bankAccountRequestMapper.mapping)
+        })
+        return bankAccountMapper.mapDirect(account) as BankAccount
+    }
 }
 
-import MethodOverload = base.MethodOverload;
-import {TraceAttributes} from "@app/diagnostics";
+const bankAccountRequestMapping: Mapping<bankAccount.CreationDetails, CreateBankAccountRequest> = [
+    [['OwnerName'], ['owner', 'name']],
+    [['OwnerAddress', 'AddressLine1'], ['owner', 'address_line1']],
+    [['OwnerAddress', 'AddressLine2'], ['owner', 'address_line2']],
+    [['OwnerAddress', 'PostalCode'], ['owner', 'zip']],
+    [['OwnerAddress', 'City'], ['owner', 'city']],
+    [['OwnerAddress', 'Country'], ['owner', 'country']],
+    [['OwnerAddress', 'Region'], ['owner', 'region']],
+
+    [['Type'], ['details', 'type']],
+    [['IBAN'], ['details', 'iban']],
+    [['AccountNumber'], ['details', 'account_number']],
+    [['BIC'], ['details', 'bic']],
+    [['BankName'], ['details', 'bank_name']],
+    [['ABA'], ['details', 'aba']],
+    [['InstitutionNumber'], ['details', 'institution_number']],
+    [['BranchCode'], ['details', 'branch_code']],
+    [['SortCode'], ['details', 'sort_code']],
+    [['DepositAccountType'], ['details', 'deposit_type']],
+    [['Country'], ['details', 'country']],
+]
+
+const bankAccountMapping: Mapping<bankAccount.Data, BankAccount> = [
+    [['Id'], ['id']],
+    [['Active'], ['active']],
+    [['CreationDate'], ['created_at']],
+    ...bankAccountRequestMapping
+]
+const bankAccountMapper = map.object(bankAccountMapping)
+const bankAccountRequestMapper = map.object(bankAccountRequestMapping)
 
 
-function toQuery(query: Record<string, string | number>): (mangopay.base.FilterOptions & mangopay.base.PaginationOptions) {
+/**
+ * Generic utility to map queries to MangoPay queries.
+ */
+function toQuery(query: Record<string, string | number | boolean>): (mangopay.base.FilterOptions & mangopay.base.PaginationOptions) {
     return _(query)
         .mapKeys(function (value, key) {
             switch (key) {
@@ -488,7 +598,7 @@ function toQuery(query: Record<string, string | number>): (mangopay.base.FilterO
                 case 'per_page':
                     return 'Per_Page'
                 default:
-                    return toCamel(key)
+                    return toCamelCase(key)
             }
         })
         .mapValues(function (value, key) {
@@ -496,7 +606,7 @@ function toQuery(query: Record<string, string | number>): (mangopay.base.FilterO
                 case 'Sort':
                     if (typeof value === 'string') {
                         const [column, dir] = value.split(':')
-                        return `${toCamel(column)}:${dir}`
+                        return `${toCamelCase(column)}:${dir}`
                     }
                     return value
                 default:
@@ -505,3 +615,5 @@ function toQuery(query: Record<string, string | number>): (mangopay.base.FilterO
         })
         .value()
 }
+
+

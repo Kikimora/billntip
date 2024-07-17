@@ -1,6 +1,6 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
-import {TableType, ExpressionGenerator, FilterConditionGenerator, TableSchema, TableKey} from "./schema";
+import {FilterConditionGenerator, ProjectionGenerator, TableKey, TableSchema, TableType} from "./schema";
 import {MarshalOptions, prepareCommand} from "./util";
 import _ from "lodash";
 
@@ -19,11 +19,11 @@ interface ScanCommand<T extends TableSchema, V> {
     /**
      * Function generating {@link ddb.ScanInput.FilterExpression}
      */
-    filter?: FilterConditionGenerator<T, V>
+    filter?: FilterConditionGenerator<T, Partial<V>>
     /**
      * Function generating {@link ddb.ScanInput.ProjectionExpression}
      */
-    projection?: ExpressionGenerator<T, never>
+    projection?: ProjectionGenerator<T>
     /**
      * See {@link ddb.ScanInput.Select}
      */
@@ -65,15 +65,15 @@ export function scan<T extends TableType<T>, V>(tbl: T, command: ScanCommand<T, 
         attributeValues,
         key,
         attr,
-        val
-    } = prepareCommand(tbl, command.values as NonNullable<V>);
+        ref
+    } = prepareCommand(tbl, {...command.values});
     const {filter, projection} = command
 
     return {
         TableName: tbl.name,
         IndexName: command.indexName,
-        ProjectionExpression: projection?.({key, attr, val}),
-        FilterExpression: filter?.({attr, val}),
+        ProjectionExpression: projection?.({key, attr}).join(', '),
+        FilterExpression: filter?.({attr, ref: ref}),
         Select: command.select,
         Limit: command.limit,
         ExclusiveStartKey: command.exclusiveStartKey !== undefined ? marshall(command.exclusiveStartKey, MarshalOptions) : undefined,

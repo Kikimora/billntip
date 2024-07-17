@@ -55,14 +55,14 @@ export function put<T extends TableType<T>, V>(tbl: T, command: PutCommand<T, V>
         attributeValues,
         key,
         attr,
-        val
+        ref
     } = prepareCommand(tbl, context, dynamoItem);
     const {condition} = command
 
     return {
         TableName: tbl.name,
         Item: dynamoItem,
-        ConditionExpression: condition?.({key, attr, val}) ?? undefined,
+        ConditionExpression: condition?.({key, attr, ref: ref}) ?? undefined,
         ExpressionAttributeValues: !_.isEmpty(attributeValues) ? attributeValues : undefined,
         ExpressionAttributeNames: !_.isEmpty(attributeNames) ? attributeNames : undefined,
         ReturnValues: command.return,

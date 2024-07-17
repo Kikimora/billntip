@@ -11,7 +11,7 @@ import {
 } from '@app/lambda'
 import diagnostics, {errorWithContext, TracingOptions} from "@app/diagnostics";
 import {SessionContext, SessionContextSchema} from "@src/authorizer/types";
-import {toCamel} from "@app/util";
+import {toCamelCase} from "@app/util";
 import {keyToToken, tokenToKey, toMembership} from "./util";
 import Routes from "./bill-paths";
 import Store, {InviteRequest} from "./store";
@@ -54,7 +54,7 @@ export function __init() {
 
         const templates = new TemplateRepo({
             bucket: s3.bucket,
-            prefix: "templates"
+            cache: process.env.ENV === 'prod'
         })
 
         const store = new Store({table: dynamodb.data})
@@ -71,7 +71,7 @@ export function __init() {
 }
 
 function principalGroups(s: SessionContext) {
-    const user = s.profile
+    const user = s.id_token_json
     const groups = user['cognito:groups'] ?? []
     const isBusiness = _.includes(groups, 'business');
     const isAdmin = _.includes(groups, 'admin');
@@ -88,7 +88,7 @@ export const handler = pipeline()
         const response = await this.next(e, ctx)
         //cleanup AWS noise
         delete response?.$metadata
-        return toCamel(response)
+        return toCamelCase(response)
     })
     .do(async function (this: Middleware, req: TracedEvent & LambdaAuthorizedRequest<SessionContext>, ctx: Context) {
         const {isBusiness, isAdmin, groups} = principalGroups(req.principal)
@@ -113,7 +113,7 @@ export const handler = pipeline()
             }
             case 'POST /bill/{orgId}/member': {
                 const {body, path: {orgId}} = req.parse()
-                const inviterUsername = req.principal.profile['cognito:username']
+                const inviterUsername = req.principal.id_token_json['cognito:username']
                 const inviteeEmail = body.email;
 
                 await assertOrgAdmin(req.principal, orgId)
@@ -203,7 +203,7 @@ export const handler = pipeline()
         async function assertOrgAdmin(sessions: SessionContext, orgId: string) {
             const {isBusiness, isAdmin, groups} = principalGroups(sessions)
             if (isAdmin) return
-            const username = sessions.profile['cognito:username'];
+            const username = sessions.id_token_json['cognito:username'];
             const member = await store.fetchMembership(username, orgId)
             if (!isBusiness || member?.role != 'admin') {
                 throw accessDeniedError().withContext('assertOrgAdmin', {username, orgId, groups})

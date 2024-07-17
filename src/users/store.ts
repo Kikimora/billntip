@@ -176,7 +176,8 @@ export default class UserStore {
         const {db} = this
         username = `U#` + username
         const query = ddb.query(this.attributes, {
-            keyCondition: ({key, val}) => `${key.pk} = ${val(username)}`
+            values: {username},
+            keyCondition: ({key, ref}) => `${key.pk} = ${ref('username')}`
         })
 
         const {Items: items} = await db.query(query)
@@ -323,15 +324,16 @@ function refreshAliasRecord(username: string, name: string, alias: string, verif
     return {
         action: "update",
         key: aliasKey(alias),
-        expression: ({attr, val}) => ({
+        values: {username, verified, name},
+        expression: ({attr, ref}) => ({
             set: {
-                [attr.username]: val(username),
-                [attr.verified]: val(verified),
-                [attr.name]: val(name),
+                [attr.username]: ref('username'),
+                [attr.verified]: ref('verified'),
+                [attr.name]: ref('name'),
             }
         }),
-        condition: ({key, attr, val}) =>
-            `attribute_not_exists(${key.pk}) OR (${attr.username} = ${val(username)} AND ${attr.name} = ${val(name)})`,
+        condition: ({key, attr, ref}) =>
+            `attribute_not_exists(${key.pk}) OR (${attr.username} = ${ref('username')} AND ${attr.name} = ${ref('name')})`,
         returnOnConditionFailure: "ALL_OLD"
     }
 }
@@ -340,7 +342,7 @@ function dropAliasRecord(username: string, alias: string): ddb.TransactWriteItem
     return {
         action: "delete",
         key: aliasKey(alias),
-        condition: ({key, attr, val}) => `attribute_not_exists(${key.pk}) OR ${attr.username} = ${val(username)}`,
+        condition: ({key, attr, ref}) => `attribute_not_exists(${key.pk}) OR ${attr.username} = ${ref.val(username)}`,
         returnOnConditionFailure: "ALL_OLD"
     }
 }
@@ -357,9 +359,10 @@ function createUser(username: string): ddb.TransactWriteItem<AttributesTable> {
     return {
         action: "update",
         key: userKey(username),
-        expression: ({attr, val}) => ({
+        values: {false: false},
+        expression: ({attr, ref}) => ({
             set: {
-                [attr.deleted]: val(false)
+                [attr.deleted]: ref('false')
             },
         }),
         condition: ({key}) => `attribute_not_exists(${key.pk}) AND attribute_not_exists(${key.sk})`
@@ -370,8 +373,9 @@ function updateUser(username: string, deleted: boolean): ddb.TransactWriteItem<A
     return {
         action: "update",
         key: userKey(username),
-        expression: ({attr, val}) => ({
-            set: `${attr.deleted} = ${val(deleted)}`,
+        values: {deleted},
+        expression: ({attr, ref}) => ({
+            set: `${attr.deleted} = ${ref('deleted')}`,
         }),
         condition: ({key}) => `attribute_exists(${key.pk}) AND attribute_exists(${key.sk})`
     }

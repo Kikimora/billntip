@@ -27,7 +27,8 @@ const config = moduleConfig()
 export async function __init() {
     return config.parameters.then(function ({s3, 'cognito-triggers': diag}) {
         const templates = new TemplateRepo({
-            bucket: s3.bucket
+            bucket: s3.bucket,
+            cache: process.env.ENV === 'prod'
         })
         diagnostics(diag as TracingOptions)
         return {templates}
@@ -140,7 +141,7 @@ export const trigger = async function (event: BaseTriggerEvent<any> & TracedEven
         //Problem: [AWS Cognito - Custom email message with Lambda trigger being overwritten](https://stackoverflow.com/questions/61514305/aws-cognito-custom-email-message-with-lambda-trigger-being-overwritten)
         //>
         //> For anyone finding this, I was able to find the answer. When using the CustomMessage_AdminCreateUser
-        //> event, cognito will silently throw an error if you use event.userName in the template. Instead
+        //> event, cognito will silently throw an error if you use event.userName in the template. Instead,
         //> use event.request.usernameParameter and it will work
         let context = {
             metadata: {

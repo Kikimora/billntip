@@ -20,13 +20,13 @@ export class SessionCookieRepo {
 
 export class SessionCookie {
 
-    constructor(readonly id: string, private readonly ctx: OperationContext, public readonly expiration?: Date) {
+    constructor(readonly value: string, private readonly ctx: OperationContext, public readonly expiration?: Date) {
     }
 
     makeHeaderValue() {
         const {cookieName, sameSite} = this.ctx
 
-        return cookie.serialize(cookieName, this.id, {
+        return cookie.serialize(cookieName, this.value, {
             expires: this.expiration,
             secure: true,
             httpOnly: true,

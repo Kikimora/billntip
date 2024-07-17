@@ -1,55 +1,16 @@
-import {Static, Type, Type as T} from '@sinclair/typebox';
+import {Type, Type as T} from '@sinclair/typebox';
 import {RouteMap} from "@app/lambda";
 import {
+    BankAccountsQuery, OrgId,
     MemberSchema,
-    PaymentGatewayQuery,
     TransactionsQuery,
     TransferSchema,
-    TxStatus,
-    TxType,
-    WalletSchema
+    WalletSchema, KYCProcessSchema, BankAccount, CreateBankAccountRequest, AmountSchema
 } from "./schemas";
 
-const Id = {
-    id: T.String({description: "Organisation identifier"})
-}
-const KYCProcessSchema = Type.Object({
-    process_id: Type.String({description: "Verification process identifier."}),
-    created_at: Type.Number({
-        description: "The date and time at which the process has started.",
-        examples: [1716814592]
-    }),
-    processed_at: Type.Number({
-        description: "The date and time at which submission processed by the KYC team.",
-        examples: [1716814592]
-    }),
-    status: Type.Union([
-        Type.Literal("CREATED"),
-        Type.Literal("VALIDATION_ASKED"),
-        Type.Literal("VALIDATED"),
-        Type.Literal("REFUSED"),
-        Type.Literal("OUT_OF_DATE")
-    ]),
-    refuse_reason: Type.Union([
-        Type.Literal("DOCUMENT_DO_NOT_MATCH_USER_DATA"),
-        Type.Literal("DOCUMENT_DO_NOT_MATCH_ACCOUNT_DATA"),
-        Type.Literal("DOCUMENT_FALSIFIED"),
-        Type.Literal("DOCUMENT_HAS_EXPIRED"),
-        Type.Literal("DOCUMENT_INCOMPLETE"),
-        Type.Literal("DOCUMENT_MISSING"),
-        Type.Literal("DOCUMENT_NOT_ACCEPTED"),
-        Type.Literal("DOCUMENT_UNREADABLE"),
-        Type.Literal("SPECIFIC_CASE"),
-        Type.Literal("UNDERAGE_PERSON")
-    ]),
-    refuse_message: Type.String({description: "Message from the KYC team explaining reason for refusal."})
-}, {
-    $id: "KYCProcessSchema",
-    description: "The KYC Process object is a container tracking KYC document submissions, verification process and outcome."
-});
 export default {
     "POST /tip/registration": {
-        operationId: "Register",
+        operationId: "POST /tip/registration",
         success: Type.Object({
             invites: Type.Array(MemberSchema)
         }),
@@ -58,7 +19,7 @@ export default {
     },
 
     "GET /tip/invites": {
-        operationId: "ListInvites",
+        operationId: "GET /tip/invites",
         query: {
             accepted: T.Optional(T.Boolean({description: "Show only accepted invites"})),
             rejected: T.Optional(T.Boolean({description: "Show only rejected invites"})),
@@ -68,46 +29,48 @@ export default {
         tags: ['Tip']
     },
     "GET /tip/invites/{id}": {
-        operationId: "GetInvite",
-        path: Id,
+        operationId: "GET /tip/invites",
+        path: OrgId,
         success: MemberSchema,
         responses: [401, 403, 404],
         tags: ['Tip']
     },
     "PUT /tip/invites/{id}": {
-        operationId: "AcceptInvite",
-        path: Id,
+        operationId: "PUT /tip/invites",
+        path: OrgId,
         success: MemberSchema,
         responses: [401, 403, 404],
         tags: ['Tip']
     },
     "DELETE /tip/invites/{id}": {
-        operationId: "RejectInvite",
-        path: Id,
+        operationId: "DELETE /tip/invites",
+        path: OrgId,
         success: Type.Optional(MemberSchema),
         responses: [401, 403, 404],
         tags: ['Tip']
     },
 
     "GET /tip/transactions": {
-        operationId: "GetWalletTransactions",
+        operationId: "GET /tip/transactions",
         query: TransactionsQuery,
         success: Type.Object({
             transactions: T.Array(TransferSchema),
-            wallet: WalletSchema
+            wallet: AmountSchema
         }),
         responses: [401, 403],
         tags: ['Tip']
     },
 
     "GET /tip/me": {
-        operationId: "GetWalletUserInfo",
+        operationId: "GET /tip/me",
         success: Type.Object({
-            kycLevel: Type.Union([Type.Literal("LIGHT"), Type.Literal("REGULAR")]),
+            kyc_level: Type.Union([Type.Literal("LIGHT"), Type.Literal("REGULAR")]),
+            proof_of_identity: Type.Boolean(),
+            proof_of_address: Type.Boolean(),
             category: Type.Optional(Type.Union([Type.Literal("PAYER"), Type.Literal("OWNER")])),
-            status: Type.Object({
+            regulatory_status: Type.Object({
                 action_code: Type.String(),
-                scope: Type.Object({
+                blocked: Type.Object({
                     inflows: Type.Boolean(),
                     outflows: Type.Boolean(),
                 })
@@ -130,24 +93,61 @@ export default {
                     },
                 ]
             }),
-            wallet: Type.Optional(WalletSchema)
+            wallet: Type.Optional(AmountSchema)
         }),
         responses: [401, 403],
         tags: ['Tip']
     },
 
     "POST /tip/verification": {
-        operationId: "VerifyIdentity",
-        body: Type.Array(Type.String({maxLength: 2 * 1024 * 1024}), {minItems: 1, maxItems: 2}),
+        operationId: "POST /tip/verification",
+        body: Type.Array(Type.String({maxLength: 5 * 1024 * 1024}), {minItems: 1, maxItems: 2}),
         success: KYCProcessSchema,
         responses: [400, 401, 403],
         tags: ['Tip']
     },
 
     "GET /tip/verification": {
-        operationId: "GetIdentityVerificationStatus",
-        success: KYCProcessSchema,
+        operationId: "GET /tip/verification",
+        success: Type.Partial(KYCProcessSchema),
         responses: [401, 403],
+        tags: ['Tip']
+    },
+
+    "GET /tip/accounts": {
+        operationId: "GET /tip/accounts",
+        query: BankAccountsQuery,
+        success: Type.Array(BankAccount),
+        responses: [401, 403],
+        tags: ['Tip']
+    },
+    "GET /tip/accounts/{id}": {
+        operationId: "GET /tip/accounts/{id}",
+        path: {
+            id: Type.String({
+                description: "Bank account id."
+            })
+        },
+        success: BankAccount,
+        responses: [401, 403],
+        tags: ['Tip']
+    },
+    "POST /tip/accounts": {
+        operationId: "POST /tip/accounts",
+        body: CreateBankAccountRequest,
+        success: BankAccount,
+        responses: [400, 401, 403],
+        tags: ['Tip']
+    },
+    "DELETE /tip/accounts/{id}": {
+        operationId: "DELETE /tip/accounts/{id}",
+        path: {
+            id: Type.String({
+                description: "Bank account id."
+            })
+        },
+        success: BankAccount,
+        responses: [400, 401, 403],
         tags: ['Tip']
     }
 } as const satisfies RouteMap

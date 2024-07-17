@@ -1,13 +1,25 @@
 import mangopay, {base} from 'mangopay2-nodejs-sdk'
-import {randomBytes} from '@noble/ciphers/webcrypto';
 import {parse as uuidParse, v4} from 'uuid'
 import crypto from 'crypto'
 import {Api} from "@app/test/mangopay";
 import MethodOverload = base.MethodOverload;
+import shortUUID from "short-uuid";
 
-const shorter = require('shorter');
+
+it("shorten random bytes", ()=>{
+    const shortUUIDGenerator = shortUUID(shortUUID.constants.flickrBase58, { consistentLength: false })
+    const d = Date.now().toString(16)
+    console.log(d, shortUUIDGenerator.fromUUID(d))
+})
 
 describe("MangoPay", () => {
+
+    it("fetches bank account details", async () => {
+        const ba = await Api.Users.getBankAccount("user_m_01J26RMVZ59X148AD0WESHFACE", "bankacc_m_01J2KX3639XGHX1H47P82ECEPZ")
+        console.log(JSON.stringify(ba))
+        console.log(ba)
+    })
+
     it("Create user", async () => {
         //createUser.mockRestore()
 
@@ -92,35 +104,7 @@ describe("MangoPay", () => {
         console.log(response)
     })
 
-    //1.
 
-    it('aaa', ()=>{
-        const uid = Buffer.from(uuidParse(v4()))
-        const key = randomBytes(16)
-        const hmac = crypto.createHmac('md5', key)
-            .update(uid)
-            .digest()
-        console.log(uid.length, hmac.length)
-
-        const c = shorter.compress(Buffer.concat([uid, hmac])).toString();
-        console.log(c, c.length)
-        console.log(uid.toString('base64url'), uid.toString('base64url').length)
-        console.log(hmac.toString('base64url'), hmac.toString('base64url').length)
-
-        //
-        // for (let cipher of [gcm, siv]) {
-        //     const stream = cipher(key, randomBytes(12));
-        //     const ciphertext_ = stream.encrypt(uid);
-        //     const plaintext_ = stream.decrypt(ciphertext_);
-        //     const m1 = Buffer.from(ciphertext_).toString('base64url');
-        //     const originalUid = uuidStringify(plaintext_);
-        //     const originalUidB64 = Buffer.from(plaintext_).toString('base64url');
-        //
-        //
-        //
-        //     console.log(m1, m1.length, originalUid, originalUid.length, originalUidB64, originalUidB64.length, hmac, hmac.length, c, c.length)
-        // }
-    })
 })
 
 interface RegulatoryData {

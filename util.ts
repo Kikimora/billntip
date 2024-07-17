@@ -245,14 +245,20 @@ export function mapKeysDeep<T>(value: T, rename: (name: string) => string): T {
     }
 }
 
-export function toCamel(o: any) {
-    const rename = (origKey: string) => (origKey.charAt(0).toLowerCase() + origKey.slice(1) || origKey).toString()
+export function toCamelCase(o: any) {
+    const rename = _.camelCase
     if (typeof o === 'string') return rename(o)
     return mapKeysDeep(o, rename)
 }
 
-export function toPascal(o: any) {
-    const rename = (origKey: string) => (origKey.charAt(0).toUpperCase() + origKey.slice(1) || origKey).toString()
+export function toPascalCase(o: any) {
+    const rename = _.flow(_.camelCase, _.upperFirst)
+    if (typeof o === 'string') return rename(o)
+    return mapKeysDeep(o, rename)
+}
+
+export function toSnakeCase(o: any) {
+    const rename = _.snakeCase
     if (typeof o === 'string') return rename(o)
     return mapKeysDeep(o, rename)
 }

@@ -49,9 +49,9 @@ export const handler = pipeline()
     .parseJsonBody()
     .done(async function (req) {
         const {membersRepo, usersRepo, userPoolId} = await __init()
+        const username = req.principal.id_token_json['cognito:username']
         switch (req.routeKey) {
             case 'POST /tip/registration': {
-                const username = req.principal.profile['cognito:username']
                 const [user, member] = await Promise.all([
                     usersRepo.fetch(username),
                     membersRepo.fetchOrCreate(username)
@@ -74,14 +74,12 @@ export const handler = pipeline()
             }
             case 'PUT /tip/invites/{id}': {
                 const {path: {id}} = req.parse()
-                const username = req.principal.profile['cognito:username']
                 const member = membersRepo.newMember(username)
                 const membership = await member.acceptInvite(id)
                 return toMembership(membership) satisfies Static<typeof req.route.success>
             }
             case 'DELETE /tip/invites/{id}': {
                 const {path: {id}} = req.parse()
-                const username = req.principal.profile['cognito:username']
                 const member = membersRepo.newMember(username)
                 const membership = await member.rejectInvite(id)
                 if (membership === undefined) return undefined
@@ -89,20 +87,17 @@ export const handler = pipeline()
             }
             case 'GET /tip/invites/{id}': {
                 const {path: {id}} = req.parse()
-                const username = req.principal.profile['cognito:username']
                 const member = membersRepo.newMember(username)
                 const membership = await member.fetchMembership(id)
                 return toMembership(membership) satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/invites': {
                 const {query} = req.parse()
-                const username = req.principal.profile['cognito:username']
                 const member = membersRepo.newMember(username)
                 const memberships = await member.memberships(query)
                 return _.map(memberships, toMembership) satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/me': {
-                const username = req.principal.profile['cognito:username']
                 const member = await membersRepo.fetch(username)
                 const [memberUser, status, wallet] = await Promise.all([
                     member.fetchUser(),
@@ -110,37 +105,59 @@ export const handler = pipeline()
                     member.fetchWallet()
                 ])
                 return {
-                    kycLevel: memberUser.kycLevel,
+                    kyc_level: memberUser.kycLevel,
+                    proof_of_identity: memberUser.proofOfIdentity !== undefined,
+                    proof_of_address: memberUser.proofOfAddress !== undefined,
                     category: memberUser.category,
-                    status,
-                    wallet
+                    regulatory_status: status,
+                    wallet: wallet.balance
                 } satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/transactions': {
                 const {query} = req.parse()
-                const username = req.principal.profile['cognito:username']
+                const username = req.principal.id_token_json['cognito:username']
                 const member = await membersRepo.fetch(username)
                 const [transactions, wallet] = await Promise.all([
                     member.transactions(query),
                     member.fetchWallet(),
                 ])
-                // const senderIds = _(transactions).flatMap(x => [x.from, x.to]).uniq().compact().value()
-                // const users = await usersRepo.batchFetch(senderIds)
                 return {
                     transactions,
-                    wallet
+                    wallet: wallet.balance
                 } satisfies Static<typeof req.route.success>
             }
             case 'POST /tip/verification': {
                 const {body} = req.parse()
-                const username = req.principal.profile['cognito:username']
                 const member = await membersRepo.fetch(username)
                 return await member.startVerification(body) satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/verification': {
-                const username = req.principal.profile['cognito:username']
                 const member = await membersRepo.fetch(username)
                 return await member.fetchVerificationStatus() satisfies Static<typeof req.route.success>
+            }
+            case "GET /tip/accounts": {
+                const {query} = req.parse()
+                const member = await membersRepo.fetch(username)
+                const accounts = await member.fetchBankAccounts(query)
+                return accounts satisfies Static<typeof req.route.success>
+            }
+            case "GET /tip/accounts/{id}": {
+                const {path: {id}} = req.parse()
+                const member = await membersRepo.fetch(username)
+                const account = await member.fetchBankAccount(id)
+                return account satisfies Static<typeof req.route.success>
+            }
+            case "POST /tip/accounts": {
+                const {body} = req.parse()
+                const member = await membersRepo.fetch(username)
+                const account = await member.createBankAccount(body)
+                return account satisfies Static<typeof req.route.success>
+            }
+            case "DELETE /tip/accounts/{id}": {
+                const {path: {id}} = req.parse()
+                const member = await membersRepo.fetch(username)
+                const account = await member.deactivateBankAccount(id)
+                return account satisfies Static<typeof req.route.success>
             }
         }
     })

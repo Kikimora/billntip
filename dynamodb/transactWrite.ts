@@ -15,7 +15,7 @@ import _ from "lodash";
 /**
  * Defines {@link ddb.TransactWriteItem} for a {@link ddb.TransactWriteItemsCommand}
  */
-export type TransactWriteItem<T extends TableSchema, V = unknown> =
+export type TransactWriteItem<T extends TableSchema, V = any> =
     TransactPutItem<T, V>
     | TransactUpdateItem<T, V>
     | TransactDeleteItem<T, V>
@@ -198,14 +198,14 @@ export function transactWrite(): TransactWriteBuilder {
                         attributeValues,
                         key,
                         attr,
-                        val
+                        ref
                     } = prepareCommand(tbl, context, dynamoItem);
                     const {condition} = txItem
                     items.push({
                         Put: {
                             TableName: tbl.name,
                             Item: dynamoItem,
-                            ConditionExpression: condition?.({key, attr, val}),
+                            ConditionExpression: condition?.({key, attr, ref: ref}),
                             ReturnValuesOnConditionCheckFailure: txItem.returnOnConditionFailure,
                             ExpressionAttributeNames: !_.isEmpty(attributeNames) ? attributeNames : undefined,
                             ExpressionAttributeValues: !_.isEmpty(attributeValues) ? attributeValues : undefined,
@@ -215,23 +215,23 @@ export function transactWrite(): TransactWriteBuilder {
                 }
                 case "update": {
                     const dynamoKey = marshall(txItem.key, MarshalOptions)
-                    const context = {...txItem.values, ...txItem.key} as TableKey<T> & V;
+                    const context = {...txItem.values, ...txItem.key} as V & TableKey<T>;
                     const {
                         attributeNames,
                         attributeValues,
                         key,
                         attr,
-                        val
+                        ref
                     } = prepareCommand(tbl, context, dynamoKey);
                     const {expression, condition} = txItem
-                    const update = updateExpression(expression(new UpdateContext(val, key, attr)))
+                    const update = updateExpression(expression(new UpdateContext(ref, key, attr)))
                     if (_.isEmpty(update)) break
                     items.push({
                         Update: {
                             TableName: tbl.name,
                             Key: dynamoKey,
                             UpdateExpression: update,
-                            ConditionExpression: condition?.({key, attr, val}),
+                            ConditionExpression: condition?.({key, attr, ref: ref}),
                             ReturnValuesOnConditionCheckFailure: txItem.returnOnConditionFailure,
                             ExpressionAttributeNames: !_.isEmpty(attributeNames) ? attributeNames : undefined,
                             ExpressionAttributeValues: !_.isEmpty(attributeValues) ? attributeValues : undefined,
@@ -240,14 +240,14 @@ export function transactWrite(): TransactWriteBuilder {
                     break;
                 }
                 case "delete": {
-                    const context = {...txItem.values, ...txItem.key} as TableKey<T> & V;
+                    const context = {...txItem.values, ...txItem.key} as V & TableKey<T>;
                     const dynamoKey = marshall(txItem.key, MarshalOptions)
                     const {
                         attributeNames,
                         attributeValues,
                         key,
                         attr,
-                        val
+                        ref
                     } = prepareCommand(tbl, context, dynamoKey);
                     const {condition} = txItem
 
@@ -255,7 +255,7 @@ export function transactWrite(): TransactWriteBuilder {
                         Delete: {
                             TableName: tbl.name,
                             Key: dynamoKey,
-                            ConditionExpression: condition?.({key, attr, val}),
+                            ConditionExpression: condition?.({key, attr, ref: ref}),
                             ReturnValuesOnConditionCheckFailure: txItem.returnOnConditionFailure,
                             ExpressionAttributeNames: !_.isEmpty(attributeNames) ? attributeNames : undefined,
                             ExpressionAttributeValues: !_.isEmpty(attributeValues) ? attributeValues : undefined,
@@ -264,14 +264,14 @@ export function transactWrite(): TransactWriteBuilder {
                     break;
                 }
                 case "check": {
-                    const context = {...txItem.values, ...txItem.key} as TableItem<T> & V;
+                    const context = {...txItem.values, ...txItem.key} as V & TableKey<T>;
                     const dynamoKey = marshall(txItem.key, MarshalOptions)
                     const {
                         attributeNames,
                         attributeValues,
                         key,
                         attr,
-                        val
+                        ref
                     } = prepareCommand(tbl, context, dynamoKey);
                     const {condition} = txItem
 
@@ -279,7 +279,7 @@ export function transactWrite(): TransactWriteBuilder {
                         ConditionCheck: {
                             TableName: tbl.name,
                             Key: dynamoKey,
-                            ConditionExpression: condition?.({key, attr, val}),
+                            ConditionExpression: condition?.({key, attr, ref: ref}),
                             ReturnValuesOnConditionCheckFailure: txItem.returnOnConditionFailure,
                             ExpressionAttributeNames: !_.isEmpty(attributeNames) ? attributeNames : undefined,
                             ExpressionAttributeValues: !_.isEmpty(attributeValues) ? attributeValues : undefined,
