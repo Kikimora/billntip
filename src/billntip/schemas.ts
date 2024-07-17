@@ -1,4 +1,5 @@
 import {Static, Type as T, Type} from "@sinclair/typebox";
+import {TaggedUnion} from "@app/lambda/tagged_union";
 
 const ShortUserInfo = Type.Object({
     email: Type.String({description: "User email"}),
@@ -57,7 +58,7 @@ export const WalletSchema = Type.Object({
     $id: "WalletSchema",
     description: "The digital e-wallet on which funds are stored."
 })
-export const TransferSchema = Type.Object({
+export const Transaction = Type.Object({
     id: Type.String({
         description: "The unique identifier of the object.",
         examples: ["xfer_m_01HYX2AZM381923J2DNG5YV50B"]
@@ -86,10 +87,10 @@ export const TransferSchema = Type.Object({
     })),
     type: TxType,
 }, {
-    $id: "TransferSchema",
+    $id: "TransactionSchema",
     description: "A transfer is a request to relocate funds from one wallet to another."
 })
-
+export type Transaction = Static<typeof Transaction>
 export const PaymentGatewayQuery = {
     sort: Type.Optional(Type.String({
         description: "The column to sort against and direction - only `created_at` (or `date` for the events) is available and ASC or DESC for the direction.",
@@ -143,7 +144,14 @@ export const OrgId = {
     id: T.String({description: "Organisation identifier"})
 }
 
-export const KYCProcessSchema = Type.Object({
+export const TxId = {
+    id: T.String({
+        description: "Transaction identifier",
+        examples: ["po_m_01J31CGYNP3NBXGVQJF7DBA7QT", "xfer_m_01J30D359GWGMYN12YFJJH03YP", "payin_m_01J30C0NDB6CSBYF4GZXFK1B5N"]
+    })
+}
+
+export const KYCProcess = Type.Object({
     process_id: Type.String({description: "Verification process identifier."}),
     created_at: Type.Number({
         description: "The date and time at which the process has started.",
@@ -175,11 +183,11 @@ export const KYCProcessSchema = Type.Object({
     ]),
     refuse_message: Type.String({description: "Message from the KYC team explaining reason for refusal."})
 }, {
-    $id: "KYCProcessSchema",
+    $id: "KYCProcess",
     description: "The KYC Process object is a container tracking KYC document submissions, verification process and outcome."
 });
 
-export type KYCProcessSchema = Static<typeof KYCProcessSchema>
+export type KYCProcess = Static<typeof KYCProcess>
 
 const AccountNumber = Type.String({
     description: "The account number of the bank account."
@@ -199,15 +207,14 @@ const USBankAccount = Type.Object({
     ], {
         description: "The deposit type for US-type bank accounts."
     })),
-})
-
+}, {$id: 'USBankAccount'})
 const IBANBankAccount = Type.Object({
     type: Type.Literal("IBAN", {description: "For accounts registered in countries that use IBAN"}),
     iban: Type.String({
         description: "The IBAN (international bank account number) of the bank account."
     }),
     bic: Type.Optional(BIC),
-})
+}, {$id: 'IBANBankAccount'})
 const CABankAccount = Type.Object({
     type: Type.Literal("CA", {description: "For accounts registered in Canada"}),
     account_number: AccountNumber,
@@ -220,14 +227,14 @@ const CABankAccount = Type.Object({
     institution_number: Type.String({
         description: "The 3-digit number assigned to Canadian financial institutions, for CA-type bank accounts."
     })
-})
+}, {$id: 'CABankAccount'})
 const GBBankAccount = Type.Object({
     type: Type.Literal("GB", {description: "For accounts registered in the United Kingdom"}),
     account_number: AccountNumber,
     sort_code: Type.String({
         description: "The 6-digit sort code, assigned to UK financial institutions, for GB-type bank accounts."
     })
-})
+}, {$id: 'GBBankAccount'})
 const OtherBankAccount = Type.Object({
     type: Type.Literal("OTHER", {description: "For accounts registered in countries that do not use IBAN (and are not US, CA, GB)."}),
     account_number: AccountNumber,
@@ -236,7 +243,7 @@ const OtherBankAccount = Type.Object({
         maxLength: 2,
         description: "Bank country code in the ISO 3166-1 alpha-2 format."
     }),
-})
+}, {$id: 'OtherBankAccount'})
 const BankAccountOwner = Type.Object({
     name: Type.String({
         description: "The full name of the owner of the bank account. (Format: FirstName LastName)"
@@ -266,17 +273,18 @@ const BankAccountOwner = Type.Object({
         description: "Country code in the ISO 3166-1 alpha-2 format."
     })
 }, {
+    $id: 'BankAccountOwner',
     description: "Bank account owner details"
 });
 
-const BaseBankAccount = Type.Object({
+export const BankAccount = Type.Object({
         id: Type.String({
             description: "The unique identifier of the object."
         }),
         owner: BankAccountOwner,
-        details: Type.Union([
+        details: TaggedUnion([
             USBankAccount, IBANBankAccount, CABankAccount, GBBankAccount, OtherBankAccount
-        ]),
+        ], {tag: "type"}),
         active: Type.Boolean({
             description: "Whether or not the Bank Account is active."
         }),
@@ -284,16 +292,36 @@ const BaseBankAccount = Type.Object({
             description: "The date and time at which the object was created."
         }),
     }, {
+        $id: 'BankAccount',
         description: "Bank account details."
     }
 )
 
-export const BankAccount = BaseBankAccount
 export type BankAccount = Static<typeof BankAccount>
 export const CreateBankAccountRequest = Type.Object({
     ...Type.Omit(BankAccount, ['id', 'owner', 'created_at', 'active']).properties,
     owner: Type.Omit(BankAccountOwner, ['id'])
 }, {
+    $id: 'CreateBankAccountRequest',
     description: "Create new bank account request."
 })
 export type CreateBankAccountRequest = Static<typeof CreateBankAccountRequest>
+
+
+const CCPayinSchema = Type.Object({
+    type: Type.Literal("cc_payin"),
+    card: Type.String()
+})
+const WirePayoutSchema = Type.Object({
+    type: Type.Literal("wire_payout"),
+    account: Type.String(),
+    wire_ref: Type.String({maxLength: 12})
+})
+const WirePayinSchema = Type.Object({
+    type: Type.Literal("wire_payin"),
+})
+export const CreateTransactionRequest = Type.Object({
+    amount: AmountSchema,
+    details: TaggedUnion([WirePayinSchema, CCPayinSchema, WirePayoutSchema], {tag: "type"})
+})
+export type CreateTransactionRequest = Static<typeof CreateTransactionRequest>

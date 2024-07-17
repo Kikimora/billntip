@@ -2,8 +2,8 @@ import _ from "lodash";
 import {intervalToDuration} from "date-fns";
 import {Type} from "@sinclair/typebox";
 import {Value} from "@sinclair/typebox/value";
-import mangopay, {bankAccount, base, CountryISO, kycDocument} from "mangopay2-nodejs-sdk";
-import {badRequestError, internalError, notFoundError} from "@app/lambda";
+import mangopay, {bankAccount, base, kycDocument} from "mangopay2-nodejs-sdk";
+import {badRequestError, internalError, notFoundError, notImplementedError} from "@app/lambda";
 import {TraceAttributes} from "@app/diagnostics";
 import {toCamelCase} from "@app/util";
 import {UserAttribute} from "@src/users/attributes";
@@ -11,11 +11,14 @@ import Store, {InviteRequest, MemberItem, MembershipFilters, OrgRequest, Registe
 import {
     type BankAccount,
     type BankAccountsQuery,
-    CreateBankAccountRequest,
-    KYCProcessSchema,
+    type CreateBankAccountRequest,
+    type CreateTransactionRequest,
+    type KYCProcess,
+    type Transaction,
     type TransactionsQuery
 } from "./schemas";
 import map, {Mapping} from "@app/lambda/mapper";
+import {payOut} from "mangopay2-nodejs-sdk/typings/models/payOut";
 
 interface RegulatoryData {
     Id: string
@@ -163,6 +166,10 @@ function mangopayError(e: any, name: string, attributes: TraceAttributes, mappin
         }
 
         return badRequestError(message ?? value.message, {path}).withContext({name, value})
+    }
+
+    if (value.type === 'ressource_not_found' || value.type === 'resource_not_found') {
+        throw notFoundError()
     }
 
     return internalError(value.message, value.errors).withContext({name, value});
@@ -434,35 +441,37 @@ export class Member {
 
     async transactions(query: TransactionsQuery) {
         const member = this.requireRegisteredMember()
-
-        function parseTag(tag: string) {
-            try {
-                return JSON.parse(tag) as { org?: string, loc?: string }
-            } catch (e) {
-                return {}
-            }
-        }
-
         const request = {parameters: toQuery(query),};
         const response = await paymentApi.Wallets.getTransactions(member.walletId, request).catch(function (e) {
             throw mangopayError(e, "transactions", {member, request})
         })
-        return response.map(function (tx) {
-            const info = parseTag(tx.Tag)
-            return {
-                id: tx.Id,
-                credit: {amount: tx.CreditedFunds.Amount, currency: tx.CreditedFunds.Currency},
-                debit: {amount: tx.DebitedFunds.Amount, currency: tx.DebitedFunds.Currency},
-                ...info,
-                type: tx.Type,
-                execution_date: tx.ExecutionDate,
-                created_at: tx.CreationDate,
-                fee: {amount: tx.Fees.Amount, currency: tx.Fees.Currency},
-                result_code: tx.ResultCode,
-                result_message: tx.ResultMessage,
-                status: tx.Status
+
+        return response.map(fromTransaction)
+    }
+
+    async fetchTransaction(id: string) {
+        const member = this.requireRegisteredMember()
+
+        function fetch(id: string) {
+            if (id.startsWith("po_m")) {
+                return paymentApi.PayOuts.get(id)
+            } else if (id.startsWith("payin_m")) {
+                return paymentApi.PayIns.get(id)
+            } else if (id.startsWith("xfer_m")) {
+                return paymentApi.Transfers.get(id)
+            } else {
+                throw badRequestError("Unexpected transaction id type").withContext("fetchTransaction", {member, id})
             }
+        }
+
+        const response = await fetch(id).catch(function (e) {
+            throw mangopayError(e, "fetchTransaction", {member, id})
         })
+
+        if (response.AuthorId !== member.mangopayUid && response.CreditedUserId !== member.mangopayUid)
+            throw notFoundError()
+
+        return fromTransaction(response)
     }
 
     async startVerification(pages: string[]) {
@@ -494,7 +503,7 @@ export class Member {
         return toKycProcess(doc);
     }
 
-    async fetchVerificationStatus(): Promise<Partial<KYCProcessSchema>> {
+    async fetchVerificationStatus(): Promise<Partial<KYCProcess>> {
         let {mangopayUid, kycDocumentId} = this.requireRegisteredMember()
         if (kycDocumentId === undefined) {
             kycDocumentId = await paymentApi.Users.get(mangopayUid).catch(function (e) {
@@ -550,6 +559,35 @@ export class Member {
         })
         return bankAccountMapper.mapDirect(account) as BankAccount
     }
+
+    async createTransaction(request: CreateTransactionRequest): Promise<Transaction> {
+        const {mangopayUid, walletId, pk} = this.requireRegisteredMember()
+        switch (request.details.type) {
+            case 'wire_payout': {
+                const mangoPayRequest = {
+                    ...payoutMapper.mapInverse(request),
+                    PaymentType: "BANK_WIRE",
+                    AuthorId: mangopayUid,
+                    Fees: {
+                        Currency: "EUR",
+                        Amount: 1
+                    },
+                    DebitedWalletId: walletId,
+                    PayoutModeRequested: "STANDARD",
+                    Tag: pk
+                } as payOut.CreatePayOut
+                const response = await paymentApi.PayOuts.create(mangoPayRequest).catch(function (e) {
+                    throw mangopayError(e, "createTransaction", {
+                        mangopayUid,
+                        mangoPayRequest
+                    }, bankAccountRequestMapper.mapping)
+                })
+                return fromTransaction(response)
+            }
+            default:
+                throw notImplementedError()
+        }
+    }
 }
 
 const bankAccountRequestMapping: Mapping<bankAccount.CreationDetails, CreateBankAccountRequest> = [
@@ -583,6 +621,13 @@ const bankAccountMapping: Mapping<bankAccount.Data, BankAccount> = [
 const bankAccountMapper = map.object(bankAccountMapping)
 const bankAccountRequestMapper = map.object(bankAccountRequestMapping)
 
+const payoutMapping: Mapping<payOut.CreatePayOut, CreateTransactionRequest> = [
+    [['DebitedFunds', 'Currency'], ['amount', 'currency']],
+    [['DebitedFunds', 'Amount'], ['amount', 'amount']],
+    [['BankAccountId'], ['details', 'account']],
+    [['BankWireRef'], ['details', 'wire_ref']],
+]
+const payoutMapper = map.object(payoutMapping)
 
 /**
  * Generic utility to map queries to MangoPay queries.
@@ -616,4 +661,27 @@ function toQuery(query: Record<string, string | number | boolean>): (mangopay.ba
         .value()
 }
 
+function parseTag(tag: string) {
+    try {
+        return JSON.parse(tag) as { org?: string, loc?: string }
+    } catch (e) {
+        return {}
+    }
+}
 
+function fromTransaction(tx: mangopay.transaction.TransactionData) {
+    const info = parseTag(tx.Tag)
+    return {
+        id: tx.Id,
+        credit: {amount: tx.CreditedFunds.Amount, currency: tx.CreditedFunds.Currency},
+        debit: {amount: tx.DebitedFunds.Amount, currency: tx.DebitedFunds.Currency},
+        ...info,
+        type: tx.Type,
+        execution_date: tx.ExecutionDate,
+        created_at: tx.CreationDate,
+        fee: {amount: tx.Fees.Amount, currency: tx.Fees.Currency},
+        result_code: tx.ResultCode,
+        result_message: tx.ResultMessage,
+        status: tx.Status
+    }
+}

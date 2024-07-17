@@ -1,6 +1,7 @@
 import {Type} from "@sinclair/typebox";
 import {Middleware, Pipeline} from "./pipeline";
 import {ErrorContext, TraceAttributes, errorWithContext} from "@app/diagnostics";
+import {specializeUnionError} from "@app/lambda/tagged_union";
 
 export interface HttpError {
     readonly statusCode: string
@@ -35,7 +36,7 @@ Pipeline.prototype.handleErrors = function () {
         try {
             return await this.next(e, ctx)
         } catch (exception: any) {
-            const {
+            let {
                 name,
                 message,
                 statusCode,
@@ -46,6 +47,7 @@ Pipeline.prototype.handleErrors = function () {
                 $metadata, __type, $fault,
                 ...rest
             } = exception
+            error = specializeUnionError(error)
             return {
                 "statusCode": statusCode ?? $metadata?.httpStatusCode ?? 500,
                 "body": JSON.stringify({

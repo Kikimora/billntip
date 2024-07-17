@@ -358,8 +358,9 @@ export class SessionData implements SessionItem {
      * True if tokens expired, about to expire or can expire while being cached.
      */
     get isTimeToRefreshTokens(): boolean {
-        const {now} = this.options.ctx
-        return this.cachedTill >= this.accessExpiresAt || this.accessExpiresAt - now < 10
+        const {now, authorizerCacheTtl} = this.options.ctx
+        const newCachedTill = now + authorizerCacheTtl;
+        return newCachedTill >= this.accessExpiresAt || this.accessExpiresAt - now < 10
     }
 
     /**

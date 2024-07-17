@@ -126,6 +126,30 @@ export const handler = pipeline()
                     wallet: wallet.balance
                 } satisfies Static<typeof req.route.success>
             }
+            case 'GET /tip/transactions/{id}': {
+                const {path:{id}} = req.parse()
+                const username = req.principal.id_token_json['cognito:username']
+                const member = await membersRepo.fetch(username)
+                const [transaction, wallet] = await Promise.all([
+                    member.fetchTransaction(id),
+                    member.fetchWallet(),
+                ])
+                return {
+                    transaction,
+                    wallet: wallet.balance
+                } satisfies Static<typeof req.route.success>
+            }
+            case 'POST /tip/transactions': {
+                const {body} = req.parse()
+                const username = req.principal.id_token_json['cognito:username']
+                const member = await membersRepo.fetch(username)
+                const transaction = await member.createTransaction(body)
+                const wallet = await member.fetchWallet()
+                return {
+                    transaction,
+                    wallet: wallet.balance
+                } satisfies Static<typeof req.route.success>
+            }
             case 'POST /tip/verification': {
                 const {body} = req.parse()
                 const member = await membersRepo.fetch(username)

@@ -7,10 +7,12 @@ import diagnostics, {EMF, errorWithContext, findErrorContext, Tracer} from '@app
 import {pipeline} from "@app/lambda";
 import startAuthOperation, {SessionContext, SessionContextSchema} from "./operation";
 
-const Unauthorized = {isAuthorized: false, context: undefined}
+//This response triggers 401 Unauthorized instead of default 403 Forbidden.
+//This is not documented and was mentioned here - https://stackoverflow.com/a/73028814/2766648
+const Unauthorized = {isAuthorized: false, errorMessage: "Unauthorized"}
 const BadRequest = {statusCode: 400, body: JSON.stringify({'error': 'Invalid request parameters.'})}
 type AuthContext = SessionContext | undefined;
-type AuthResult = APIGatewaySimpleAuthorizerWithContextResult<AuthContext>
+type AuthResult = APIGatewaySimpleAuthorizerWithContextResult<AuthContext> | typeof Unauthorized
 
 diagnostics({
     triggers: {

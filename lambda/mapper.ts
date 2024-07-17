@@ -5,7 +5,6 @@ import {
     SnakeCasedPropertiesDeep,
     Split
 } from "type-fest";
-import type {ToString} from "type-fest/source/internal";
 import _ from "lodash";
 import {toCamelCase, toPascalCase, toSnakeCase} from "@app/util";
 
@@ -27,9 +26,6 @@ export interface Mapper<X = any, Y = any> {
 }
 type PathArray<T> = IsAny<T> extends true ? string[] : Paths<T> extends string ? Split<Paths<T>, '.'> : never;
 
-type X = PathArray<any>
-
-//type PathArray<T> = IsAny<T> extends true ? string[] : Split<Paths<T>, '.'>
 type PropertyMapping<From, To> = [PathArray<From>, PathArray<To>, Mapper?]
 /**
  * Collection of property mapping with optional mapper to map property value.
@@ -201,7 +197,6 @@ export class PascalToSnakeObjectMapper<X, Y> implements Mapper<PascalCasedProper
         return toPascalCase(src) as PascalCasedPropertiesDeep<X>
     }
 }
-
 
 /**
  * Simple object mapping utility.
