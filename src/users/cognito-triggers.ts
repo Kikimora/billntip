@@ -2,7 +2,8 @@ import {
     CustomMessageTriggerEvent,
     PostAuthenticationTriggerEvent,
     PostConfirmationConfirmSignUpTriggerEvent,
-    PreSignUpTriggerEvent, PreTokenGenerationTriggerEvent
+    PreSignUpTriggerEvent,
+    PreTokenGenerationTriggerEvent
 } from 'aws-lambda';
 import {CognitoIdentityProvider, UserType} from "@aws-sdk/client-cognito-identity-provider";
 import _ from "lodash";
@@ -13,6 +14,7 @@ import diagnostics, {errorWithContext, Tracer, TracingOptions} from "@app/diagno
 import {moduleConfig, pipeline, TracedEvent} from "@app/lambda";
 import {TemplateRepo} from "../templates";
 import {UserAttribute} from "./attributes";
+import {generatePassword} from "@src/users/cognito";
 
 const cognito = new CognitoIdentityProvider()
 const tracer = new Tracer("cognito")
@@ -117,10 +119,10 @@ export const trigger = async function (event: BaseTriggerEvent<any> & TracedEven
          * @param event post authentication event.
          */
         const {request, response} = event
-        const {_attributes, ...metadata} = event.request.clientMetadata ?? {}
+        const {_attributes, password, ...metadata} = event.request.clientMetadata ?? {}
 
         const attributes = {
-            ..._(JSON.parse(_attributes) as UserAttribute[])
+            ..._(JSON.parse(_attributes ?? []) as UserAttribute[])
                 .keyBy('name')
                 .mapValues('value')
                 .value(),
@@ -153,7 +155,8 @@ export const trigger = async function (event: BaseTriggerEvent<any> & TracedEven
             code: request.codeParameter,
             link: request.linkParameter,
             type: _.kebabCase(event.triggerSource.substring(14/*"CustomMessage_".length*/)),
-            attribute: targetAttribute()
+            attribute: targetAttribute(),
+            password
         }
         const messageTemplate = await templates.fetchTemplate(context.type + "-email.html")
         response.emailMessage = messageTemplate(context)
@@ -274,30 +277,7 @@ async function linkSocialProfile(event: PreSignUpTriggerEvent & TracedEvent) {
         cognitoUser = await createCognitoUser(email, attrs)
         if (cognitoUser === undefined) throw new Error("Unexpected error: cognito didn't create user.")
         event.tracer.info("Created cognito user", {cognitoUser})
-
-        async function describeUserPool(userPoolId: string) {
-            try {
-                const {UserPool: userPool} = await cognito.describeUserPool({UserPoolId: userPoolId})
-                return userPool
-            } catch (e) {
-                throw errorWithContext(e, 'createCognitoUser', {userPoolId})
-            }
-        }
-
-        event.tracer.info("Fetch user pool parameters", {userPoolId})
-        const userPool = await describeUserPool(userPoolId)
-        if (userPool === undefined) throw new Error("Unexpected error: cognito didn't return user pool details.")
-
-        const passwordPolicy = userPool.Policies?.PasswordPolicy
-        event.tracer.info('Generate password with user pool password policy', {passwordPolicy})
-        if (passwordPolicy === undefined) throw new Error("Unexpected error: cognito user pool does not have a password policy.")
-        const password = generate({
-            length: passwordPolicy.MinimumLength ?? 6,
-            uppercase: passwordPolicy.RequireUppercase,
-            lowercase: passwordPolicy.RequireLowercase,
-            numbers: passwordPolicy.RequireNumbers,
-            symbols: passwordPolicy.RequireSymbols,
-        })
+        const password = await generatePassword(userPoolId);
 
         async function adminSetUserPassword(cognitoUser: UserType, password: string) {
             try {

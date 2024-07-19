@@ -26,7 +26,7 @@ export default {
         responses: [401, 403, 404],
         tags: ['Bill']
     },
-    "POST /bill/{orgId}/member": {
+    "POST /bill/{orgId}/members": {
         operationId: "CreateInvite",
         summary: "Invite new users",
         security: authenticatedEndpoint,
@@ -38,7 +38,7 @@ export default {
         responses: [401, 403, 404],
         tags: ['Bill']
     },
-    "GET /bill/{orgId}/member/{id}": {
+    "GET /bill/{orgId}/members/{id}": {
         operationId: "GetInvite",
         security: authenticatedEndpoint,
         path: {...OrgId, ...InviteId},
@@ -46,7 +46,7 @@ export default {
         responses: [401, 403, 404],
         tags: ['Bill']
     },
-    "PUT /bill/{orgId}/member/{id}": {
+    "PUT /bill/{orgId}/members/{id}": {
         operationId: "UpdateInvite",
         security: authenticatedEndpoint,
         path: {...OrgId, ...InviteId},
@@ -54,7 +54,7 @@ export default {
         responses: [401, 403, 404],
         tags: ['Bill']
     },
-    "DELETE /bill/{orgId}/member/{id}": {
+    "DELETE /bill/{orgId}/members/{id}": {
         operationId: "DeleteInvite",
         security: authenticatedEndpoint,
         path: {...OrgId, ...InviteId},

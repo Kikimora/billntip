@@ -9,7 +9,7 @@ export default function (api: OpenAPIBuilder) {
 Verify user attributes and add user into receivers group. Being in receivers group allow user to receive tips from other user. 
             `
         },
-        'POST /bill/{orgId}/member': {
+        'POST /bill/{orgId}/members': {
             description: `
 Invites user to join the organisation. Caller must be the organisation admin. What happens depends on the invited user status:
 * If user does not exist then new user created and invited. Invite email will have a link to start a signup flow. At the end of the flow, after user provides all the necessary information they presented with a prompt to join the organisation. 

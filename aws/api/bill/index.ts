@@ -26,6 +26,7 @@ const lambda = authorizer.gateway.newLambda(Lambdas['billntip/bill.handler'])
             .allow(
                 "cognito-idp:AdminCreateUser",
                 "cognito-idp:ListUsers",
+                "cognito-idp:DescribeUserPool",
             )
             .on(cognito.userPool)
             .buildRoleInlinePolicy('UserPoolAccess')

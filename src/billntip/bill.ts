@@ -19,6 +19,7 @@ import {TemplateRepo} from "@src/templates";
 import UserRepo, {UserAttribute} from "@src/users/user";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {Static, Type} from "@sinclair/typebox";
+import {generatePassword} from "@src/users/cognito";
 
 const cognito = new CognitoIdentityProvider()
 const dynamo = new DynamoDB()
@@ -111,7 +112,7 @@ export const handler = pipeline()
                     lastKey: keyToToken(lastKey)
                 } satisfies Static<typeof req.route.success>
             }
-            case 'POST /bill/{orgId}/member': {
+            case 'POST /bill/{orgId}/members': {
                 const {body, path: {orgId}} = req.parse()
                 const inviterUsername = req.principal.id_token_json['cognito:username']
                 const inviteeEmail = body.email;
@@ -176,21 +177,21 @@ export const handler = pipeline()
 
                 return toMembership(member) satisfies Static<typeof req.route.success>
             }
-            case 'GET /bill/{orgId}/member/{id}': {
+            case 'GET /bill/{orgId}/members/{id}': {
                 const {path: {orgId, id}} = req.parse()
                 await assertOrgAdmin(req.principal, orgId)
                 const member = await store.fetchMembership(id, orgId)
                 if (member === undefined) throw notFoundError()
                 return toMembership(member) satisfies Static<typeof req.route.success>
             }
-            case 'DELETE /bill/{orgId}/member/{id}': {
+            case 'DELETE /bill/{orgId}/members/{id}': {
                 const {path: {orgId, id}} = req.parse()
                 await assertOrgAdmin(req.principal, orgId)
                 const member = await store.removeMembership(id, orgId)
                 if (member === undefined) throw notFoundError()
                 return toMembership(member) satisfies Static<typeof req.route.success>
             }
-            case "PUT /bill/{orgId}/member/{id}": {
+            case "PUT /bill/{orgId}/members/{id}": {
                 const {path: {orgId, id}, body} = req.parse()
                 await assertOrgAdmin(req.principal, orgId)
 
@@ -258,6 +259,7 @@ export const handler = pipeline()
         }
 
         async function adminCreateUser(email: string, resend: boolean, attributes: UserAttribute[], metadata: Record<string, string>) {
+            const password = await generatePassword(userPoolId)
             const response = await cognito.adminCreateUser({
                 UserPoolId: userPoolId,
                 Username: email,
@@ -269,9 +271,11 @@ export const handler = pipeline()
                     Name: 'email_verified',
                     Value: 'true'
                 }],
+                TemporaryPassword: password,
                 ClientMetadata: {
                     ...metadata,
-                    _attributes: JSON.stringify(attributes)
+                    _attributes: JSON.stringify(attributes),
+                    password
                 }
             })
             if (response.User?.Username === undefined) throw internalError("adminCreateUser didn't return username.")
