@@ -122,7 +122,7 @@ export const trigger = async function (event: BaseTriggerEvent<any> & TracedEven
         const {_attributes, password, ...metadata} = event.request.clientMetadata ?? {}
 
         const attributes = {
-            ..._(JSON.parse(_attributes ?? []) as UserAttribute[])
+            ..._(JSON.parse(_attributes ?? '[]') as UserAttribute[])
                 .keyBy('name')
                 .mapValues('value')
                 .value(),
