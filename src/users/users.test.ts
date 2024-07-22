@@ -11,7 +11,6 @@ import {resources} from "@app/test/util";
 import {newSession} from "@app/test/cognito";
 import {CognitoJwtVerifier} from "aws-jwt-verify";
 import {when} from "jest-when";
-import {CognitoIdTokenPayload} from "aws-jwt-verify/jwt-model";
 
 diagnostics({
     triggers: {request: true}
@@ -469,7 +468,7 @@ describe("Attributes", () => {
             const response = await putUserAttributes()
             expect(response).toEqual({
                 statusCode: '401',
-                body: {"error": "Error", "message": "Lambda authorizer required for the event."}
+                body: {"error": "Unauthorized", "message": "Unauthorized"}
             })
         })
         it("update attributes in Cognito and DynamoDB", async () => {
@@ -540,7 +539,7 @@ describe("Attributes", () => {
             const response = await getUserAttributes()
             expect(response).toEqual({
                 statusCode: '401',
-                body: {"error": "Error", "message": "Lambda authorizer required for the event."}
+                body: {"error": "Unauthorized", "message": "Unauthorized"}
             })
         })
         it("returns attributes from Cognito and DynamoDB", async () => {

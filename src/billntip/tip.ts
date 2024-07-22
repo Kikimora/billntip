@@ -7,8 +7,9 @@ import {SessionContextSchema} from "@src/authorizer/types";
 import UserRepo from "@src/users/user";
 import Paths from "./tip-paths";
 import {toMembership} from "./util";
-import {MemberRepo} from "./member";
+import TipUserRepo from "./user";
 import diagnostics from "@app/diagnostics";
+import {MangopayOptions} from "./mangopay-user";
 
 const dynamo = new DynamoDB()
 const cognito = new CognitoIdentityProvider()
@@ -23,21 +24,22 @@ const config = moduleConfig()
         oidc: Type.Object({
             userPoolId: Type.String(),
         }),
+        mangopay: MangopayOptions,
         'tip-diagnostics': Type.Object({}, {relaxed: true, default: {triggers: {request: true}}})
     })
     .build()
 
 export function __init() {
-    return config.parameters.then(({dynamodb, oidc, 'tip-diagnostics': diagnostiocsConfig}) => {
+    return config.parameters.then(({dynamodb, oidc, mangopay, 'tip-diagnostics': diagnostiocsConfig}) => {
         diagnostics(diagnostiocsConfig)
 
-        const usersRepo = new UserRepo({
+        const users = new UserRepo({
             db: dynamo,
             table: dynamodb.users,
             locks: dynamodb.locks
         })
-        const membersRepo = new MemberRepo({table: dynamodb.data})
-        return {usersRepo, membersRepo, userPoolId: oidc.userPoolId}
+        const tipUsers = new TipUserRepo({table: dynamodb.data}, mangopay)
+        return {users, tipUsers, userPoolId: oidc.userPoolId}
     })
 }
 
@@ -48,15 +50,15 @@ export const handler = pipeline()
     .withRoutes(Paths)
     .parseJsonBody()
     .done(async function (req) {
-        const {membersRepo, usersRepo, userPoolId} = await __init()
+        const {tipUsers, users, userPoolId} = await __init()
         const username = req.principal.id_token_json['cognito:username']
         switch (req.routeKey) {
             case 'POST /tip/registration': {
                 const [user, member] = await Promise.all([
-                    usersRepo.fetch(username),
-                    membersRepo.fetchOrCreate(username)
+                    users.fetch(username),
+                    tipUsers.fetchOrCreate(username)
                 ])
-                await member.refresh(user.attributes)
+                await member.refreshMangopayUser(user.attributes)
                 const [_1, _2, invites] = await Promise.all([
                     member.save(),
                     cognito.adminAddUserToGroup({
@@ -74,52 +76,62 @@ export const handler = pipeline()
             }
             case 'PUT /tip/invites/{id}': {
                 const {path: {id}} = req.parse()
-                const member = membersRepo.newMember(username)
+                const member = tipUsers.newUser(username)
                 const membership = await member.acceptInvite(id)
                 return toMembership(membership) satisfies Static<typeof req.route.success>
             }
             case 'DELETE /tip/invites/{id}': {
                 const {path: {id}} = req.parse()
-                const member = membersRepo.newMember(username)
+                const member = tipUsers.newUser(username)
                 const membership = await member.rejectInvite(id)
                 if (membership === undefined) return undefined
                 return toMembership(membership) satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/invites/{id}': {
                 const {path: {id}} = req.parse()
-                const member = membersRepo.newMember(username)
+                const member = tipUsers.newUser(username)
                 const membership = await member.fetchMembership(id)
                 return toMembership(membership) satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/invites': {
                 const {query} = req.parse()
-                const member = membersRepo.newMember(username)
+                const member = tipUsers.newUser(username)
                 const memberships = await member.memberships(query)
                 return _.map(memberships, toMembership) satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/me': {
-                const member = await membersRepo.fetch(username)
-                const [memberUser, status, wallet] = await Promise.all([
-                    member.fetchUser(),
-                    member.fetchRegulatoryStatus(),
-                    member.fetchWallet()
+                const member = await tipUsers.fetch(username)
+                const mangopayUser = member.mangopayUser
+                const [memberUser, status, wallet, verification] = await Promise.all([
+                    mangopayUser.fetchUserInfo(),
+                    mangopayUser.fetchRegulatoryStatus(),
+                    mangopayUser.fetchWallet(),
+                    mangopayUser.fetchVerificationDetails(),
                 ])
                 return {
+                    kyc: {
+                        level: memberUser.kycLevel,
+                        evidence: {
+                            ...verification
+                        }
+                    },
+                    category: memberUser.category,
+                    regulatory_status: status,
+                    wallet: wallet.balance,
+                    //deprecated, to be removed soon
                     kyc_level: memberUser.kycLevel,
                     proof_of_identity: memberUser.proofOfIdentity !== undefined,
                     proof_of_address: memberUser.proofOfAddress !== undefined,
-                    category: memberUser.category,
-                    regulatory_status: status,
-                    wallet: wallet.balance
                 } satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/transactions': {
                 const {query} = req.parse()
                 const username = req.principal.id_token_json['cognito:username']
-                const member = await membersRepo.fetch(username)
+                const member = await tipUsers.fetch(username)
+                const mangopayUser = member.mangopayUser
                 const [transactions, wallet] = await Promise.all([
-                    member.transactions(query),
-                    member.fetchWallet(),
+                    mangopayUser.transactions(query),
+                    mangopayUser.fetchWallet(),
                 ])
                 return {
                     transactions,
@@ -129,10 +141,11 @@ export const handler = pipeline()
             case 'GET /tip/transactions/{id}': {
                 const {path:{id}} = req.parse()
                 const username = req.principal.id_token_json['cognito:username']
-                const member = await membersRepo.fetch(username)
+                const member = await tipUsers.fetch(username)
+                const mangopayUser = member.mangopayUser
                 const [transaction, wallet] = await Promise.all([
-                    member.fetchTransaction(id),
-                    member.fetchWallet(),
+                    mangopayUser.fetchTransaction(id),
+                    mangopayUser.fetchWallet(),
                 ])
                 return {
                     transaction,
@@ -142,9 +155,11 @@ export const handler = pipeline()
             case 'POST /tip/transactions': {
                 const {body} = req.parse()
                 const username = req.principal.id_token_json['cognito:username']
-                const member = await membersRepo.fetch(username)
-                const transaction = await member.createTransaction(body)
-                const wallet = await member.fetchWallet()
+                const member = await tipUsers.fetch(username)
+                const mangopayUser = member.mangopayUser
+                const transaction = await mangopayUser.createTransaction(body)
+                //Fetch wallet after transaction to let it update
+                const wallet = await mangopayUser.fetchWallet()
                 return {
                     transaction,
                     wallet: wallet.balance
@@ -152,35 +167,41 @@ export const handler = pipeline()
             }
             case 'POST /tip/verification': {
                 const {body} = req.parse()
-                const member = await membersRepo.fetch(username)
-                return await member.startVerification(body) satisfies Static<typeof req.route.success>
+                const member = await tipUsers.fetch(username)
+                const mangopayUser = member.mangopayUser
+                return await mangopayUser.startVerification(body) satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/verification': {
-                const member = await membersRepo.fetch(username)
-                return await member.fetchVerificationStatus() satisfies Static<typeof req.route.success>
+                const member = await tipUsers.fetch(username)
+                const mangopayUser = member.mangopayUser
+                return await mangopayUser.fetchVerificationDetails() satisfies Static<typeof req.route.success>
             }
             case "GET /tip/accounts": {
                 const {query} = req.parse()
-                const member = await membersRepo.fetch(username)
-                const accounts = await member.fetchBankAccounts(query)
+                const member = await tipUsers.fetch(username)
+                const mangopayUser = member.mangopayUser
+                const accounts = await mangopayUser.fetchBankAccounts(query)
                 return accounts satisfies Static<typeof req.route.success>
             }
             case "GET /tip/accounts/{id}": {
                 const {path: {id}} = req.parse()
-                const member = await membersRepo.fetch(username)
-                const account = await member.fetchBankAccount(id)
+                const member = await tipUsers.fetch(username)
+                const mangopayUser = member.mangopayUser
+                const account = await mangopayUser.fetchBankAccount(id)
                 return account satisfies Static<typeof req.route.success>
             }
             case "POST /tip/accounts": {
                 const {body} = req.parse()
-                const member = await membersRepo.fetch(username)
-                const account = await member.createBankAccount(body)
+                const member = await tipUsers.fetch(username)
+                const mangopayUser = member.mangopayUser
+                const account = await mangopayUser.createBankAccount(body)
                 return account satisfies Static<typeof req.route.success>
             }
             case "DELETE /tip/accounts/{id}": {
                 const {path: {id}} = req.parse()
-                const member = await membersRepo.fetch(username)
-                const account = await member.deactivateBankAccount(id)
+                const member = await tipUsers.fetch(username)
+                const mangopayUser = member.mangopayUser
+                const account = await mangopayUser.deactivateBankAccount(id)
                 return account satisfies Static<typeof req.route.success>
             }
         }

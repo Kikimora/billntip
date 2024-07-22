@@ -3,3 +3,5 @@
 
 export * from "./api"
 export * from "./config"
+export * from "./mapper"
+export {default as map} from "./mapper"

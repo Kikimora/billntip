@@ -5,22 +5,19 @@ import _ from "lodash";
 import {Schema, TableAttributes, TableSchema} from "@app/dynamodb";
 import {uuid} from "short-uuid";
 import {internalError} from "@app/lambda";
-import {ValuesGenerator} from "@app/dynamodb/schema";
 
-const MemberKey = {
+const UserKey = {
     pk: ddb.Type.String as `U#${string}`,
     sk: ddb.Type.String as `M`,
 } as const
 
-const MemberAttributes = {
+const UserAttributes = {
     mangopayUid: ddb.Type.String,
-    walletId: ddb.Type.String,
-    kycDocumentId: ddb.Type.String,
+    walletId: ddb.Type.String
 } as const
 
-type MemberTable = TableSchema<typeof MemberKey, typeof MemberAttributes>;
-export type MemberItem = TableAttributes<MemberTable> & { pk: string }
-export type RegisteredMemberItem = TableAttributes<MemberTable> & { pk: string, walletId: string, mangopayUid: string }
+export type UsersTable = TableSchema<typeof UserKey, typeof UserAttributes>;
+export type UserItem = TableAttributes<UsersTable> & { pk: string }
 
 const MemberhipKey = {
     pk: ddb.Type.String as `U#${string}`,
@@ -109,14 +106,14 @@ export default class Store {
     db: DynamoDB;
     table: string;
     membership: MembershipsTable;
-    members: MemberTable;
+    members: UsersTable;
     prefix: OrgsTable;
 
     constructor(options: StoreOptions) {
         this.db = options.db ?? new DynamoDB()
         this.table = options.table
         this.membership = ddb.table(this.table, MemberhipKey, MembershipAttributes)
-        this.members = ddb.table(this.table, MemberKey, MemberAttributes)
+        this.members = ddb.table(this.table, UserKey, UserAttributes)
         this.prefix = ddb.table(this.table, OrgKey, OrgAttributes)
     }
 
@@ -197,7 +194,7 @@ export default class Store {
     }
 
     /**
-     * Reject an invite.
+     * Reject an invitation.
      */
     async rejectInvite(username: string, org: string) {
         const item = ddb.update(this.membership, {
@@ -284,7 +281,7 @@ export default class Store {
     /**
      * Fetch member record.
      */
-    async fetchMember(username: string): Promise<MemberItem | undefined> {
+    async fetchUser(username: string): Promise<UserItem | undefined> {
         const {Item: item} = await this.db.getItem(ddb.get(this.members, {
             key: {pk: `U#${username}`, sk: `M`},
         }))
@@ -299,26 +296,24 @@ export default class Store {
      * Create new non-persistent Member item.
      * @param username - member username
      */
-    createMember(username: string): MemberItem {
+    createMember(username: string): UserItem {
         return {
             pk: username
         }
     }
 
-    async updateMember({pk, ...member}: MemberItem) {
+    async updateMember({pk, ...member}: UserItem) {
 
         const item = ddb.update(this.members, {
             key: {pk: `U#${pk}`, sk: 'M'},
             values: {
                 walletId: member.walletId ?? null,
-                mangopayUid: member.mangopayUid ?? null,
-                kycDocumentId: member.kycDocumentId ?? null,
+                mangopayUid: member.mangopayUid ?? null
             },
             expression: ({attr, ref}) => ({
                 set: {
                     [attr.walletId]: ref('walletId'),
-                    [attr.mangopayUid]: ref('mangopayUid'),
-                    [attr.kycDocumentId]: ref('kycDocumentId')
+                    [attr.mangopayUid]: ref('mangopayUid')
                 }
             }),
             condition: ({attr, ref}) =>

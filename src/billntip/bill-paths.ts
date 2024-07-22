@@ -13,7 +13,7 @@ const InviteId = {
 } as const;
 export default {
     "GET /bill/{orgId}/members": {
-        operationId: "ListInvites",
+        operationId: "GET /bill/{orgId}/members",
         security: authenticatedEndpoint,
         path: OrgId,
         query: {
@@ -27,7 +27,7 @@ export default {
         tags: ['Bill']
     },
     "POST /bill/{orgId}/members": {
-        operationId: "CreateInvite",
+        operationId: "POST /bill/{orgId}/members",
         summary: "Invite new users",
         security: authenticatedEndpoint,
         path: OrgId,
@@ -39,7 +39,7 @@ export default {
         tags: ['Bill']
     },
     "GET /bill/{orgId}/members/{id}": {
-        operationId: "GetInvite",
+        operationId: "GET /bill/{orgId}/members/{id}",
         security: authenticatedEndpoint,
         path: {...OrgId, ...InviteId},
         success: MemberSchema,
@@ -47,7 +47,7 @@ export default {
         tags: ['Bill']
     },
     "PUT /bill/{orgId}/members/{id}": {
-        operationId: "UpdateInvite",
+        operationId: "PUT /bill/{orgId}/members/{id}",
         security: authenticatedEndpoint,
         path: {...OrgId, ...InviteId},
         success: MemberSchema,
@@ -55,7 +55,7 @@ export default {
         tags: ['Bill']
     },
     "DELETE /bill/{orgId}/members/{id}": {
-        operationId: "DeleteInvite",
+        operationId: "DELETE /bill/{orgId}/members/{id}",
         security: authenticatedEndpoint,
         path: {...OrgId, ...InviteId},
         success: MemberSchema,

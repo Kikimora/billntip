@@ -8,7 +8,6 @@ import {
 import {CognitoIdentityProvider, UserType} from "@aws-sdk/client-cognito-identity-provider";
 import _ from "lodash";
 import {BaseTriggerEvent} from "aws-lambda/trigger/cognito-user-pool-trigger/_common";
-import {generate} from "generate-password";
 import {Type} from "@sinclair/typebox";
 import diagnostics, {errorWithContext, Tracer, TracingOptions} from "@app/diagnostics";
 import {moduleConfig, pipeline, TracedEvent} from "@app/lambda";
@@ -61,7 +60,7 @@ function isCustomMessageTriggerEvent(event: BaseTriggerEvent<string>): event is 
     return event.triggerSource.startsWith("CustomMessage")
 }
 
-export const trigger = async function (event: BaseTriggerEvent<any> & TracedEvent, context: any) {
+export const trigger = async function (event: BaseTriggerEvent<any> & TracedEvent) {
     const {templates} = await __init()
 
     if (isPreSignUpTriggerEvent(event)) {
@@ -126,7 +125,8 @@ export const trigger = async function (event: BaseTriggerEvent<any> & TracedEven
                 .keyBy('name')
                 .mapValues('value')
                 .value(),
-            ...request.userAttributes
+            ...request.userAttributes,
+            password
         }
 
         function targetAttribute() {
@@ -159,7 +159,7 @@ export const trigger = async function (event: BaseTriggerEvent<any> & TracedEven
             password
         }
         const messageTemplate = await templates.fetchTemplate(context.type + "-email.html")
-        response.emailMessage = messageTemplate(context)
+        response.emailMessage = messageTemplate.body(context)
 
         switch (event.triggerSource) {
             case 'CustomMessage_AdminCreateUser':

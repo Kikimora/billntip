@@ -172,6 +172,14 @@ export function badRequestError(message: string, details?: object) {
     })
 }
 
+export function unauthorizedError(message?: string, details?: object) {
+    return new AppError(message ?? "Unauthorized", {
+        ...details,
+        statusCode: '401',
+        name: 'Unauthorized',
+    })
+}
+
 export function accessDeniedError(message: string = "Access denied.", details?: object) {
     return new AppError(message, {
         ...details,

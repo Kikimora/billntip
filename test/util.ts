@@ -3,10 +3,8 @@ import fs from "fs";
 import {IsEqual, Merge} from "type-fest";
 import _ from "lodash";
 import {Handler, HttpMethod, LambdaRequest} from "@app/lambda";
-import {APIGatewayAuthorizerEvent, Context} from "aws-lambda";
 import {
-    APIGatewayRequestAuthorizerEventV2,
-    APIGatewayTokenAuthorizerEvent
+    APIGatewayRequestAuthorizerEventV2
 } from "aws-lambda/trigger/api-gateway-authorizer";
 
 export function resources() {
@@ -57,7 +55,7 @@ export interface TestHandler {
 export function makeTestHandler<T extends Handler>(handler: T, defaults?: HttpRequestOptions | (() => HttpRequestOptions)): TestHandler {
     return function (options: Partial<HttpRequestOptions>) {
         const defaultValues = typeof defaults === 'function' ? defaults() : defaults
-        options = _.defaults({}, options, defaultValues)
+        options = _.merge({}, options, defaultValues)
         const context = {functionName: "Test", functionVersion: "Test"};
         const payload = commonRequestPayload(options);
         if (options.authorizer !== undefined) {
@@ -84,7 +82,7 @@ export function makeTestAuthorizer<T extends Handler>(handler: T, defaults?: Aut
     return async function (options: Partial<AuthorizerOptions>) {
         const context = {functionName: "Test", functionVersion: "Test"}
         const defaultValues = typeof defaults === 'function' ? defaults() : defaults
-        options = _.defaults({}, options, defaultValues)
+        options = _.merge({}, options, defaultValues)
         const common = commonRequestPayload(options);
         const event : APIGatewayRequestAuthorizerEventV2 = {
             ...common,

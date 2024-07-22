@@ -1,23 +1,16 @@
-import {
-    CognitoIdentityProvider,
-    InitiateAuthResponse,
-    RespondToAuthChallengeResponse,
-    UnauthorizedException
-} from "@aws-sdk/client-cognito-identity-provider";
+import * as Cognito from "@aws-sdk/client-cognito-identity-provider";
 import {createHmac} from "crypto";
 import {jwtDecode} from "jwt-decode";
 import {Static, Type} from "@sinclair/typebox";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
-import _, {die, toCamelCase} from "@app/util";
+import _, {die} from "@app/util";
 import {
     badRequestError,
     HttpError,
     internalError,
-    Middleware,
     pipeline,
     requireLambdaAuth,
-    TracedEvent,
-    moduleConfig
+    moduleConfig, notFoundError
 } from "@app/lambda";
 import diagnostics from "@app/diagnostics";
 import startAuthOperation, {SessionData, AuthOptionsSchema, SessionContextCheck} from "@src/authorizer/operation";
@@ -25,8 +18,9 @@ import Paths from "./paths";
 import * as Schemas from "./schemas";
 import UserRepo, {invalidAliasException, UserAttribute} from "./user"
 import {toUserAttributes} from "./cognito"
+import {CodeDeliveryDetails, Device, DeviceAttribute} from "./schemas";
 
-const cognito = new CognitoIdentityProvider()
+const cognito = new Cognito.CognitoIdentityProvider()
 const dynamo = new DynamoDB()
 const config = moduleConfig()
     .parameters(AuthOptionsSchema)
@@ -70,7 +64,7 @@ declare module "@aws-sdk/client-cognito-identity-provider" {
     interface UnauthorizedException extends HttpError {
     }
 }
-Object.defineProperty(UnauthorizedException.prototype, 'statusCode', {
+Object.defineProperty(Cognito.UnauthorizedException.prototype, 'statusCode', {
     value: '401', writable: false
 })
 
@@ -80,18 +74,6 @@ export const handler = pipeline()
     .traceRequest()
     .withRoutes(Paths)
     .parseJsonBody()
-    .do(async function (this: Middleware, e: TracedEvent, ctx: any) {
-        let response = await this.next(e, ctx)
-        //cleanup AWS noise
-        delete response?.$metadata
-        if ('statusCode' in response) {
-            if (response.body !== undefined && typeof response.body !== 'string')
-                response.body = toCamelCase(response.body)
-        } else {
-            response = toCamelCase(response)
-        }
-        return response
-    })
     .done(async function (req) {
         const {ClientSecret, UserPoolId, ClientId, UsernameAttributes, userRepo, options} = await __init()
         switch (req.routeKey) {
@@ -110,7 +92,6 @@ export const handler = pipeline()
                         ...body.clientMetadata,
                         'user': JSON.stringify(user.attributes)
                     }
-
                     const auth = await cognito.initiateAuth({
                         AuthFlow: body.authFlow,
                         ClientMetadata: clientMetadata,
@@ -197,15 +178,16 @@ export const handler = pipeline()
 //#region SignUp
             case "POST /user": {
                 const {body} = req.parse()
+                type Response = Static<typeof req.route.success>
 
-                async function signUp(username: string) {
+                async function signUp(username: string): Promise<Response> {
                     const attributes = body.userAttributes ?? [];
                     const aliases = userRepo.aliases(attributes)
                     const metadata = {
                         ...body.clientMetadata,
                         _attributes: JSON.stringify(userRepo.normalAttributes(attributes))
                     }
-                    return await cognito.signUp({
+                    const response = await cognito.signUp({
                         Username: username,
                         Password: body.password,
                         UserAttributes: aliases?.map(x => ({Name: x.name, Value: x.value})),
@@ -214,6 +196,12 @@ export const handler = pipeline()
                         ClientId,
                         SecretHash: secretHash(username, ClientSecret, ClientId)
                     })
+
+                    return {
+                        codeDeliveryDetails: toCodeDeliveryDetails(response.CodeDeliveryDetails),
+                        userConfirmed: response.UserConfirmed,
+                        userSub: response.UserSub
+                    }
                 }
 
                 const poolUseUsernameAttributes = (UsernameAttributes.length ?? 0) > 0;
@@ -254,19 +242,19 @@ export const handler = pipeline()
                     }
 
                     const response = await signUp(body.username)
-                    const userId = response.UserSub
+                    const userId = response.userSub
                     if (userId === undefined)
                         throw internalError("Unexpected error - Cognito didn't generate user id")
                     const cognitoAliases = await fetchCognitoAttributes(userId, UserPoolId)
                     const attributes = userRepo.normalAttributes(body.userAttributes ?? [])
                     await userRepo.create(userId, 'trusted', attributes.concat(cognitoAliases))
-                    return response
+                    return response satisfies Static<typeof req.route.success>
                 } else {
                     /**
                      * In this mode username cannot be equal to any of alias attributes which is guaranteed by the user repo.
                      */
                     await userRepo.create(body.username, 'user', body.userAttributes)
-                    return await signUp(body.username)
+                    return await signUp(body.username) satisfies Static<typeof req.route.success>
                 }
             }
             case "POST /user/confirm": {
@@ -276,7 +264,7 @@ export const handler = pipeline()
                     allowUnverifiedAlias: poolUseUsernameAttributes
                 })
                 try {
-                    const cognitoResponse = await cognito.confirmSignUp({
+                    await cognito.confirmSignUp({
                         Username: user.username,
                         ConfirmationCode: body.confirmationCode,
                         ClientMetadata: body.clientMetadata,
@@ -285,7 +273,7 @@ export const handler = pipeline()
                     })
                     const cognitoAttributes = await fetchCognitoAttributes(body.username, UserPoolId);
                     await user.updateAttributes('trusted', cognitoAttributes)
-                    return cognitoResponse
+                    return {} satisfies Static<typeof req.route.success>
                 } finally {
                     await user.unlock()
                 }
@@ -293,12 +281,15 @@ export const handler = pipeline()
             case "POST /user/resend_confirmation_code": {
                 const {body} = req.parse()
                 const {username} = await userRepo.lookupAlias(body.username)
-                return await cognito.resendConfirmationCode({
+                const response = await cognito.resendConfirmationCode({
                     Username: username,
                     ClientMetadata: body.clientMetadata,
                     ClientId,
                     SecretHash: secretHash(username, ClientSecret, ClientId)
                 })
+                return {
+                    codeDeliveryDetails: toCodeDeliveryDetails(response.CodeDeliveryDetails)
+                } satisfies Static<typeof req.route.success>
             }
 //#endregion
 //#region Attributes
@@ -306,13 +297,13 @@ export const handler = pipeline()
                 requireLambdaAuth(req, SessionContextCheck)
                 const username = req.principal.id_token_json['cognito:username']
                 const user = await userRepo.fetch(username)
-                return user.attributes satisfies Readonly<Static<typeof req.route.success>>
+                return user.attributes satisfies Static<typeof req.route.success>
             }
             case "PUT /user/attributes": {
                 requireLambdaAuth(req, SessionContextCheck)
                 const {body} = req.parse()
                 const username = req.principal.id_token_json['cognito:username']
-                let codeDeliveryDetailsList
+                let codeDeliveryDetailsList: CodeDeliveryDetails[] | undefined
 
                 const user = await userRepo.fetchLocked(username)
                 try {
@@ -325,7 +316,13 @@ export const handler = pipeline()
                             ClientMetadata: body.clientMetadata,
                             AccessToken: req.principal.access_token,
                         })
-                        codeDeliveryDetailsList = response.CodeDeliveryDetailsList
+                        if (response.CodeDeliveryDetailsList !== undefined) {
+                            codeDeliveryDetailsList = response.CodeDeliveryDetailsList
+                                .map(toCodeDeliveryDetails)
+                                .filter(function (code): code is CodeDeliveryDetails {
+                                    return code !== undefined
+                                })
+                        }
                     }
                     const normalAttributes = userRepo.normalAttributes(bodyAttributes)
                     const cognitoAttributes = await fetchCognitoAttributes(user.username, UserPoolId)
@@ -334,7 +331,7 @@ export const handler = pipeline()
                     return {
                         attributes: user.attributes,
                         codeDeliveryDetailsList
-                    }
+                    } satisfies Static<typeof req.route.success>
                 } finally {
                     await user.unlock()
                 }
@@ -374,17 +371,20 @@ export const handler = pipeline()
             case "POST /user/password/forgot": {
                 const {body} = req.parse()
                 const {username} = await userRepo.lookupAlias(body.username)
-                return await cognito.forgotPassword({
+                const response = await cognito.forgotPassword({
                     ClientMetadata: body.clientMetadata,
                     Username: username,
                     ClientId,
                     SecretHash: secretHash(username, ClientSecret, ClientId)
                 })
+                return {
+                    codeDeliveryDetails: toCodeDeliveryDetails(response.CodeDeliveryDetails)
+                } satisfies Static<typeof req.route.success>
             }
             case "POST /user/password/confirm": {
                 const {body} = req.parse()
                 const {username} = await userRepo.lookupAlias(body.username)
-                return await cognito.confirmForgotPassword({
+                const response = await cognito.confirmForgotPassword({
                     Username: username,
                     ClientMetadata: body.clientMetadata,
                     Password: body.password,
@@ -392,6 +392,7 @@ export const handler = pipeline()
                     ClientId,
                     SecretHash: secretHash(username, ClientSecret, ClientId),
                 })
+                return response satisfies Static<typeof req.route.success>
             }
 //#endregion
 //#region Devices
@@ -399,26 +400,37 @@ export const handler = pipeline()
                 requireLambdaAuth(req, SessionContextCheck)
                 const session = req.principal;
                 const {body} = req.parse()
-                return await cognito.listDevices({
+                const response = await cognito.listDevices({
                     Limit: body.limit,
                     PaginationToken: body.paginationToken,
                     AccessToken: session.access_token,
                 })
+                return {
+                    devices: (response.Devices ?? [])
+                        .map(toDevice)
+                        .filter(function (device): device is Device {
+                            return device !== undefined
+                        }),
+                    paginationToken: response.PaginationToken
+                } satisfies Static<typeof req.route.success>
             }
             case "GET /user/device/{id}": {
                 requireLambdaAuth(req, SessionContextCheck)
                 const session = req.principal;
-                return await cognito.getDevice({
+                const response = await cognito.getDevice({
                     DeviceKey: req.pathParameters?.['id'],
                     AccessToken: session.access_token,
                 })
+                const device = toDevice(response.Device)
+                if (device == undefined) throw notFoundError()
+                return {device}  satisfies Static<typeof req.route.success>
             }
             case "PUT /user/device/{id}/confirm": {
                 requireLambdaAuth(req, SessionContextCheck)
                 const session = req.principal;
 
                 const {body} = req.parse()
-                return await cognito.confirmDevice({
+                const response = await cognito.confirmDevice({
                     DeviceName: body.deviceName,
                     DeviceSecretVerifierConfig: {
                         Salt: body.deviceSecretVerifierConfig?.salt,
@@ -427,30 +439,36 @@ export const handler = pipeline()
                     DeviceKey: req.pathParameters?.['id'],
                     AccessToken: session.access_token,
                 })
+
+                return {
+                    userConfirmationNecessary: response.UserConfirmationNecessary ?? false
+                }  satisfies Static<typeof req.route.success>
             }
             case "DELETE /user/device/{id}": {
                 requireLambdaAuth(req, SessionContextCheck)
                 const session = req.principal;
-                return await cognito.forgetDevice({
+                await cognito.forgetDevice({
                     DeviceKey: req.pathParameters?.['id'],
                     AccessToken: session.access_token,
                 })
+                return {}  satisfies Static<typeof req.route.success>
             }
             case "PUT /user/device/{id}": {
                 requireLambdaAuth(req, SessionContextCheck)
                 const session = req.principal
                 const {body} = req.parse()
-                return await cognito.updateDeviceStatus({
+                await cognito.updateDeviceStatus({
                     DeviceKey: req.pathParameters?.['id'],
                     DeviceRememberedStatus: body.deviceRememberedStatus,
                     AccessToken: session.access_token,
                 })
+                return {}  satisfies Static<typeof req.route.success>
             }
         }
 
 //#endregion
 
-        async function processAuthResponse(auth: InitiateAuthResponse | RespondToAuthChallengeResponse) {
+        async function processAuthResponse(auth: Cognito.InitiateAuthResponse | Cognito.RespondToAuthChallengeResponse) {
             if (auth.AuthenticationResult !== undefined) {
                 const {AccessToken, IdToken, RefreshToken, ExpiresIn} = auth.AuthenticationResult
                 if (AccessToken === undefined || IdToken === undefined ||
@@ -461,7 +479,11 @@ export const handler = pipeline()
                 }
                 return await createNewSession(RefreshToken, IdToken, AccessToken, ExpiresIn);
             } else {
-                return auth
+                return {
+                    challengeName: auth.ChallengeName,
+                    session: auth.Session,
+                    challengeParameters: auth.ChallengeParameters
+                }
             }
         }
 
@@ -507,4 +529,32 @@ async function fetchCognitoAttributes(username: string, userPoolId: string): Pro
 }
 
 
+function toCodeDeliveryDetails(details?: Cognito.CodeDeliveryDetailsType): CodeDeliveryDetails | undefined {
+    if (details === undefined) return undefined
 
+    return {
+        attributeName: details.AttributeName,
+        deliveryMedium: details.DeliveryMedium,
+        destination: details.Destination,
+    }
+}
+
+function toDevice(device?: Cognito.DeviceType): Device | undefined {
+    if (device === undefined) return undefined
+    return {
+        deviceAttributes: (device.DeviceAttributes ?? [])
+            .map(function (attr) {
+                return {
+                    name: attr.Name,
+                    value: attr.Value
+                }
+            })
+            .filter(function (attr): attr is DeviceAttribute {
+                return attr !== undefined && attr.name != undefined && attr.value !== undefined
+            }),
+        deviceCreateDate: device.DeviceCreateDate,
+        deviceKey: device.DeviceKey,
+        deviceLastAuthenticatedDate: device.DeviceLastAuthenticatedDate,
+        deviceLastModifiedDate: device.DeviceLastModifiedDate
+    }
+}

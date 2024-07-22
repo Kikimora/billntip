@@ -13,10 +13,15 @@ export const TemplateRepoOptions = Type.Object({
 
 export type TemplateRepoOptions = Static<typeof TemplateRepoOptions>
 
+export interface Template {
+    body: _.TemplateExecutor
+    metadata: Record<string, string>
+}
+
 export class TemplateRepo {
     bucket: string
     prefix: string
-    _cache?: LRUCache<string, _.TemplateExecutor>
+    _cache?: LRUCache<string, Template>
 
     constructor(options: TemplateRepoOptions) {
         this.bucket = options.bucket
@@ -44,12 +49,12 @@ export class TemplateRepo {
         }
 
         async function fetchTemplate(bucket: string, prefix: string) {
-            const {Body: body} = await s3.getObject({
+            const {Body: body, Metadata: metadata} = await s3.getObject({
                 Bucket: bucket,
                 Key: _([prefix, name]).compact().join('/')
             })
             const templateBody = await body?.transformToString()
-            return _.template(templateBody)
+            return {body: _.template(templateBody), metadata: metadata ?? {}}
         }
     }
 }

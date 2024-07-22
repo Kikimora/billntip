@@ -188,7 +188,6 @@ describe('Lambda authorizer', () => {
 
     it('return new session context', async () => {
         const {sessionId, sessions} = prepareSession()
-        const start = Date.now()
         const response = await authorizeRequest(sessionId)
         const session = (await sessions.fetch(sessionId))!
         expect(response).toEqual({
@@ -292,12 +291,12 @@ describe('Tokens endpoint', () => {
         expect(response.status).toBe(401)
     }, 10000)
 
-    it('returns 403 when called with invalid session cookie', async () => {
+    it('returns 401 when called with invalid session cookie', async () => {
         const {SessionKey} = testContext()
         const response = await httpReal.get(`${api.gateway.url}/user/session`, {
             headers: {'Cookie': `${SessionKey}="Invalid session id"`},
         })
-        expect(response.status).toBe(403)
+        expect(response.status).toBe(401)
     }, 10000)
 })
 

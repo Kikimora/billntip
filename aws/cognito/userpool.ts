@@ -149,10 +149,14 @@ const manageUsersPolicy = new aws.iam.Policy("cognito-manage-users-policy", {
         .buildPolicy()
 })
 
+//There is a strange issue with this attachment. Sometimes it is created, sometimes not.
+//I deploy with `--refresh` it attaches to the role. But then something happens, maybe normal deploy and attachment
+// disappear.
+//I attempt to work around this by adding explicit dependencies to role and policy.
 export const triggersPolicy = new aws.iam.RolePolicyAttachment("cognito-manage-users-policy-attachment", {
     role: manageUsersRole,
     policyArn: manageUsersPolicy.arn
-})
+}, {dependsOn:[manageUsersRole, manageUsersPolicy]})
 
 const recipients = new aws.cognito.UserGroup("cognito-recipient-group", {
     name: "recipient",

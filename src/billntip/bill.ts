@@ -292,7 +292,7 @@ export const handler = pipeline()
                     Body: {
                         Html: {
                             Charset: "utf8",
-                            Data: template({
+                            Data: template.body({
                                 attributes: _(attributes)
                                     .filter(x => x.verified || x.verified === undefined)
                                     .keyBy('name')
@@ -308,7 +308,7 @@ export const handler = pipeline()
                     },
                     Subject: {
                         Charset: "utf-8",
-                        Data: `${metadata['invited_by_first_name']} invited you to join the ${metadata['org_title']} team on Bill&Tip`
+                        Data: template.metadata['subject'] ?? `${metadata['invited_by_first_name']} invited you to join the ${metadata['org_title']} team on Bill&Tip`
                     }
                 }
             })

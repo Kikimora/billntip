@@ -1,0 +1,25 @@
+#!/bin/bash
+
+if ! command -v rg &> /dev/null
+then
+    echo "rg (ripgrep) is required to filter logs"
+    exit 1
+fi
+
+if [ $# -lt 2 ];
+then
+  echo "Usage: ./bin/logs <ENV> <function name> [aws logs tail arguments...]"
+  echo "Examples:"
+  echo "./bin/logs dev users-handler --since 1h"
+  echo "./bin/logs dev users-handler --filter-pattern '{$.requestId=\"09225cd0-cbb5-491c-afd3-0ee87912f02d\"}'"
+  echo "./bin/logs dev users-handler --filter-pattern '{$.level=\"ERROR\"}'"
+  exit 1
+fi
+
+PROFILE=${AWS_PROFILE:=billntip-dev}
+REGION=${AWS_REGION:=eu-south-1}
+ENVIRONMENT=$1
+FN=$2
+aws --region $REGION --profile $PROFILE logs tail \
+  --no-cli-pager --format json \
+  /aws/lambda/billntip-$ENVIRONMENT-$FN-fn ${@:3}

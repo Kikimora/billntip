@@ -7,6 +7,23 @@ const ShortUserInfo = Type.Object({
     last_name: Type.String({description: "User last name"}),
 });
 
+const Organisation = Type.Object({
+        id: Type.String({description: "Organisation identifier"}),
+        title: Type.String({description: "Organisation name"})
+    }, {
+        $id: "Organisation",
+        description: "Target organisation"
+    }
+);
+
+const BasicOrganisationInfo = Type.Object({
+        id: Type.String({description: "Organisation identifier"}),
+        title: Type.String({description: "Organisation name"})
+    }, {
+        $id: "BasicOrganisationInfo",
+        description: "Basic information about an organisation"
+    }
+);
 export const MemberSchema = Type.Object({
     accepted_at: Type.Optional(Type.Number({
         description: "Invite acceptance timestamp", examples: [1716814592]
@@ -15,11 +32,7 @@ export const MemberSchema = Type.Object({
         description: "Invite creation timestamp", examples: [1716814592]
     }),
     invited_by: ShortUserInfo,
-    org: Type.Object({
-            id: Type.String({description: "Target organisation identifier"}),
-            title: Type.String({description: "Target organisation name"})
-        }, {description: "Target organisation"}
-    ),
+    org: BasicOrganisationInfo,
     rejected_at: Type.Optional(Type.Number({description: "Rejection timestamp", examples: [1716814592]})),
     role: Type.Union([
         Type.Literal("admin"),
@@ -151,8 +164,15 @@ export const TxId = {
     })
 }
 
+const KYCDocumentType = Type.Union([
+    Type.Literal("address"),
+    Type.Literal("identity"),
+    Type.Literal("registration"),
+    Type.Literal("articles_of_association"),
+    Type.Literal("shareholder_declaration")]);
 export const KYCProcess = Type.Object({
     process_id: Type.String({description: "Verification process identifier."}),
+    type: KYCDocumentType,
     created_at: Type.Number({
         description: "The date and time at which the process has started.",
         examples: [1716814592]
@@ -169,7 +189,7 @@ export const KYCProcess = Type.Object({
         Type.Literal("REFUSED"),
         Type.Literal("OUT_OF_DATE")
     ]),
-    refuse_reason: Type.Union([
+    refuse_reason: Type.Optional(Type.Union([
         Type.Literal("DOCUMENT_DO_NOT_MATCH_USER_DATA"),
         Type.Literal("DOCUMENT_DO_NOT_MATCH_ACCOUNT_DATA"),
         Type.Literal("DOCUMENT_FALSIFIED"),
@@ -180,14 +200,40 @@ export const KYCProcess = Type.Object({
         Type.Literal("DOCUMENT_UNREADABLE"),
         Type.Literal("SPECIFIC_CASE"),
         Type.Literal("UNDERAGE_PERSON")
-    ]),
-    refuse_message: Type.String({description: "Message from the KYC team explaining reason for refusal."})
+    ])),
+    refuse_message: Type.Optional(Type.String({description: "Message from the KYC team explaining reason for refusal."})),
+    tag: Type.Optional(Type.String())
 }, {
     $id: "KYCProcess",
     description: "The KYC Process object is a container tracking KYC document submissions, verification process and outcome."
 });
-
 export type KYCProcess = Static<typeof KYCProcess>
+export const KYCDetails = Type.Object({
+    address: Type.Optional(KYCProcess),
+    identity: Type.Optional(KYCProcess),
+    registration: Type.Optional(KYCProcess),
+    articles_of_association: Type.Optional(KYCProcess),
+    shareholder_declaration: Type.Optional(KYCProcess),
+}, {$id: "KYCDetails"})
+export type KYCDetails = Static<typeof KYCDetails>
+const VerificationFiles = Type.Array(Type.String({maxLength: 5 * 1024 * 1024}), {
+    minItems: 1,
+    maxItems: 2,
+    $id: "VerificationFiles"
+})
+export type KYCDocumentType = Static<typeof KYCDocumentType>
+export const VerificationRequest = Type.Object({
+    type: KYCDocumentType,
+    files: VerificationFiles
+
+}, {$id: "VerificationRequest"})
+export type VerificationRequest = Static<typeof VerificationRequest>
+export const VerificationResponse = Type.Object({
+    type: KYCDocumentType,
+    data: KYCProcess
+
+}, {$id: "VerificationResponse"})
+export type VerificationResponse = Static<typeof VerificationResponse>
 
 const AccountNumber = Type.String({
     description: "The account number of the bank account."
@@ -325,3 +371,61 @@ export const CreateTransactionRequest = Type.Object({
     details: TaggedUnion([WirePayinSchema, CCPayinSchema, WirePayoutSchema], {tag: "type"})
 })
 export type CreateTransactionRequest = Static<typeof CreateTransactionRequest>
+
+export const Me = Type.Object({
+    kyc: Type.Object({
+        level: Type.Union([Type.Literal("LIGHT"), Type.Literal("REGULAR")]),
+        evidence: KYCDetails
+    }),
+    kyc_level: Type.Union([Type.Literal("LIGHT"), Type.Literal("REGULAR")]),
+    proof_of_identity: Type.Boolean(),
+    proof_of_address: Type.Boolean(),
+    category: Type.Optional(Type.Union([Type.Literal("PAYER"), Type.Literal("OWNER")])),
+    regulatory_status: Type.Object({
+        action_code: Type.String(),
+        blocked: Type.Object({
+            inflows: Type.Boolean(),
+            outflows: Type.Boolean(),
+        })
+    }, {
+        description: "User regulatory status. See more at https://mangopay.com/docs/concepts/users/policies/blocked-users",
+        examples: [
+            {
+                "action_code": "",
+                "scope": {
+                    "inflows": false,
+                    "outflows": false
+                }
+            },
+            {
+                "action_code": "008702",
+                "scope": {
+                    "inflows": true,
+                    "outflows": true
+                }
+            },
+        ]
+    }),
+    wallet: Type.Optional(AmountSchema)
+}, {$id: "Me"})
+
+
+export const Recipient = Type.Object({
+    first_name: Type.String({minLength: 3, maxLength: 100}),
+    last_name: Type.String({minLength: 3, maxLength: 100}),
+    phone: Type.String({minLength: 3, pattern: "\\+\\d+", maxLength: 100}),
+    birthdate: Type.Number({minimum: 18, maximum: 200}),
+    address: Type.Object({
+        country: Type.String({minLength: 2, maxLength: 3}),
+        street_address: Type.Optional(Type.String()),
+        locality: Type.Optional(Type.String()),
+        region: Type.Optional(Type.String()),
+        postal_code: Type.Optional(Type.String()),
+    }),
+    nationality: Type.String({minLength: 2, maxLength: 3}),
+    tos: Type.Object({
+        general: Type.Literal(true),
+        privacy: Type.Literal(true),
+    })
+})
+export type Recipient = Static<typeof Recipient>

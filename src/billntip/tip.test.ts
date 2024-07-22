@@ -4,7 +4,7 @@ import {__init, handler} from "./tip"
 
 const init = prepare('Once', async function () {
     const [module, group] = await Promise.all([__init(), cognito.TestGroup.fetch()])
-    return {membersRepo: module.membersRepo, usersRepo: module.usersRepo, group}
+    return {tipUsers: module.tipUsers, users: module.users, group}
 })
 
 const logins = prepare('Once', {
@@ -28,14 +28,14 @@ const data = prepare('Once', {
     async before() {
         const adminAddUserToGroup = jest.spyOn(CognitoIdentityProvider.prototype, 'adminAddUserToGroup')
         const {businessLogin, waiterLogin} = logins()
-        const {usersRepo, membersRepo} = init()
+        const {users, tipUsers} = init()
         const [org, admin, waiter] = await Promise.all([
-            membersRepo.createOrg({title: "Test"}),
-            usersRepo.create(businessLogin.username, "trusted", [
+            tipUsers.createOrg({title: "Test"}),
+            users.create(businessLogin.username, "trusted", [
                 {name: "first_name", value: "Business"},
                 {name: "last_name", value: "User"}
             ]),
-            usersRepo.create(waiterLogin.username, "trusted", [
+            users.create(waiterLogin.username, "trusted", [
                 {name: "first_name", value: "Waiter"},
                 {name: "last_name", value: "User"},
                 {name: "phone", value: "+351111222333"},
@@ -61,16 +61,16 @@ const data = prepare('Once', {
         return {org, admin, waiter, adminAddUserToGroup}
     },
     async after({org, admin, waiter}) {
-        const {membersRepo} = init()
+        const {tipUsers} = init()
         await Promise.all([
             admin.delete(true),
             waiter.delete(true),
-            membersRepo.deleteOrg(org.pk),
+            tipUsers.deleteOrg(org.pk),
         ])
     }
 })
 
-const registration = makeTestHandler(handler, function () {
+const registerWaiter = makeTestHandler(handler, function () {
     const {waiterLogin} = logins()
     return {
         method: "POST",
@@ -81,11 +81,11 @@ const registration = makeTestHandler(handler, function () {
 
 const inviteAndRegister = makeFixture({
     async before() {
-        const {membersRepo} = init()
+        const {tipUsers} = init()
         const {org, waiter, admin} = data()
 
         const now = Date.now() / 1000
-        const inviteFromAdmin = await membersRepo.invite({
+        const inviteFromAdmin = await tipUsers.invite({
             org: {
                 id: org.pk,
                 title: org.title ?? ""
@@ -100,15 +100,15 @@ const inviteAndRegister = makeFixture({
             role: 'member'
         })
 
-        const pendingInvites = await registration({})
+        const pendingInvites = await registerWaiter({})
 
         return {now, pendingInvites, inviteFromAdmin}
     },
     async after() {
         jest.clearAllMocks()
-        const {membersRepo} = init()
+        const {tipUsers} = init()
         const {org, waiter} = data()
-        const member = await membersRepo.fetch(waiter.username)
+        const member = await tipUsers.fetch(waiter.username)
         await Promise.all([
             member.removeMembership(org.pk),
             member.delete()
@@ -142,7 +142,7 @@ describe("POST /tip/registration", () => {
                         PostalCode: "2750-609",
                         Country: "PT"
                     },
-                    Tag: "Recipient",
+                    Tag: waiter.username,
                     UserCategory: "OWNER",
                 })
             })
@@ -157,11 +157,12 @@ describe("POST /tip/registration", () => {
             })
 
             it("creates member record", async () => {
-                const {membersRepo} = init()
+                const {tipUsers} = init()
                 const {now, org, waiter, admin} = fixture()
 
-                const member = await membersRepo.fetch(waiter.username)
-                expect(await member.fetch()).toEqual(expect.objectContaining({
+                const member = await tipUsers.fetch(waiter.username)
+                const userItem = await member.fetch();
+                expect(userItem).toEqual(expect.objectContaining({
                     pk: waiter.username,
                     mangopayUid: expect.toStartWith("usr_"),
                     walletId: expect.toStartWith("wlt_")
@@ -232,7 +233,7 @@ describe("POST /tip/registration", () => {
                 })
 
                 it("updates MangoPay user", async () => {
-                    await registration({})
+                    await registerWaiter({})
                     //assert
                     expect(mangopay.updateUser).toBeCalledWith(expect.objectContaining({
                         FirstName: "Bibabaka",
@@ -248,7 +249,7 @@ describe("POST /tip/registration", () => {
             })
 
             it("creates only one EUR wallet", async () => {
-                await registration({})
+                await registerWaiter({})
                 expect(mangopay.createWallet).toHaveBeenCalledOnce()
             })
         })

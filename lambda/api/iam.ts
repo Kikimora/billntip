@@ -1,7 +1,7 @@
 import * as lambda from "aws-lambda";
 import {Middleware, Pipeline, LambdaRequest} from "./pipeline"
-import {AppError, HttpError} from "./errors";
-import {Static, TSchema, TUnknown, Type} from "@sinclair/typebox";
+import {unauthorizedError} from "./errors";
+import {Static, TSchema, Type} from "@sinclair/typebox";
 import {TypeCheck, TypeCompiler} from "@sinclair/typebox/compiler";
 
 type IAM = lambda.APIGatewayEventRequestContextIAMAuthorizer
@@ -76,20 +76,12 @@ export function authorizerType(r: LambdaRequest): AuthorizerType {
     return "none"
 }
 
-export class NotAuthorizedError extends AppError implements HttpError {
-    constructor(message: string = "Not Authorized") {
-        super(message);
-    }
-
-    public readonly statusCode = '401'
-}
-
 /**
  * See {@link Pipeline.requireIAMAuth}.
  */
 export function requireIAMAuth(e: LambdaRequest): asserts e is IAMAuthorizedRequest {
     if (!isIAMAuthorizedRequest(e)) {
-        throw new NotAuthorizedError("IAM authorizer required for the event.")
+        throw unauthorizedError()
     }
     Object.defineProperty(e, "principal", {
         value: e.requestContext.authorizer.iam,
@@ -102,12 +94,12 @@ export function requireIAMAuth(e: LambdaRequest): asserts e is IAMAuthorizedRequ
  */
 export function requireJWTAuth<S extends TSchema>(e: LambdaRequest, checker?:TypeCheck<S>): asserts e is JWTAuthorizedRequest<Static<S>> {
     if (!isJWTAuthorizedRequest(e)) {
-        throw new NotAuthorizedError("JWT authorizer required for the event.")
+        throw unauthorizedError()
     }
     if (checker !== undefined) {
         const errors = Array.from(checker.Errors(e.requestContext.authorizer.jwt.claims))
         if (errors.length > 0) {
-            throw new NotAuthorizedError()
+            throw unauthorizedError()
                 .withContext("requireJWTAuth", {errors})
         }
     }
@@ -122,12 +114,12 @@ export function requireJWTAuth<S extends TSchema>(e: LambdaRequest, checker?:Typ
  */
 export function requireLambdaAuth<S extends TSchema>(e: LambdaRequest, checker?: TypeCheck<S>): asserts e is LambdaAuthorizedRequest<Static<S>> {
     if (!isLambdaAuthorizedRequest<Static<S>>(e)) {
-        throw new NotAuthorizedError("Lambda authorizer required for the event.")
+        throw unauthorizedError()
     }
     if (checker !== undefined) {
         const errors = Array.from(checker.Errors(e.requestContext.authorizer.lambda))
         if (errors.length > 0) {
-            throw new NotAuthorizedError()
+            throw unauthorizedError()
                 .withContext("requireLambdaAuth", {errors})
         }
     }

@@ -18,6 +18,11 @@ export const Tip = {
     handlers: ["handler"]
 } as const
 
+export const MangopayHooks = {
+    name: "billntip/mangopay-hooks",
+    handlers: ["handler"]
+} as const
+
 export const Users = {
     name: "users",
     handlers: ["handler"]
@@ -40,6 +45,7 @@ export const Lambdas = lambdaSet()
     .add(Cognito)
     .add(Bill)
     .add(Tip)
+    .add(MangopayHooks)
     .add(Images)
     .build()
 

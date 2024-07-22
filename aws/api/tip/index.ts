@@ -2,12 +2,14 @@ import * as pulumi from "@pulumi/pulumi"
 import {Lambdas} from "@aws/lambdas";
 import ddb, {allowCrud} from "@aws/dynamodb";
 import Paths from "@src/billntip/tip-paths";
+import HookPaths from "@src/billntip/mangopay-hooks-paths";
 import authorizer from "../authorizer";
 import cognito from "@aws/cognito";
-import {newPolicy} from "@aws/util";
+import {newApiGwIntegration, newPolicy} from "@aws/util";
 import {bucket} from "@aws/s3";
 
-const lambda = authorizer.gateway.newLambda(Lambdas['billntip/tip.handler'])
+const gw = authorizer.gateway;
+const lambda = gw.newLambda(Lambdas['billntip/tip.handler'])
     .args({
         environment: {
             variables: {
@@ -34,8 +36,17 @@ const lambda = authorizer.gateway.newLambda(Lambdas['billntip/tip.handler'])
     )
     .build()
 
-export default authorizer.newAuthorizedIntegration(lambda)
+export const api = authorizer.newAuthorizedIntegration(lambda)
     .addRoutes(Paths)
     .done()
 
 
+export const hooks = newApiGwIntegration(gw, gw.newLambda(Lambdas['billntip/mangopay-hooks.handler'])
+    .args({timeout: 10})
+    .inlinePolicy(allowCrud().on(ddb.dataTable).buildRoleInlinePolicy('DynamoDbAccess'))
+    .inlinePolicy(
+        newPolicy().allow('s3:GetObject').on(pulumi.interpolate`${bucket.arn}/templates/*`).buildRoleInlinePolicy('S3Access')
+    )
+    .build())
+    .addRoutes(HookPaths)
+    .done()

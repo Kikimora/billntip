@@ -7,7 +7,7 @@ import {regionalCertificate} from "../certificate"
 import {callbackRoute, tokensRoute} from "./auth";
 import bill from "./bill";
 import images from "./images";
-import tip from "./tip";
+import * as tip from "./tip";
 import users from "./users";
 import {configFolder} from "@aws/config";
 import * as pulumi from "@pulumi/pulumi";
@@ -30,7 +30,8 @@ const config = new aws.ssm.Parameter("api-config", {
 const routes = [
     ...tokensRoute.routes,
     ...callbackRoute.routes,
-    ...tip.routes,
+    ...tip.api.routes,
+    ...tip.hooks.routes,
     ...bill.routes,
     ...users.routes,
     ...images.routes,

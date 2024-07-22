@@ -1,6 +1,7 @@
 import {Type, Type as T} from '@sinclair/typebox';
 import {RouteMap} from "@app/lambda";
 import * as schemas from "./schemas";
+import {Me} from "./schemas";
 
 export default {
     "POST /tip/registration": {
@@ -11,7 +12,6 @@ export default {
         responses: [401, 403],
         tags: ['Tip']
     },
-
     "GET /tip/invites": {
         operationId: "GET /tip/invites",
         query: {
@@ -77,54 +77,23 @@ export default {
 
     "GET /tip/me": {
         operationId: "GET /tip/me",
-        success: Type.Object({
-            kyc_level: Type.Union([Type.Literal("LIGHT"), Type.Literal("REGULAR")]),
-            proof_of_identity: Type.Boolean(),
-            proof_of_address: Type.Boolean(),
-            category: Type.Optional(Type.Union([Type.Literal("PAYER"), Type.Literal("OWNER")])),
-            regulatory_status: Type.Object({
-                action_code: Type.String(),
-                blocked: Type.Object({
-                    inflows: Type.Boolean(),
-                    outflows: Type.Boolean(),
-                })
-            }, {
-                description: "User regulatory status. See more at https://mangopay.com/docs/concepts/users/policies/blocked-users",
-                examples: [
-                    {
-                        "action_code": "",
-                        "scope": {
-                            "inflows": false,
-                            "outflows": false
-                        }
-                    },
-                    {
-                        "action_code": "008702",
-                        "scope": {
-                            "inflows": true,
-                            "outflows": true
-                        }
-                    },
-                ]
-            }),
-            wallet: Type.Optional(schemas.AmountSchema)
-        }),
+        success: Me,
+        responses: [401, 403],
+        tags: ['Tip']
+    },
+
+    "GET /tip/verification": {
+        operationId: "GET /tip/verification",
+        success: schemas.KYCDetails,
         responses: [401, 403],
         tags: ['Tip']
     },
 
     "POST /tip/verification": {
         operationId: "POST /tip/verification",
-        body: Type.Array(Type.String({maxLength: 5 * 1024 * 1024}), {minItems: 1, maxItems: 2}),
-        success: schemas.KYCProcess,
+        body: schemas.VerificationRequest,
+        success: schemas.VerificationResponse,
         responses: [400, 401, 403],
-        tags: ['Tip']
-    },
-
-    "GET /tip/verification": {
-        operationId: "GET /tip/verification",
-        success: Type.Partial(schemas.KYCProcess),
-        responses: [401, 403],
         tags: ['Tip']
     },
 
@@ -163,5 +132,14 @@ export default {
         success: schemas.BankAccount,
         responses: [400, 401, 403],
         tags: ['Tip']
-    }
+    },
+    //
+    // "GET /tip/locations": {
+    //     operationId: "GET /tip/locations",
+    //     success: Type.Array(schemas.BankAccount),
+    //     responses: [401, 403],
+    //     tags: ['Tip']
+    // }
 } as const satisfies RouteMap
+
+

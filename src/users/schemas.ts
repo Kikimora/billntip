@@ -1,4 +1,4 @@
-import {Type as T} from "@sinclair/typebox";
+import {Static, Type as T} from "@sinclair/typebox";
 
 const ClientMetadata = T.Optional(T.Record(
     T.String({maxLength: 20}),
@@ -46,15 +46,17 @@ export const SignUpBody = T.Object({
     validationData: T.Optional(UserAttributes),
 }, {$id: "SignUpBody"});
 
+const CodeDeliveryDetails = T.Object({
+    destination: T.Optional(T.String()),
+    deliveryMedium: T.Optional(T.Union([
+        T.Literal("SMS"), T.Literal("EMAIL"), T.String()
+    ])),
+    attributeName: T.Optional(T.String())
+});
+export type CodeDeliveryDetails = Static<typeof CodeDeliveryDetails>
 export const SignUpResponse = T.Object({
     userConfirmed: T.Optional(T.Boolean()),
-    codeDeliveryDetails: T.Optional(T.Object({
-        destination: T.Optional(T.String()),
-        deliveryMedium: T.Optional(T.Union([
-            T.Literal("SMS"), T.Literal("EMAIL"), T.String()
-        ])),
-        attributeName: T.Optional(T.String())
-    })),
+    codeDeliveryDetails: T.Optional(CodeDeliveryDetails),
     userSub: T.Optional(T.String())
 }, {
     $id: 'SignUpResponse'
@@ -86,13 +88,15 @@ export const ConfirmSignUpBody = T.Object({
     confirmationCode: T.String(),
     clientMetadata: ClientMetadata,
 }, {$id: 'ConfirmSignUpBody'});
-export const ConfirmSignUpResponse = T.Null();
+export const ConfirmSignUpResponse = T.Object({});
 
 export const ResendConfirmationCodeBody = T.Object({
     username: T.String(),
     clientMetadata: ClientMetadata,
 }, {$id: 'ResendConfirmationCodeBody'});
-export const ResendConfirmationCodeResponse = T.Null();
+export const ResendConfirmationCodeResponse = T.Object({
+    codeDeliveryDetails: T.Optional(CodeDeliveryDetails)
+});
 export const InitiateAuthBody = T.Object({
     authFlow: T.Union([
         T.Literal("ADMIN_NO_SRP_AUTH"),
@@ -183,14 +187,16 @@ export const ForgotPasswordBody = T.Object({
     username: T.String(),
     clientMetadata: ClientMetadata,
 }, {$id: 'ForgotPasswordBody'});
-export const ForgotPasswordResponse = T.Null();
+export const ForgotPasswordResponse = T.Object({
+    codeDeliveryDetails: T.Optional(CodeDeliveryDetails)
+});
 export const ConfirmForgotPasswordBody = T.Object({
     username: T.String(),
     clientMetadata: ClientMetadata,
     password: T.String(),
     confirmationCode: T.String(),
 }, {$id: 'ConfirmForgotPasswordBody'});
-export const ConfirmForgotPasswordResponse = T.Null();
+export const ConfirmForgotPasswordResponse = T.Object({});
 
 export const GetSessionResponse = T.Object({
     accessToken: T.String(),
@@ -206,19 +212,25 @@ export const GetDevicesBody = T.Object({
     paginationToken: T.Optional(T.String()),
     limit: T.Optional(T.Number({minimum: 1})),
 }, {$id: 'GetDevicesBody'});
-export const GetDevicesResponse = T.Null();
+const DeviceAttribute = T.Object({
+    name: T.String(),
+    value: T.String()
+})
+export type DeviceAttribute = Static<typeof DeviceAttribute>
+const Device = T.Object({
+    deviceKey: T.Optional(T.String()),
+    deviceAttributes: T.Optional(T.Array(DeviceAttribute)),
+    deviceCreateDate: T.Optional(T.Date()),
+    deviceLastModifiedDate: T.Optional(T.Date()),
+    deviceLastAuthenticatedDate: T.Optional(T.Date())
+}, {$id: "Device"})
+export type Device = Static<typeof Device>
+export const GetDevicesResponse = T.Object({
+    devices: T.Array(Device),
+    paginationToken: T.Optional(T.String())
+});
 export const GetDeviceBody = T.Object({
-    device: T.Object({
-        deviceAttributes: T.Array(T.Object({
-                name: T.String(),
-                value: T.String()
-            }
-        )),
-        deviceCreateDate: T.Number(),
-        deviceKey: T.String(),
-        deviceLastAuthenticatedDate: T.Number(),
-        deviceLastModifiedDate: T.Number()
-    })
+    device: Device
 }, {$id: 'GetDeviceBody'});
 export const UpdateDeviceStatusBody = T.Object({
     deviceRememberedStatus: T.Optional(T.Union([
@@ -226,7 +238,7 @@ export const UpdateDeviceStatusBody = T.Object({
         T.Literal("not_remembered"),
     ]))
 }, {$id: 'UpdateDeviceStatusBody'});
-export const UpdateDeviceStatusResponse = T.Null();
+export const UpdateDeviceStatusResponse = T.Object({});
 export const ConfirmDeviceBody = T.Object({
     deviceName: T.Optional(T.String()),
     deviceSecretVerifierConfig: T.Optional(T.Object({
@@ -234,5 +246,7 @@ export const ConfirmDeviceBody = T.Object({
         salt: T.Optional(T.String()),
     }))
 }, {$id: 'ConfirmDeviceBody'});
-export const ConfirmDeviceResponse = T.Null();
-export const ForgetDeviceResponse = T.Null();
+export const ConfirmDeviceResponse = T.Object({
+    userConfirmationNecessary: T.Boolean()
+});
+export const ForgetDeviceResponse = T.Object({});
