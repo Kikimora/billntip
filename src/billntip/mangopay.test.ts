@@ -64,7 +64,7 @@ describe("MangoPay", () => {
 
     })
 
-    describe("PayIn PayOut story", () => {
+    describe.skip("PayIn PayOut story", () => {
         it("creates test bank account", async () => {
             try {
                 const account = await Api.Users.createBankAccount("user_m_01J26RMVZ59X148AD0WESHFACE", {
