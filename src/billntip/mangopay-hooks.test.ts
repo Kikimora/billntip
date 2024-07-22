@@ -45,6 +45,11 @@ describe("MangoPay hooks", () => {
 
         it.each([
             {
+                eventType: "KYC_VALIDATION_ASKED",
+                status: "VALIDATION_ASKED" as KYCProcess['status'],
+                template: "kyc-started-email.html",
+                title: "Your Bill&Tip account is in review."
+            },{
                 eventType: "KYC_SUCCEEDED",
                 status: "VALIDATED" as KYCProcess['status'],
                 template: "kyc-succeeded-email.html",
@@ -107,6 +112,7 @@ describe("MangoPay hooks", () => {
         })
 
         it.each([
+            {eventType: "KYC_VALIDATION_ASKED"},
             {eventType: "KYC_SUCCEEDED"},
             {eventType: "KYC_OUTDATED"},
             {eventType: "KYC_FAILED"}

@@ -57,7 +57,14 @@ export const handler = pipeline()
             case 'GET /tip/mangopay/callback': {
                 const {query} = req.parse()
                 switch (query.EventType) {
-                    case 'KYC_SUCCEEDED': {
+                    case 'KYC_VALIDATION_ASKED': {
+                        const rid = query.RessourceId
+                        const doc = await api.fetchKYCDocument(rid)
+                        const uid = kycDocHasUid(doc)
+                        if (uid === undefined) return
+                        await sendEmail(uid, "kyc-started-email.html", `Your Bill&Tip account is in review.`)
+                        break
+                    }case 'KYC_SUCCEEDED': {
                         const rid = query.RessourceId
                         const doc = await api.fetchKYCDocument(rid)
                         const uid = kycDocHasUid(doc)
