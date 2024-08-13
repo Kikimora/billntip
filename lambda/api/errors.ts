@@ -1,7 +1,7 @@
 import {Type} from "@sinclair/typebox";
 import {Middleware, Pipeline} from "./pipeline";
 import {ErrorContext, TraceAttributes, errorWithContext} from "@app/diagnostics";
-import {specializeUnionError} from "@app/lambda/tagged_union";
+import {taggedUnionError} from "@app/lambda/tagged_union";
 
 export interface HttpError {
     readonly statusCode: string
@@ -47,9 +47,15 @@ Pipeline.prototype.handleErrors = function () {
                 $metadata, __type, $fault,
                 ...rest
             } = exception
-            error = specializeUnionError(error)
+            statusCode = statusCode ?? $metadata?.httpStatusCode ?? 500;
+            // Throw unhandled internal errors back to Lambda runtime to let it know something is very wrong.
+            // This triggers Lambda reload which reloads configuration. Reloading configuration and clearing out memory
+            // caches may fix the problem.
+            if (statusCode >= 500 || statusCode === "500") throw e
+            // Prettify default TypeBox union errors which otherwise are quite useless.
+            error = taggedUnionError(error)
             return {
-                "statusCode": statusCode ?? $metadata?.httpStatusCode ?? 500,
+                "statusCode": statusCode,
                 "body": JSON.stringify({
                     error: String(name).substring(0, MaxErrorNameLength),
                     message: String(message).substring(0, MaxErrorMessageLength),

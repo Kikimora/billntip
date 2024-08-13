@@ -13,10 +13,7 @@ export const TemplateRepoOptions = Type.Object({
 
 export type TemplateRepoOptions = Static<typeof TemplateRepoOptions>
 
-export interface Template {
-    body: _.TemplateExecutor
-    metadata: Record<string, string>
-}
+export type Template = _.TemplateExecutor
 
 export class TemplateRepo {
     bucket: string
@@ -54,7 +51,7 @@ export class TemplateRepo {
                 Key: _([prefix, name]).compact().join('/')
             })
             const templateBody = await body?.transformToString()
-            return {body: _.template(templateBody), metadata: metadata ?? {}}
+            return _.template(templateBody)
         }
     }
 }

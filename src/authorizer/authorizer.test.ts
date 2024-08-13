@@ -164,7 +164,7 @@ describe('Lambda authorizer', () => {
             const context = testContext()
             const sessionId = await startSession();
             const session = await context.sessions.fetch(sessionId)
-            return {sessionId, session:session!, ...context}
+            return {sessionId, session: session!, ...context}
         },
         async after() {
         },
@@ -328,14 +328,18 @@ async function startSession() {
     return sessions.sessionId(cookie!)
 }
 
-const cookieHandler = makeTestAuthorizer(cookie)
+const cookieHandler = makeTestAuthorizer(cookie, {
+    routeKey: "GET /some/random/endpoint",
+})
 
 const authorizeRequest = async function (sessionId: string) {
     const {SessionKey} = testContext()
     return await cookieHandler({cookies: {[SessionKey]: sessionId}})
 }
 
-const codeHandler = makeTestHandler(code)
+const codeHandler = makeTestHandler(code, {
+    routeKey: "GET /auth/cognito/idpresponse"
+})
 
 function sessionCookieHeader() {
     const {SessionKey} = testContext()

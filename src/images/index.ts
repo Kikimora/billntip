@@ -1,23 +1,23 @@
 import {Static, Type} from "@sinclair/typebox";
-import {moduleConfig, pipeline} from "@app/lambda";
+import {badRequestError, internalError, bootstrap, pipeline} from "@app/lambda";
 import {SessionContextSchema} from "@src/authorizer/operation";
-import Paths, {CreateEmptyImageResponse} from "./paths";
+import {S3Object} from "@src/object-store"
+import Paths from "./paths";
 import ImageUploader from "./uploads"
+import sharp, {FormatEnum} from "sharp";
+import {StreamingBlobPayloadOutputTypes} from "@smithy/types";
 
-export type CreateUploadResponse = Static<typeof CreateEmptyImageResponse>
-
-export const config = moduleConfig()
+export const Module = bootstrap()
     .parameters({
         s3: Type.Object({
             bucket: Type.String(),
-            cdnRoot: Type.String(),
+            cdn: Type.String(),
+            tmpPrefix: Type.Optional(Type.String({default:"/tmp"})),
+            publicPrefix: Type.Optional(Type.String({default:"/public/static"})),
+            originalsPrefix: Type.Optional(Type.String({default:"/uploads"})),
         })
     })
-    .build()
-
-export async function __init() {
-
-    return config.parameters.then(function ({s3}) {
+    .buildModule(function ({s3}) {
         const uploads = new ImageUploader({
             configs: {
                 profile_pic: {
@@ -32,12 +32,36 @@ export async function __init() {
                     },
                     format: "png",
                     contentType: "image/png"
+                },
+                location_pic: {
+                    policy: [
+                        ["content-length-range", 1024, 5 * 1024 * 1024],
+                        ["starts-with", "$Content-Type", "image/"],
+                    ],
+                    expires: 5 * 60,
+                    resize: {
+                        width: 100,
+                        height: 100
+                    },
+                    format: "jpeg",
+                    contentType: "image/jpeg"
                 }
             },
             s3
         })
         return {uploads, s3}
     })
+
+export async function __init() {
+    return Module.exports
+}
+
+interface ImageTransform {
+    resize: {
+        width: number,
+        height: number
+    },
+    format: keyof FormatEnum
 }
 
 export const handler = pipeline()
@@ -47,10 +71,102 @@ export const handler = pipeline()
     .parseJsonBody()
     .withRoutes(Paths)
     .done(async function (req) {
-        const {uploads} = await __init()
+        const {uploads, s3} = await __init()
         //TODO: owner can be user or organisation.
         const owner = req.principal.id_token_json.sub
         switch (req.routeKey) {
+
+            case 'POST /images': {
+                const {body: {key}} = req.parse()
+                const src = new S3Object(s3.bucket, key)
+                let {body, metadata} = await src.read()
+                let {transform, destination, ...props} = metadata.props
+
+                if (destination === undefined) {
+                    if (s3.tmpPrefix !== undefined && key.startsWith(s3.tmpPrefix)) {
+                        destination = key.substring(s3.tmpPrefix.length + 1)
+                    } else {
+                        destination = key
+                    }
+                }
+
+                //TODO - check uploaded data with an anti-virus
+                //TODO - confirm uploaded data is of the expected format
+
+                //If no transform specified then move image to the destination
+                if (transform === undefined) {
+                    await src.move(`${s3.publicPrefix}/${destination}`, {props})
+                    return {
+                        content_type: metadata.contentType,
+                        key: destination,
+                        url: `https://${s3.cdn}/${destination}`
+                    } satisfies Static<typeof req.route.success>
+                }
+
+                //Generate image applying requested transformation(s)
+                let image: Awaited<ReturnType<typeof transformImage>>
+                switch (transform) {
+                    case 'resize': {
+                        const {
+                            'target-width': targetWidth,
+                            'target-height': targetHeight,
+                            'target-format': targetFormat,
+                            ...rest
+                        } = props
+                        const width = Number(targetWidth)
+                        const height = Number(targetHeight)
+                        const format = targetFormat as keyof FormatEnum
+                        image = await transformImage(body, {
+                            format,
+                            resize: {
+                                width, height
+                            }
+                        })
+                        props = rest
+                        break
+                    }
+                    default:
+                        throw badRequestError("Unexpected image transformation type").withContext("POST /images", {
+                            key: src.key,
+                            bucket: src.bucket,
+                            metadata
+                        })
+                }
+
+                //1. Save generated image(s) into prefix accessible by the CDN.
+                //2. Save original image into originals folder if configured.
+                const dst = new S3Object(s3.bucket, `${s3.publicPrefix}/${destination}`)
+                const saveOriginal = s3.originalsPrefix !== undefined;
+                if (saveOriginal) {
+                    props.original = key
+                }
+
+                await dst.put(image.buffer, {
+                    contentType: image.contentType,
+                    props: {
+                        ...props,
+                        "width": String(image.width),
+                        "height": String(image.height),
+                    }
+                })
+
+                if (saveOriginal) {
+                    await src.move(`${s3.originalsPrefix}/${destination}`)
+                } else {
+                    await src.delete()
+                }
+
+                return {
+                    content_type: image.contentType,
+                    key: destination,
+                    url: `https://${s3.cdn}/${destination}`,
+                    image: {
+                        height: image.height,
+                        width: image.width
+                    }
+                } satisfies Static<typeof req.route.success>
+            }
+
             case 'GET /uploads': {
                 const {query: {startKey}} = req.parse()
                 const {files, lastKey} = await uploads.list(owner, "public", startKey)
@@ -68,7 +184,7 @@ export const handler = pipeline()
                 const {body: {type}} = req.parse()
                 const {post, expires, id} = await uploads.prepare(owner, type, "uploads")
                 return {
-                    type: "profile_pic",
+                    type,
                     id: id,
                     uploadUrl: post.url,
                     uploadFields: post.fields,
@@ -96,6 +212,22 @@ export const handler = pipeline()
                 return {
                     statusCode: 200
                 }
+            }
+        }
+
+        async function transformImage(body: StreamingBlobPayloadOutputTypes, config: ImageTransform) {
+            try {
+                const {format, resize: {width: targetWidth, height: targetHeight}} = config
+                const buffer = await sharp(await body.transformToByteArray())
+                    .resize(targetWidth, targetHeight)
+                    .toFormat(format)
+                    .toBuffer();
+                return {contentType: `image/${format}`, buffer, format, width: targetWidth, height: targetHeight}
+            } catch (e: any) {
+                throw internalError("Unexpected error transforming image").withContext("transformImage", {
+                    cause: e,
+                    config
+                })
             }
         }
     })

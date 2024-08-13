@@ -1,6 +1,6 @@
 import {SES} from "@aws-sdk/client-ses";
 import {Type} from "@sinclair/typebox";
-import {internalError, moduleConfig, pipeline} from "@app/lambda";
+import {internalError, bootstrap, pipeline} from "@app/lambda";
 import diagnostics from "@app/diagnostics";
 import {MangopayAPI, MangopayOptions} from "./mangopay-user";
 import Paths from "./mangopay-hooks-paths";
@@ -9,7 +9,7 @@ import UserRepo from "@src/users/user";
 import {KYCProcess} from "@src/billntip/schemas";
 
 const ses = new SES()
-const config = moduleConfig()
+const config = bootstrap()
     .parameters({
         dynamodb: Type.Object({
             locks: Type.String(),
@@ -20,10 +20,7 @@ const config = moduleConfig()
         mangopay: MangopayOptions,
         'tip-diagnostics': Type.Object({}, {relaxed: true, default: {triggers: {request: true}}})
     })
-    .build()
-
-export function __init() {
-    return config.parameters.then(({dynamodb, s3, mangopay, 'tip-diagnostics': diagnosticsConfig}) => {
+    .buildModule(({dynamodb, s3, mangopay, 'tip-diagnostics': diagnosticsConfig}) => {
         diagnostics(diagnosticsConfig)
         const templates = new TemplateRepo({
             bucket: s3.bucket,
@@ -36,6 +33,9 @@ export function __init() {
         const api = new MangopayAPI(mangopay)
         return {mangopay, templates, users, api}
     })
+
+export function __init() {
+    return config.exports
 }
 
 export const handler = pipeline()
@@ -62,14 +62,15 @@ export const handler = pipeline()
                         const doc = await api.fetchKYCDocument(rid)
                         const uid = kycDocHasUid(doc)
                         if (uid === undefined) return
-                        await sendEmail(uid, "kyc-started-email.html", `Your Bill&Tip account is in review.`)
+                        await sendEmail(uid, "kyc-started-email.html", `Your Bill&Tip account is in review.`, doc)
                         break
-                    }case 'KYC_SUCCEEDED': {
+                    }
+                    case 'KYC_SUCCEEDED': {
                         const rid = query.RessourceId
                         const doc = await api.fetchKYCDocument(rid)
                         const uid = kycDocHasUid(doc)
                         if (uid === undefined) return
-                        await sendEmail(uid, "kyc-succeeded-email.html", `Account verification successfully completed.`)
+                        await sendEmail(uid, "kyc-succeeded-email.html", `Account verification successfully completed.`, doc)
                         break
                     }
                     case 'KYC_OUTDATED': {
@@ -77,7 +78,7 @@ export const handler = pipeline()
                         const doc = await api.fetchKYCDocument(rid)
                         const uid = kycDocHasUid(doc)
                         if (uid === undefined) return
-                        await sendEmail(uid, "kyc-outdated-email.html", `Additional account verification required.`)
+                        await sendEmail(uid, "kyc-outdated-email.html", `Additional account verification required.`, doc)
                         break
                     }
                     case 'KYC_FAILED': {
@@ -85,7 +86,7 @@ export const handler = pipeline()
                         const doc = await api.fetchKYCDocument(rid)
                         const uid = kycDocHasUid(doc)
                         if (uid === undefined) return
-                        await sendEmail(uid, "kyc-failed-email.html", `Account verification failed.`)
+                        await sendEmail(uid, "kyc-failed-email.html", `Account verification failed.`, doc)
                         break
                     }
                 }
@@ -102,12 +103,13 @@ export const handler = pipeline()
             return doc.tag
         }
 
-        async function sendEmail(uid: string, templateName: string, defaultTitle: string) {
+        async function sendEmail(uid: string, templateName: string, title: string, doc: KYCProcess) {
             const user = await users.fetch(uid)
             const username = user.username
             const attributes = users.normalAttributes(user.attributes ?? [])
             const metadata = {
-                env: process.env.ENV ?? "dev"
+                env: process.env.ENV ?? "dev",
+                ...doc
             }
             const email = user.attributeMap['email']
             if (email === undefined)
@@ -122,7 +124,7 @@ export const handler = pipeline()
                     Body: {
                         Html: {
                             Charset: "utf8",
-                            Data: template.body({
+                            Data: template({
                                 attributes,
                                 metadata,
                                 username
@@ -131,7 +133,7 @@ export const handler = pipeline()
                     },
                     Subject: {
                         Charset: "utf-8",
-                        Data: template.metadata['subject'] ?? defaultTitle
+                        Data: title
                     }
                 }
             })

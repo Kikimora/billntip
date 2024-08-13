@@ -10,7 +10,7 @@ import {
     internalError,
     pipeline,
     requireLambdaAuth,
-    moduleConfig, notFoundError
+    bootstrap, notFoundError
 } from "@app/lambda";
 import diagnostics from "@app/diagnostics";
 import startAuthOperation, {SessionData, AuthOptionsSchema, SessionContextCheck} from "@src/authorizer/operation";
@@ -19,21 +19,17 @@ import * as Schemas from "./schemas";
 import UserRepo, {invalidAliasException, UserAttribute} from "./user"
 import {toUserAttributes} from "./cognito"
 import {CodeDeliveryDetails, Device, DeviceAttribute} from "./schemas";
+import {uploadBuilder} from "@src/object-store";
 
 const cognito = new Cognito.CognitoIdentityProvider()
 const dynamo = new DynamoDB()
-const config = moduleConfig()
+const Module = bootstrap()
     .parameters(AuthOptionsSchema)
     .parameters({dynamodb: Type.Object({users: Type.String()})})
     .parameters({'users-diagnostics': diagnostics.OptionsSchema})
-    .build()
-
-/**
- * Static initialisation.
- */
-export function __init() {
-    return config.parameters.then(async function (options) {
-        const {dynamodb, oidc, api, 'users-diagnostics': diagnosticsConfig} = options
+    .parameters({'s3': Type.Object({bucket: Type.String(), tmpPrefix: Type.String()})})
+    .buildModule(async function (options) {
+        const {dynamodb, oidc, api, 'users-diagnostics': diagnosticsConfig, s3} = options
         diagnostics(diagnosticsConfig)
 
         const [{UserPoolClient}, {UserPool}] = await Promise.all([
@@ -50,14 +46,23 @@ export function __init() {
         })
 
         return {
+            s3,
+            dynamodb: dynamo,
             ClientSecret: clientSecret,
             UserPoolId: oidc.userPoolId,
             ClientId: api.clientId,
             UsernameAttributes: usernameAttributes,
             userRepo,
-            options
+            options,
+            cognito
         }
     })
+
+/**
+ * Static initialisation.
+ */
+export function __init() {
+    return Module.exports
 }
 
 declare module "@aws-sdk/client-cognito-identity-provider" {
@@ -75,11 +80,10 @@ export const handler = pipeline()
     .withRoutes(Paths)
     .parseJsonBody()
     .done(async function (req) {
-        const {ClientSecret, UserPoolId, ClientId, UsernameAttributes, userRepo, options} = await __init()
+        const {ClientSecret, UserPoolId, ClientId, UsernameAttributes, userRepo, options, s3} = await __init()
         switch (req.routeKey) {
 //#region Session
             case "POST /user/signin": {
-
                 const {body} = req.parse()
                 const {USERNAME: usernameOrAlias} = body.authParameters
                 const poolUseUsernameAttributes = (UsernameAttributes.length ?? 0) > 0;
@@ -298,6 +302,19 @@ export const handler = pipeline()
                 const username = req.principal.id_token_json['cognito:username']
                 const user = await userRepo.fetch(username)
                 return user.attributes satisfies Static<typeof req.route.success>
+            }
+            case 'POST /user/profile-pic': {
+                requireLambdaAuth(req, SessionContextCheck)
+                const upload = uploadBuilder(req.principal.id, {bucket: s3.bucket, prefix: s3.tmpPrefix})
+                    .condition(["content-length-range", 1024, 5 * 1024 * 1024])
+                    .condition(["starts-with", "$Content-Type", "image/"])
+                    .properties({
+                        'transform': 'resize',
+                        'target-width': '100',
+                        'target-height': '100',
+                        'target-format': 'png'
+                    })
+                return await upload.build() satisfies Static<typeof req.route.success>
             }
             case "PUT /user/attributes": {
                 requireLambdaAuth(req, SessionContextCheck)

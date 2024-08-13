@@ -20,7 +20,7 @@ const lambda = authorizer.gateway.newLambda(Lambdas['billntip/bill.handler'])
         },
         timeout: 10
     })
-    .inlinePolicy(allowCrud().on(ddb.usersTable, ddb.locksTable, ddb.dataTable).buildRoleInlinePolicy("DynamoDbAccess"))
+    .inlinePolicy(allowCrud().on(ddb.usersTable, ddb.locksTable, ddb.dataTable, pulumi.interpolate`${ddb.dataTable.arn}/index/inverse`).buildRoleInlinePolicy("DynamoDbAccess"))
     .inlinePolicy(
         newPolicy()
             .allow(

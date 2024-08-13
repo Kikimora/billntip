@@ -2,7 +2,7 @@ import _ from "lodash";
 import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {Static, Type} from "@sinclair/typebox";
-import {moduleConfig, pipeline} from '@app/lambda'
+import {accessDeniedError, bootstrap, pipeline, registerDefaultFormats} from '@app/lambda'
 import {SessionContextSchema} from "@src/authorizer/types";
 import UserRepo from "@src/users/user";
 import Paths from "./tip-paths";
@@ -11,10 +11,12 @@ import TipUserRepo from "./user";
 import diagnostics from "@app/diagnostics";
 import {MangopayOptions} from "./mangopay-user";
 
+registerDefaultFormats()
 const dynamo = new DynamoDB()
 const cognito = new CognitoIdentityProvider()
+const GroupName = 'recipient';
 
-const config = moduleConfig()
+const config = bootstrap()
     .parameters({
         dynamodb: Type.Object({
             locks: Type.String(),
@@ -27,10 +29,7 @@ const config = moduleConfig()
         mangopay: MangopayOptions,
         'tip-diagnostics': Type.Object({}, {relaxed: true, default: {triggers: {request: true}}})
     })
-    .build()
-
-export function __init() {
-    return config.parameters.then(({dynamodb, oidc, mangopay, 'tip-diagnostics': diagnostiocsConfig}) => {
+    .buildModule(({dynamodb, oidc, mangopay, 'tip-diagnostics': diagnostiocsConfig}) => {
         diagnostics(diagnostiocsConfig)
 
         const users = new UserRepo({
@@ -38,9 +37,12 @@ export function __init() {
             table: dynamodb.users,
             locks: dynamodb.locks
         })
-        const tipUsers = new TipUserRepo({table: dynamodb.data}, mangopay)
+        const tipUsers = new TipUserRepo({table: dynamodb.data}, mangopay, users)
         return {users, tipUsers, userPoolId: oidc.userPoolId}
     })
+
+export function __init() {
+    return config.exports
 }
 
 export const handler = pipeline()
@@ -52,57 +54,63 @@ export const handler = pipeline()
     .done(async function (req) {
         const {tipUsers, users, userPoolId} = await __init()
         const username = req.principal.id_token_json['cognito:username']
+
+        switch (req.routeKey) {
+            case 'POST /tip/registration':
+                break
+            default:
+                assertRecipient()
+        }
+
         switch (req.routeKey) {
             case 'POST /tip/registration': {
-                const [user, member] = await Promise.all([
+                const [user, tipUser] = await Promise.all([
                     users.fetch(username),
                     tipUsers.fetchOrCreate(username)
                 ])
-                await member.refreshMangopayUser(user.attributes)
+                await tipUser.refreshMangopayUser(user.attributes)
                 const [_1, _2, invites] = await Promise.all([
-                    member.save(),
+                    tipUser.save(),
                     cognito.adminAddUserToGroup({
-                        GroupName: 'recipient',
+                        GroupName,
                         Username: user.username,
                         UserPoolId: userPoolId
                     }),
-                    member.memberships({
+                    tipUser.memberships({
                         rejected: false
                     })
                 ])
-                return {
-                    invites: _.map(invites, toMembership)
-                } satisfies Static<typeof req.route.success>
+                return {invites} satisfies Static<typeof req.route.success>
             }
-            case 'PUT /tip/invites/{id}': {
+            case 'PUT /tip/organisations/{id}': {
                 const {path: {id}} = req.parse()
-                const member = tipUsers.newUser(username)
-                const membership = await member.acceptInvite(id)
-                return toMembership(membership) satisfies Static<typeof req.route.success>
+                const user = tipUsers.newUser(username)
+                const membership = await user.acceptInvite(id)
+                return membership satisfies Static<typeof req.route.success>
             }
-            case 'DELETE /tip/invites/{id}': {
+            case 'DELETE /tip/organisations/{id}': {
                 const {path: {id}} = req.parse()
-                const member = tipUsers.newUser(username)
-                const membership = await member.rejectInvite(id)
+                const user = tipUsers.newUser(username)
+                const membership = await user.rejectInvite(id)
                 if (membership === undefined) return undefined
-                return toMembership(membership) satisfies Static<typeof req.route.success>
+                return membership satisfies Static<typeof req.route.success>
             }
-            case 'GET /tip/invites/{id}': {
+            case 'GET /tip/organisations/{id}': {
                 const {path: {id}} = req.parse()
-                const member = tipUsers.newUser(username)
-                const membership = await member.fetchMembership(id)
-                return toMembership(membership) satisfies Static<typeof req.route.success>
+                const user = tipUsers.newUser(username)
+                const membership = await user.fetchMembership(id)
+                return membership satisfies Static<typeof req.route.success>
             }
-            case 'GET /tip/invites': {
+            case 'GET /tip/organisations': {
                 const {query} = req.parse()
-                const member = tipUsers.newUser(username)
-                const memberships = await member.memberships(query)
-                return _.map(memberships, toMembership) satisfies Static<typeof req.route.success>
+                const user = tipUsers.newUser(username)
+                const memberships = await user.memberships(query)
+                return memberships satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/me': {
                 const member = await tipUsers.fetch(username)
                 const mangopayUser = member.mangopayUser
-                const [memberUser, status, wallet, verification] = await Promise.all([
+                const [userInfo, status, wallet, verification] = await Promise.all([
                     mangopayUser.fetchUserInfo(),
                     mangopayUser.fetchRegulatoryStatus(),
                     mangopayUser.fetchWallet(),
@@ -110,25 +118,25 @@ export const handler = pipeline()
                 ])
                 return {
                     kyc: {
-                        level: memberUser.kycLevel,
+                        level: userInfo.kycLevel,
                         evidence: {
                             ...verification
                         }
                     },
-                    category: memberUser.category,
+                    category: userInfo.category,
                     regulatory_status: status,
                     wallet: wallet.balance,
                     //deprecated, to be removed soon
-                    kyc_level: memberUser.kycLevel,
-                    proof_of_identity: memberUser.proofOfIdentity !== undefined,
-                    proof_of_address: memberUser.proofOfAddress !== undefined,
+                    kyc_level: userInfo.kycLevel,
+                    proof_of_identity: userInfo.proofOfIdentity !== undefined,
+                    proof_of_address: userInfo.proofOfAddress !== undefined,
                 } satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/transactions': {
                 const {query} = req.parse()
                 const username = req.principal.id_token_json['cognito:username']
-                const member = await tipUsers.fetch(username)
-                const mangopayUser = member.mangopayUser
+                const user = await tipUsers.fetch(username)
+                const mangopayUser = user.mangopayUser
                 const [transactions, wallet] = await Promise.all([
                     mangopayUser.transactions(query),
                     mangopayUser.fetchWallet(),
@@ -139,10 +147,10 @@ export const handler = pipeline()
                 } satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/transactions/{id}': {
-                const {path:{id}} = req.parse()
+                const {path: {id}} = req.parse()
                 const username = req.principal.id_token_json['cognito:username']
-                const member = await tipUsers.fetch(username)
-                const mangopayUser = member.mangopayUser
+                const user = await tipUsers.fetch(username)
+                const mangopayUser = user.mangopayUser
                 const [transaction, wallet] = await Promise.all([
                     mangopayUser.fetchTransaction(id),
                     mangopayUser.fetchWallet(),
@@ -155,8 +163,8 @@ export const handler = pipeline()
             case 'POST /tip/transactions': {
                 const {body} = req.parse()
                 const username = req.principal.id_token_json['cognito:username']
-                const member = await tipUsers.fetch(username)
-                const mangopayUser = member.mangopayUser
+                const user = await tipUsers.fetch(username)
+                const mangopayUser = user.mangopayUser
                 const transaction = await mangopayUser.createTransaction(body)
                 //Fetch wallet after transaction to let it update
                 const wallet = await mangopayUser.fetchWallet()
@@ -172,8 +180,8 @@ export const handler = pipeline()
                 return await mangopayUser.startVerification(body) satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/verification': {
-                const member = await tipUsers.fetch(username)
-                const mangopayUser = member.mangopayUser
+                const user = await tipUsers.fetch(username)
+                const mangopayUser = user.mangopayUser
                 return await mangopayUser.fetchVerificationDetails() satisfies Static<typeof req.route.success>
             }
             case "GET /tip/accounts": {
@@ -185,15 +193,15 @@ export const handler = pipeline()
             }
             case "GET /tip/accounts/{id}": {
                 const {path: {id}} = req.parse()
-                const member = await tipUsers.fetch(username)
-                const mangopayUser = member.mangopayUser
+                const user = await tipUsers.fetch(username)
+                const mangopayUser = user.mangopayUser
                 const account = await mangopayUser.fetchBankAccount(id)
                 return account satisfies Static<typeof req.route.success>
             }
             case "POST /tip/accounts": {
                 const {body} = req.parse()
-                const member = await tipUsers.fetch(username)
-                const mangopayUser = member.mangopayUser
+                const user = await tipUsers.fetch(username)
+                const mangopayUser = user.mangopayUser
                 const account = await mangopayUser.createBankAccount(body)
                 return account satisfies Static<typeof req.route.success>
             }
@@ -204,5 +212,29 @@ export const handler = pipeline()
                 const account = await mangopayUser.deactivateBankAccount(id)
                 return account satisfies Static<typeof req.route.success>
             }
+            case "GET /tip/locations": {
+                const user = await tipUsers.fetch(username)
+                const locations = await user.fetchLocations()
+                return locations.map(function (loc) {
+                    return {
+                        id: loc.pk,
+                        org_id: loc.sk,
+                        image_url: loc.image_url,
+                        archived: loc.deleted ?? false,
+                        created_at: loc.created_at ?? 0,
+                        title: loc.title ?? "Unknown",
+                        updated_at: loc.updated_at ?? 0,
+                    }
+                }) satisfies Static<typeof req.route.success>
+            }
+        }
+
+        function assertRecipient() {
+            const groups = req.principal.id_token_json['cognito:groups'] ?? []
+            const recipients = groups.find(function (group) {
+                return group === GroupName
+            })
+            if (recipients === undefined)
+                throw accessDeniedError().withContext('assertOrgAdmin', {username, groups})
         }
     })

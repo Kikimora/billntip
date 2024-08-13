@@ -136,9 +136,11 @@ export class Builder {
         const buildOptions = this.esBuildOptions
 
         try {
+            const lambdaEntryPoint = await entryPoint(this.esBuildOptions.absWorkingDir ?? "./");
+            console.log("Building ", lambdaEntryPoint, ' to ', outfile)
             await esbuild.build({
                 ...buildOptions,
-                entryPoints: [await entryPoint(this.esBuildOptions.absWorkingDir ?? "./")],
+                entryPoints: [lambdaEntryPoint],
                 bundle: true,
                 platform: "node",
                 outfile: outfile,

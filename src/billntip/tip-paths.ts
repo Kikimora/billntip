@@ -12,8 +12,8 @@ export default {
         responses: [401, 403],
         tags: ['Tip']
     },
-    "GET /tip/invites": {
-        operationId: "GET /tip/invites",
+    "GET /tip/organisations": {
+        operationId: "GET /tip/organisations",
         query: {
             accepted: T.Optional(T.Boolean({description: "Show only accepted invites"})),
             rejected: T.Optional(T.Boolean({description: "Show only rejected invites"})),
@@ -22,22 +22,22 @@ export default {
         responses: [401, 403],
         tags: ['Tip']
     },
-    "GET /tip/invites/{id}": {
-        operationId: "GET /tip/invites",
+    "GET /tip/organisations/{id}": {
+        operationId: "GET /tip/organisations",
         path: schemas.OrgId,
         success: schemas.MemberSchema,
         responses: [401, 403, 404],
         tags: ['Tip']
     },
-    "PUT /tip/invites/{id}": {
-        operationId: "PUT /tip/invites",
+    "PUT /tip/organisations/{id}": {
+        operationId: "PUT /tip/organisations",
         path: schemas.OrgId,
         success: schemas.MemberSchema,
         responses: [401, 403, 404],
         tags: ['Tip']
     },
-    "DELETE /tip/invites/{id}": {
-        operationId: "DELETE /tip/invites",
+    "DELETE /tip/organisations/{id}": {
+        operationId: "DELETE /tip/organisations",
         path: schemas.OrgId,
         success: Type.Optional(schemas.MemberSchema),
         responses: [401, 403, 404],
@@ -133,13 +133,12 @@ export default {
         responses: [400, 401, 403],
         tags: ['Tip']
     },
-    //
-    // "GET /tip/locations": {
-    //     operationId: "GET /tip/locations",
-    //     success: Type.Array(schemas.BankAccount),
-    //     responses: [401, 403],
-    //     tags: ['Tip']
-    // }
+    "GET /tip/locations": {
+        operationId: "GET /tip/locations",
+        success: Type.Array(schemas.Location),
+        responses: [401, 403],
+        tags: ['Tip']
+    }
 } as const satisfies RouteMap
 
 

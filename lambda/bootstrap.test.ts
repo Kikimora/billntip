@@ -1,7 +1,7 @@
 import {SSM} from "@aws-sdk/client-ssm";
-import {moduleConfig} from "@app/lambda/config";
+import {bootstrap} from "@app/lambda/bootstrap";
 import {Type} from "@sinclair/typebox";
-import {errorContext, ErrorContext} from "@app/diagnostics";
+import {ErrorContext} from "@app/diagnostics";
 
 const ssm = new SSM()
 const prefix = '/test/' + new Date().toISOString().replaceAll(':', '-') + '/'
@@ -53,7 +53,7 @@ afterAll(async () => {
 })
 
 it("read config", async () => {
-    const config = moduleConfig({prefix}).parameters({
+    const config = bootstrap({prefix}).parameters({
         locks: Type.String(),
         users: Type.Object({
             cookieName: Type.String(),
@@ -68,7 +68,7 @@ it("read config", async () => {
             authorizerCacheTtl: Type.Number(),
             sameSite: Type.String(),
         }),
-    }).build()
+    }).buildConfig()
 
     const {locks, users} = await config.parameters
     expect(locks).toEqual(locksTable)
@@ -76,9 +76,9 @@ it("read config", async () => {
 })
 
 it("validates schema", async () => {
-    const config = moduleConfig({prefix}).parameters({
+    const config = bootstrap({prefix}).parameters({
         locks: Type.String({maxLength: 2})
-    }).build()
+    }).buildConfig()
 
     await expect(config.parameters).rejects.toEqual(expect.objectContaining({
         message: "Cannot parse parameter",
@@ -92,40 +92,40 @@ it("validates schema", async () => {
 })
 
 it("allows relax overrides and schema violations", async () => {
-    const config = moduleConfig({relaxed: false, prefix}).parameters({
+    const config = bootstrap({relaxed: false, prefix}).parameters({
         locks: Type.String({maxLength: 2, relaxed: true}),
-    }).build()
+    }).buildConfig()
     const {locks} = await config.parameters
     expect(locks).toEqual(locksTable)
 })
 
 it("parses StringList", async () => {
-    const config = moduleConfig({prefix}).parameters({
+    const config = bootstrap({prefix}).parameters({
         list: Type.Array(Type.String()),
-    }).build()
+    }).buildConfig()
     const {list} = await config.parameters
     expect(list).toEqual(["A", "B", "12"])
 })
 
 it("throws on invalid JSON", async () => {
-    const config = moduleConfig({prefix}).parameters({
+    const config = bootstrap({prefix}).parameters({
         locks: Type.Object({})
-    }).build()
+    }).buildConfig()
     await expect(config.parameters).rejects.toEqual(expect.objectContaining({
         message: "Cannot parse parameter"
     }))
 })
 
 it("overrides parameter name", async () => {
-    const config = moduleConfig({prefix: ""}).parameters({
+    const config = bootstrap({prefix: ""}).parameters({
         locks: Type.String({parameterName: parameters.locks})
-    }).build()
+    }).buildConfig()
     const {locks} = await config.parameters
     expect(locks).toEqual(locksTable)
 })
 
 it("merges parameters", async () => {
-    const config = moduleConfig({prefix})
+    const config = bootstrap({prefix})
         .parameters({
             locks: Type.String(),
             users: Type.Object({
@@ -137,7 +137,7 @@ it("merges parameters", async () => {
                 sessionTable: Type.String()
             })
         })
-        .build()
+        .buildConfig()
     const {locks, users} = await config.parameters
     expect(locks).toEqual(locksTable)
     expect(users).toEqual(expect.objectContaining({
@@ -147,12 +147,12 @@ it("merges parameters", async () => {
 })
 
 it("uses default if parameter is not found", async () => {
-    const config = moduleConfig({prefix})
+    const config = bootstrap({prefix})
         .parameters({
             notFound: Type.String({default: "Default Value"}),
             notFoundRelaxed: Type.String({relaxed:true, default: "Default Value"})
         })
-        .build()
+        .buildConfig()
     const {notFound, notFoundRelaxed} = await config.parameters
     expect(notFound).toEqual("Default Value")
     expect(notFoundRelaxed).toEqual("Default Value")

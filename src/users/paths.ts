@@ -1,6 +1,7 @@
 import {RouteMap} from "@app/lambda";
 import * as schemas from './schemas';
 import {authenticatedEndpoint, publicEndpoint} from "@src/common";
+import {Upload} from "@src/object-store";
 
 
 export default {
@@ -77,6 +78,13 @@ export default {
         operationId: "PUT /user/attributes",
         body: schemas.UpdateUserAttributesBody,
         success: schemas.UpdateUserAttributesResponse,
+        responses: [400, 401, 403],
+        security: authenticatedEndpoint,
+        tags: ['Attributes']
+    },
+    "POST /user/profile-pic": {
+        operationId: "POST /user/profile-pic",
+        success: Upload,
         responses: [400, 401, 403],
         security: authenticatedEndpoint,
         tags: ['Attributes']

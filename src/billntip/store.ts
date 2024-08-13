@@ -1,10 +1,26 @@
 import * as ddb from "@app/dynamodb";
-import {DynamoDB} from "@aws-sdk/client-dynamodb";
+import {AttributeValue, DynamoDB} from "@aws-sdk/client-dynamodb";
 import {unmarshall} from "@aws-sdk/util-dynamodb";
 import _ from "lodash";
 import {Schema, TableAttributes, TableSchema} from "@app/dynamodb";
 import {uuid} from "short-uuid";
 import {internalError} from "@app/lambda";
+import {MemberRole} from "@src/billntip/schemas";
+
+
+// pk               sk              attributes
+// Users
+// U#<username>     M               mangopayUid, walletId
+// U#<username>     O#<name>        role, invited_by, invited_at, accepted_at, rejected_at
+// U#<name>         L#<loc id>      org_id, created_at
+
+// Organisations
+// O#<name>         info            title, created_at
+// O#<name>         U#<username>    same as U:<username>, O#<name>
+
+//Locations
+// O#<name>         L#<loc id>      title, created_at, updated_at, image_url, deleted
+
 
 const UserKey = {
     pk: ddb.Type.String as `U#${string}`,
@@ -25,17 +41,8 @@ const MemberhipKey = {
 } as const
 
 const MembershipAttributes = {
-    org: {
-        id: ddb.Type.String,
-        title: ddb.Type.String
-    },
     role: ddb.Type.String,
-    invited_by: {
-        username: ddb.Type.String,
-        first_name: ddb.Type.String,
-        last_name: ddb.Type.String,
-        email: ddb.Type.String,
-    },
+    invited_by: ddb.Type.String,
     invited_at: ddb.Type.Number,
     accepted_at: ddb.Type.Number,
     rejected_at: ddb.Type.Number,
@@ -64,6 +71,34 @@ export interface OrgRequest {
     title: string
 }
 
+const OrgLocationKey = {
+    pk: ddb.Type.String as `O#${string}`,
+    sk: ddb.Type.String as `L#${string}`
+} as const
+type OrgLocationKey = Schema<typeof OrgLocationKey>
+const OrgLocationAttributes = {
+    title: ddb.Type.String,
+    lowercase_title: ddb.Type.String,
+    created_at: ddb.Type.Number,
+    updated_at: ddb.Type.Number,
+    image_url: ddb.Type.String,
+    deleted: ddb.Type.Boolean
+} as const
+type OrgLocationsTable = TableSchema<typeof OrgLocationKey, typeof OrgLocationAttributes>;
+export type OrgLocation = TableAttributes<OrgLocationsTable> & { pk: string, sk: string }
+
+const UserLocationKey = {
+    pk: ddb.Type.String as `U#${string}`,
+    sk: ddb.Type.String as `L#${string}`
+} as const
+type UserLocationKey = Schema<typeof UserLocationKey>
+const UserLocationAttributes = {
+    org_id: ddb.Type.String,
+    created_at: ddb.Type.Number,
+} as const
+type UserLocationTable = TableSchema<typeof UserLocationKey, typeof UserLocationAttributes>
+export type UserLocation = TableAttributes<UserLocationTable> & { pk: string, sk: string }
+
 export interface StoreOptions {
     db?: DynamoDB
     table: string
@@ -75,25 +110,7 @@ export interface InviteRequest {
         id: string,
         title: string
     },
-    invited_by: {
-        username: string,
-        first_name: string,
-        last_name: string,
-        email: string,
-    },
-    role?: string
-}
-
-export interface UpdateMembershipRequest {
-    org?: {
-        title: string
-    },
-    invited_by?: {
-        username?: string,
-        first_name?: string,
-        last_name?: string,
-        email?: string,
-    },
+    invited_by: string,
     role?: string
 }
 
@@ -102,25 +119,44 @@ export interface MembershipFilters {
     rejected?: boolean
 }
 
+function makeMembershipItem(invite: Record<string, AttributeValue>, username?: string, org?: string): MembershipItem {
+    const record = unmarshall(invite);
+    //Aug 2024: This is a migration from old invited_by format to the new one. Old format had some info about invitee, new format only has invitee id.
+    if (record.invited_by != null && typeof record.invited_by === "object") {
+        record.invited_by = record.invited_by.username
+    }
+    const pk = username ?? record.pk.substring(2/*U#.length*/)
+    const sk = org ?? record.sk.substring(2/*O#.length*/)
+    return {
+        ...record,
+        pk,
+        sk
+    };
+}
+
 export default class Store {
     db: DynamoDB;
     table: string;
     membership: MembershipsTable;
     members: UsersTable;
-    prefix: OrgsTable;
+    _org: OrgsTable;
+    _orgLocations: OrgLocationsTable;
+    _userLocations: UserLocationTable;
 
     constructor(options: StoreOptions) {
         this.db = options.db ?? new DynamoDB()
         this.table = options.table
         this.membership = ddb.table(this.table, MemberhipKey, MembershipAttributes)
         this.members = ddb.table(this.table, UserKey, UserAttributes)
-        this.prefix = ddb.table(this.table, OrgKey, OrgAttributes)
+        this._org = ddb.table(this.table, OrgKey, OrgAttributes)
+        this._orgLocations = ddb.table(this.table, OrgLocationKey, OrgLocationAttributes)
+        this._userLocations = ddb.table(this.table, UserLocationKey, UserLocationAttributes)
     }
 
     async memberships(username: string, filters: MembershipFilters = {
         accepted: false,
         rejected: false
-    }) {
+    }): Promise<MembershipItem[]> {
         const attributes = {
             accepted_at: filters.accepted,
             rejected_at: filters.rejected
@@ -140,7 +176,7 @@ export default class Store {
                 .join(' AND ')
         })
         const {Items: invites} = await this.db.query(pendingInvites)
-        return _.map(invites, x => unmarshall(x)) as MembershipItem[]
+        return _.map(invites, x => makeMembershipItem(x))
     }
 
     /**
@@ -157,16 +193,12 @@ export default class Store {
                 title: request.org.title
             },
         };
-        await this.db.putItem(ddb.put(this.membership, {
+        const {Attributes: invite} = await this.db.putItem(ddb.put(this.membership, {
             key,
             item,
             condition: ({attr}) => `attribute_not_exists(${attr.accepted_at}) OR attribute_exists(${attr.rejected_at})`,
         }))
-        return {
-            ...item,
-            pk: request.username,
-            sk: request.org.id
-        }
+        return makeMembershipItem(invite ?? {}, request.username, request.org.id)
     }
 
     /**
@@ -186,11 +218,7 @@ export default class Store {
         });
         const {Attributes: invite} = await this.db.updateItem(item)
         if (invite === undefined) throw internalError("Unexpected error accepting invite")
-        return {
-            ...unmarshall(invite),
-            pk: username,
-            sk: org
-        }
+        return makeMembershipItem(invite, username, org)
     }
 
     /**
@@ -207,23 +235,15 @@ export default class Store {
         });
         const {Attributes: invite} = await this.db.updateItem(item)
         if (invite === undefined) throw internalError("Unexpected error rejecting invite")
-        return {
-            ...unmarshall(invite),
-            pk: username,
-            sk: org
-        }
+        return makeMembershipItem(invite, username, org)
     }
 
     /**
      * Update membership record.
      */
-    async updateMembership(username: string, org: string, request: UpdateMembershipRequest) {
+    async updateMembership(username: string, org: string, request: { role: MemberRole }): Promise<MembershipItem> {
 
         const values = {
-            title: request.org?.title,
-            firstName: request.invited_by?.first_name,
-            lastName: request.invited_by?.last_name,
-            email: request.invited_by?.email,
             role: request.role,
         }
 
@@ -232,18 +252,6 @@ export default class Store {
             values,
             expression: ({attr, ref}) => {
                 const updates = []
-
-                if (values.title !== undefined)
-                    updates.push(`${attr.org.title} = ${ref('title')}`)
-
-                if (values.firstName !== undefined)
-                    updates.push(`${attr.invited_by.first_name} = ${ref('firstName')}`)
-
-                if (values.lastName !== undefined)
-                    updates.push(`${attr.invited_by.last_name} = ${ref('lastName')}`)
-
-                if (values.email !== undefined)
-                    updates.push(`${attr.invited_by.email} = ${ref('email')}`)
 
                 if (values.role !== undefined)
                     updates.push(`${attr.role} = ${ref('role')}`)
@@ -258,10 +266,7 @@ export default class Store {
         });
         const {Attributes: invite} = await this.db.updateItem(item)
         if (invite === undefined) throw internalError("Unexpected error updating membership")
-        return {
-            ...unmarshall(invite),
-            pk: username, sk: org
-        }
+        return makeMembershipItem(invite, username, org)
     }
 
     /**
@@ -272,10 +277,7 @@ export default class Store {
             key: {pk: `U#${username}`, sk: `O#${org}`},
         }))
         if (item === undefined) return undefined
-        return {
-            ...unmarshall(item),
-            pk: username, sk: org
-        }
+        return makeMembershipItem(item, username, org)
     }
 
     /**
@@ -347,7 +349,7 @@ export default class Store {
     /**
      * Delete member record.
      */
-    async removeMembership(username: string, org: string) {
+    async removeMembership(username: string, org: string): Promise<MembershipItem | undefined> {
         const {Attributes: item} = await this.db.deleteItem(ddb.deleteItem(this.membership, {
             key: {pk: `U#${username}`, sk: `O#${org}`},
             return: "ALL_OLD"
@@ -363,7 +365,7 @@ export default class Store {
      * Fetch organisation information.
      */
     async fetchOrg(orgId: string): Promise<Org | undefined> {
-        const {Item: item} = await this.db.getItem(ddb.get(this.prefix, {
+        const {Item: item} = await this.db.getItem(ddb.get(this._org, {
             key: {pk: `O#${orgId}`, sk: `info`},
         }))
         if (item === undefined) return undefined
@@ -373,38 +375,43 @@ export default class Store {
         }
     }
 
+    async batchFetchOrgs(ids: string[]): Promise<Org[]> {
+
+        if (ids.length === 0) return []
+
+        const batchGet = ddb.batchGet()
+            .add(this._org, {
+                keys: ids.map((oid) => ({pk: `O#${oid}`, sk: `info`} as OrgKey))
+            })
+        const {Responses: responses} = await this.db.batchGetItem(batchGet.input())
+        const orgs = responses?.[this._org.name]
+        if (orgs === undefined) return []
+        return orgs.map(({pk, sk, ...loc}) => ({
+            ...unmarshall(loc) as Org,
+            pk: pk.S!.substring(2)
+        }))
+    }
+
     /**
      * Fetch organisation members.
      */
     async orgMembers(orgId: string, startKey?: OrgKey): Promise<{
         lastKey?: OrgKey,
-        members?: MembershipItem[]
+        members: MembershipItem[]
     }> {
         const orgPk = `O#${orgId}`;
-        const membersQuery = ddb.query(this.prefix, {
+        const membersQuery = ddb.query(this._org, {
+            indexName: "inverse",
             values: {orgPk, prefix: 'U#'},
             keyCondition: ({key, ref}) =>
-                `${key.pk} = ${ref('orgPk')} AND begins_with(${key.sk}, ${ref('prefix')})`,
+                `${key.sk} = ${ref('orgPk')} AND begins_with(${key.pk}, ${ref('prefix')})`,
             exclusiveStartKey: startKey
         })
-        const {Items: memberIds, LastEvaluatedKey: lastKey} = await this.db.query(membersQuery)
-
-        if (memberIds === undefined) return {}
-
-        const membersBatch = ddb.batchGet().add(this.membership, {
-            keys: memberIds.map(x => ({pk: x.sk.S, sk: x.pk.S})) as any,
-        })
-
-        const {Responses: batchResult} = await this.db.batchGetItem(membersBatch.input())
-        if (batchResult === undefined) return {}
-        const members = batchResult[this.membership.name]
+        const {Items: members, LastEvaluatedKey: lastKey} = await this.db.query(membersQuery)
+        if (members === undefined || members.length === 0) return {members: []}
         return {
             lastKey: lastKey !== undefined ? unmarshall(lastKey) as OrgKey : lastKey,
-            members: members.map(x => unmarshall(x)).map(x => ({
-                ...x,
-                pk: x.pk.substring(0, 2 /*U#.length*/),
-                sk: x.sk.substring(0, 2 /*O#.length*/)
-            })) as MembershipItem[]
+            members: members.map(x => makeMembershipItem(x))
         }
     }
 
@@ -415,7 +422,7 @@ export default class Store {
             title: request.title,
             created_at: Date.now() / 1000,
         } as const;
-        await this.db.putItem(ddb.put(this.prefix, {key, item}))
+        await this.db.putItem(ddb.put(this._org, {key, item}))
         return {
             pk: orgId,
             ...item
@@ -423,7 +430,7 @@ export default class Store {
     }
 
     async removeOrg(orgId: string) {
-        const {Attributes: item} = await this.db.deleteItem(ddb.deleteItem(this.prefix, {
+        const {Attributes: item} = await this.db.deleteItem(ddb.deleteItem(this._org, {
             key: {pk: `O#${orgId}`, sk: `info`},
             return: "ALL_OLD"
         }))
@@ -433,4 +440,220 @@ export default class Store {
             pk: orgId
         }
     }
+
+    async fetchLocation(orgId: string, locId: string): Promise<OrgLocation | undefined> {
+        const {Item: item} = await this.db.getItem(ddb.get(this._orgLocations, {
+            key: {pk: `O#${orgId}`, sk: `L#${locId}`},
+        }))
+        if (item === undefined) return undefined
+        return {
+            ...unmarshall(item),
+            pk: orgId,
+            sk: locId
+        }
+    }
+
+    async userLocations(username: string) {
+        let locations = []
+        const pk = `U#${username}`;
+        const ddbQuery = ddb.query(this._userLocations, {
+            values: {pk, prefix: 'L#'},
+            keyCondition: ({key, ref}) =>
+                `${key.pk} = ${ref('pk')} AND begins_with(${key.sk}, ${ref('prefix')})`
+        });
+        do {
+            const {Items: items, LastEvaluatedKey: lastKey} = await this.db.query(ddbQuery)
+            ddbQuery.ExclusiveStartKey = lastKey
+            if (items !== undefined) {
+                locations.push(...items.map(function (loc) {
+                        return {
+                            ...unmarshall(loc),
+                            pk: username,
+                            sk: loc['sk'].S?.substring(2)
+                        } as UserLocation
+                    })
+                )
+            }
+        } while (ddbQuery.ExclusiveStartKey !== undefined)
+        return locations
+    }
+
+    async batchGetLocations(locations: UserLocation[]) {
+
+        if (locations.length === 0) return []
+
+        const batchGet = ddb.batchGet()
+            .add(this._orgLocations, {
+                keys: locations.map(({sk, org_id}) => ({pk: `O#${org_id}`, sk: `L#${sk}`} as OrgLocationKey))
+            })
+        const {Responses: responses} = await this.db.batchGetItem(batchGet.input())
+        const orgLocations = responses?.[this._orgLocations.name]
+        if (orgLocations === undefined) return []
+        return orgLocations.map(({pk, sk, ...loc}) => ({
+            ...unmarshall(loc) as OrgLocation,
+            pk: pk.S!.substring(2),
+            sk: sk.S!.substring(2)
+        }))
+    }
+
+    async locations(orgId: string, query: { startKey: OrgLocationKey, archived: boolean, title?: string }): Promise<{
+        lastKey?: OrgLocationKey,
+        data: OrgLocation[]
+    }> {
+        const orgPk = `O#${orgId}`;
+        const filterArchived = !query.archived
+        const ddbQuery = ddb.query(this._orgLocations, {
+            values: {orgPk, prefix: 'L#', archived: query.archived, lowercase_title: query.title?.toLocaleLowerCase()},
+            keyCondition: ({key, ref}) =>
+                `${key.pk} = ${ref('orgPk')} AND begins_with(${key.sk}, ${ref('prefix')})`,
+            filter({attr, ref}) {
+                let filter = []
+                if (filterArchived) {
+                    filter.push(`(${attr.deleted} = ${ref.val(false)} OR attribute_not_exists(${attr.deleted}))`)
+                }
+                if (query.title !== undefined) {
+                    filter.push(`contains(${attr.lowercase_title}, ${ref('lowercase_title')})`)
+                }
+                return filter.join(' AND ')
+            },
+            exclusiveStartKey: query.startKey
+        });
+
+        const {Items: locations, LastEvaluatedKey: lastKey} = await this.db.query(ddbQuery)
+
+        if (locations === undefined) return {data: []}
+
+        return {
+            lastKey: lastKey !== undefined ? unmarshall(lastKey) as OrgLocationKey : lastKey,
+            data: locations.map(x => unmarshall(x)).map(x => ({
+                ...x,
+                pk: x.pk.substring(2 /*O#.length*/),
+                sk: x.sk.substring(2 /*L#.length*/)
+            }))
+        }
+    }
+
+    async updateLocation(orgId: string, request: TableAttributes<OrgLocationsTable>, locId?: string): Promise<OrgLocation | undefined> {
+        const locationId = locId ?? uuid();
+        const key = {pk: `O#${orgId}`, sk: `L#${locationId}`} as const;
+        const item = {
+            ...request,
+            lowercase_title: request.title?.toLocaleLowerCase(),
+            updated_at: Date.now() / 1000,
+            deleted: false,
+        } as const;
+        try {
+            const query = ddb.update(this._orgLocations, {
+                key,
+                values: item,
+                expression: ({attr, ref}) => ({
+                    set: {
+                        [attr.title]: ref('title'),
+                        [attr.lowercase_title]: ref('lowercase_title'),
+                        [attr.image_url]: ref('image_url'),
+                        [attr.created_at]: `if_not_exists(${attr.created_at}, ${ref('updated_at')})`,
+                        [attr.updated_at]: ref('updated_at'),
+                        [attr.deleted]: ref('deleted'),
+                    }
+                }),
+                condition: function ({key}) {
+                    return locId !== undefined ? `attribute_exists(${key.pk}) AND attribute_exists(${key.sk})` : undefined
+                },
+                return: "ALL_NEW"
+            });
+            const {Attributes: attrs} = await this.db.updateItem(query)
+            return {
+                ...(attrs !== undefined ? unmarshall(attrs) : item),
+                pk: orgId,
+                sk: locationId
+            }
+        } catch (e: any) {
+            if (e.name === 'ConditionalCheckFailedException') {
+                return undefined
+            }
+            throw e
+        }
+    }
+
+    async archiveLocation(orgId: string, locId: string) {
+        const key = {pk: `O#${orgId}`, sk: `L#${locId}`} as const;
+        try {
+            const {Attributes: item} = await this.db.updateItem(ddb.update(this._orgLocations, {
+                key,
+                values: {
+                    updated_at: Date.now() / 1000,
+                },
+                expression: ({attr, ref}) => ({
+                    set: {
+                        [attr.deleted]: ref.val(true),
+                        [attr.updated_at]: ref('updated_at'),
+                    }
+                }),
+                condition: ({key}) => `attribute_exists(${key.pk}) AND attribute_exists(${key.pk})`,
+                return: "ALL_NEW"
+            }))
+            if (item === undefined) return undefined
+            return {
+                ...unmarshall(item),
+                pk: orgId,
+                sk: locId
+            }
+        } catch (e: any) {
+            if (e.name === 'ConditionalCheckFailedException') {
+                return undefined
+            }
+            throw e
+        }
+    }
+
+    async removeLocation(orgId: string, locId: string) {
+        const {Attributes: item} = await this.db.deleteItem(ddb.deleteItem(this._orgLocations, {
+            key: {pk: `O#${orgId}`, sk: `L#${locId}`},
+            return: "ALL_OLD"
+        }))
+        if (item === undefined) return undefined
+        return {
+            ...unmarshall(item),
+            pk: orgId,
+            sk: locId
+        }
+    }
+
+    async assignUserToLocation(orgId: string, locId: string, userId: string): Promise<UserLocation> {
+        const key = {pk: `U#${userId}`, sk: `L#${locId}`} as const;
+        const item = {
+            created_at: Date.now() / 1000,
+            orgId
+        } as const;
+        await this.db.updateItem(ddb.update(this._userLocations, {
+            key,
+            values: item,
+            expression: ({attr, ref}) => ({
+                set: {
+                    [attr.org_id]: ref('orgId'),
+                    [attr.created_at]: `if_not_exists(${attr.created_at}, ${ref('created_at')})`,
+                }
+            })
+        }))
+        return {
+            pk: userId,
+            sk: locId,
+            ...item
+        }
+    }
+
+    async removeUserFromLocation(locId: string, userId: string): Promise<UserLocation | undefined> {
+        const key = {pk: `U#${userId}`, sk: `L#${locId}`} as const;
+        const {Attributes: item} = await this.db.deleteItem(ddb.deleteItem(this._userLocations, {
+            key,
+            return: "ALL_OLD"
+        }))
+        if (item === undefined) return undefined
+        return {
+            ...unmarshall(item),
+            pk: userId,
+            sk: locId
+        }
+    }
+
 }

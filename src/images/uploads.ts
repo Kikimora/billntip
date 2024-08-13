@@ -4,20 +4,18 @@ import {createPresignedPost} from "@aws-sdk/s3-presigned-post";
 import {S3} from "@aws-sdk/client-s3";
 import _ from "lodash";
 import {StreamingBlobPayloadOutputTypes} from "@smithy/types";
-import {Type} from "@sinclair/typebox";
 import {errorWithContext} from "@app/diagnostics";
-import {moduleConfig} from "@app/lambda";
 
 const s3 = new S3()
 
 export interface ImageUploaderOptions<T extends string> {
     configs: Record<T, ImageUploadConfig>
-    s3: { bucket: string, cdnRoot: string }
+    s3: { bucket: string, cdn: string }
 }
 
 export default class ImageUploader<Img extends string> {
     readonly configs: Record<Img, ImageUploadConfig>
-    readonly s3: { bucket: string; cdnRoot: string; }
+    readonly s3: { bucket: string; cdn: string; }
 
     constructor(options: ImageUploaderOptions<Img>) {
         this.configs = options.configs
@@ -52,12 +50,12 @@ export default class ImageUploader<Img extends string> {
     }
 
     async read(sub: string, id: string, area: UploadArea) {
-        const {s3: {bucket, cdnRoot}} = this
+        const {s3: {bucket, cdn}} = this
         const key = uploadKey(sub, id, area)
         try {
             const uploadObject = await s3.getObject({Bucket: bucket, Key: key})
             const type = uploadObject.Metadata?.['type'] as Img
-            const url = `https://static.${cdnRoot}/${key}`;
+            const url = `https://${cdn}/${key}`;
             const height = Number(uploadObject.Metadata?.['height'])
             const width = Number(uploadObject.Metadata?.['width'])
             const contentType = uploadObject.ContentType ?? 'application/octet-stream'
@@ -104,7 +102,7 @@ export default class ImageUploader<Img extends string> {
 
     async save(sub: string, buffer: Buffer, upload: UploadMetadata<Img>, area: UploadArea) {
         const {id, type, contentType, image} = upload
-        const {s3: {bucket, cdnRoot}} = this
+        const {s3: {bucket, cdn}} = this
         const target = uploadKey(sub, id, area);
         try {
             const s3Metadata: Record<string, string> = {'type': type}
@@ -119,7 +117,7 @@ export default class ImageUploader<Img extends string> {
                 Metadata: s3Metadata,
                 Body: buffer
             })
-            const url = `https://static.${cdnRoot}/${target}`;
+            const url = `https://${cdn}/${target}`;
             const metadata: Upload<Img> = {
                 contentType,
                 type,

@@ -4,7 +4,7 @@ import * as ddb from "@app/dynamodb";
 import _, {mergeJoin, MergePair} from "@app/util";
 import {ErrorContext, errorWithContext} from "@app/diagnostics";
 import * as Schemas from "./schemas";
-import UserStore, {UserAttributeItem, UserStoreOptions} from "./store";
+import UserStore, {BatchFetchOptions, UserAttributeItem, UserItem, UserStoreOptions} from "./store";
 import {UserAttribute} from "./attributes";
 
 export {UserAttribute} from "./attributes"
@@ -23,15 +23,8 @@ export interface FetchOptions {
     fetchDeleted?: boolean
 }
 
-/**
- * Batch Fetch operation options.
- */
-export interface BatchFetchOptions {
-    /**
-     * Allow fetch of deleted users, default - false
-     */
-    fetchDeleted?: boolean
-}
+export {UserItem} from "./store"
+
 
 /**
  * User data repository provides methods to load users from the storage.
@@ -160,22 +153,30 @@ export default class UserRepo {
      * @param users - array of usernames, max 50
      * @param options - fetch options
      */
-    async batchFetch(users: string[], options?: BatchFetchOptions) {
+    async batchFetch(users: string[], options?: BatchFetchOptions): Promise<UserItem[]> {
         const context = {
             name: "batchFetch",
             value: {users, options}
         }
         if (users.length > 50) throw internalError("Too many users in a batch").withContext(context)
-        const usersArray = await Promise.all(users.map(async username => {
-            const user = new User(username, this.store, this.lockStore)
-            try {
-                await user.fetch()
-                return user
-            } catch (e: any) {
-                throw errorWithContext(e, context)
-            }
-        }))
-        return _.keyBy(usersArray, 'username')
+        try {
+            return await this.store.batchFetch(users, options)
+        } catch (e: any) {
+            throw errorWithContext(e, context)
+        }
+    }
+
+    async fetchUserItem(user: string): Promise<UserItem> {
+        const context = {
+            name: "fetchUserItem",
+            value: {user}
+        }
+        try {
+            const x = await this.store.batchFetch([user], {fetchDeleted: true})
+            return x[0]
+        } catch (e: any) {
+            throw errorWithContext(e, context)
+        }
     }
 
     private async _fetch(usernameOrAlias: string, lock: boolean, options?: FetchOptions) {
@@ -228,6 +229,16 @@ export default class UserRepo {
             }
         }
     }
+}
+
+function attributeMap(attributes: UserAttributeItem[]) {
+    return _(attributes)
+        .filter(function (x): x is { name: string, value: string } {
+            return x.value !== undefined
+        })
+        .keyBy('name')
+        .mapValues('value')
+        .value();
 }
 
 export class User {
@@ -480,14 +491,18 @@ export class User {
         if (this.deleted) throw userNotFoundException().withContext(context)
         const targetAttributes = new Set(attributes)
         const tx = store.makeTransactBuilder(username)
+        const map: Record<string, string> = {}
         for (const attribute of this._attributes) {
             if (targetAttributes.has(attribute.name)) {
                 tx.deleteAttribute(attribute)
                 if (attribute.isAlias) {
                     tx.deleteAliasRecord(attribute)
                 }
+            } else if (attribute.value !== undefined) {
+                map[attribute.name] = attribute.value
             }
         }
+        tx.updateUser({attributes: map})
         try {
             await tx.run()
         } catch (e: any) {
@@ -549,7 +564,7 @@ export class User {
         /**
          * Merge user attributes with input attributes to generate both resulting attributes and an update transaction.
          *
-         * Let user (X, Y) to designate an alias attribute with value:A and unverifiedValue:B. (X, 0) is verified alias
+         * Let user (A, B) to designate an alias attribute with value:A and unverifiedValue:B. (X, 0) is verified alias
          * without any unverified value. (0, Y) is an unverified alias. Then merge is as follows:
          * ```
          *  User + Input = Result
@@ -612,9 +627,12 @@ export class User {
         if (attributes.length > this.store.maxAttributes) {
             throw tooManyUserAttributes()
         }
+        const map = attributeMap(attributes)
         if (mode === 'create') {
-            tx.createUser()
+            tx.createUser(map)
             tx.refreshAliasRecord({name: 'username', value: username, isAlias: true})
+        } else {
+            tx.updateUser({attributes: map})
         }
         const context = {
             name: '_updateAttributes'

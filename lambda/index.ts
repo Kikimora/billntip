@@ -2,6 +2,6 @@
 //export * from "./builder"
 
 export * from "./api"
-export * from "./config"
+export * from "./bootstrap"
 export * from "./mapper"
 export {default as map} from "./mapper"

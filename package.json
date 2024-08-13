@@ -20,7 +20,6 @@
     "archiver": "^7.0.1",
     "commander": "^11.1.0",
     "esbuild": "^0.19.11",
-    "jest": "^29.7.0",
     "jest-extended": "^4.0.2",
     "jest-when": "^3.6.0",
     "js-image-generator": "^1.0.4",
@@ -52,6 +51,7 @@
     "jwt-decode": "^4.0.0",
     "lodash": "^4.17.21",
     "lru-cache": "^10.2.0",
+    "mangopay2-nodejs-sdk": "^1.45.4",
     "openapi3-ts": "^4.2.2",
     "sharp": "^0.33.3",
     "short-uuid": "^4.2.2",
@@ -60,8 +60,7 @@
     "upath": "^2.0.1",
     "uuid": "^9.0.1",
     "xss": "^1.0.15",
-    "yaml": "^2.4.1",
-    "mangopay2-nodejs-sdk": "^1.45.4"
+    "yaml": "^2.4.1"
   },
   "scripts": {
     "aws": "dotenvx run -- aws",

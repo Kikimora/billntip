@@ -1,16 +1,21 @@
 import {badRequestError, internalError, notFoundError} from "@app/lambda";
 import {UserAttribute} from "@src/users/attributes";
+import InviteesRepo from "@src/users/user";
 import Store, * as store from "./store";
 import MangopayUser, {MangopayAPI, MangopayOptions} from "./mangopay-user";
+import _ from "lodash";
+import {toMembership} from "@src/billntip/util";
 
 export interface StoreOptions {
     table: string
 }
 
 export default class UserRepo {
-    private store: Store;
+    public readonly store: Store;
 
-    constructor(options: StoreOptions, private readonly mangopayOptions: MangopayOptions) {
+    constructor(options: StoreOptions,
+                public readonly mangopayOptions: MangopayOptions,
+                public readonly invitees: InviteesRepo) {
         this.store = new Store(options)
     }
 
@@ -18,19 +23,19 @@ export default class UserRepo {
      * Fetch member information from the store or create a new non-persistent member record.
      */
     async fetchOrCreate(username: string) {
-        const recipient = new User(username, this.store, this.mangopayOptions)
+        const recipient = new User(username, this)
         await recipient.fetchOrCreate()
         return recipient
     }
 
     async fetch(username: string) {
-        const member = new User(username, this.store, this.mangopayOptions)
+        const member = new User(username, this)
         await member.fetch()
         return member
     }
 
     newUser(username: string) {
-        return new User(username, this.store, this.mangopayOptions)
+        return new User(username, this)
     }
 
     async createOrg(request: store.OrgRequest) {
@@ -81,8 +86,19 @@ export class User {
     private userItem?: store.UserItem
 
     constructor(public readonly username: string,
-                public readonly store: Store,
-                private readonly mangopayOptions: MangopayOptions) {
+                private readonly repo: UserRepo) {
+    }
+
+    get store() {
+        return this.repo.store
+    }
+
+    get mangopayOptions() {
+        return this.repo.mangopayOptions
+    }
+
+    get invitees() {
+        return this.repo.invitees
     }
 
     async fetchOrCreate(force: boolean = false) {
@@ -95,9 +111,10 @@ export class User {
 
     async fetch(force: boolean = false) {
         if (this.userItem !== undefined && !force) return this.userItem
-        const user = await this.store.fetchUser(this.username)
+        const username = this.username;
+        const user = await this.store.fetchUser(username)
         if (user === undefined)
-            throw notFoundError()
+            throw notFoundError().withContext("fetch", {username})
         return this.userItem = user
     }
 
@@ -113,11 +130,32 @@ export class User {
      * Fetch member memberships.
      */
     async memberships(filters: store.MembershipFilters = {accepted: false, rejected: false}) {
-        return this.store.memberships(this.username, filters)
+        const {username, invitees, store} = this
+        const memberships = await this.store.memberships(this.username, filters);
+        try {
+            const oids = _(memberships).map('sk').uniq().value()
+            const uids = _(memberships).map('invited_by').concat(this.username).compact().uniq().value()
+            const [users, orgs] = await Promise.all([
+                invitees.batchFetch(uids).then(function (users) {
+                    return _.keyBy(users, 'pk')
+                }),
+                store.batchFetchOrgs(oids).then(function (orgs) {
+                    return _.keyBy(orgs, 'pk')
+                })
+            ])
+            return memberships.map(function (member) {
+                const inviter = member.invited_by !== undefined ? users[member.invited_by] : undefined
+                const org = orgs[member.sk]
+                return toMembership(member, org, users[member.pk], inviter)
+            })
+        } catch (e) {
+            throw internalError("Unexpected error loading user memberships.")
+                .withContext("memberships", {filters, username})
+        }
     }
 
-    async acceptInvite(id: string) {
-        const {username, store} = this
+    async acceptInvite(orgId: string) {
+        const {username, store, invitees} = this
 
         async function acceptInvite(username: string, id: string) {
             try {
@@ -133,24 +171,42 @@ export class User {
             }
         }
 
-        const membership = await acceptInvite(username, id)
+        const membership = await acceptInvite(username, orgId)
         if (membership === undefined) throw notFoundError()
-        return membership
+        return await this.toMembership(membership);
     }
 
     async rejectInvite(id: string) {
         const {username, store} = this
-        try {
-            return await store.rejectInvite(username, id)
-        } catch (e: any) {
-            switch (e.name) {
-                case 'ConditionalCheckFailedException': {
-                    throw badRequestError('Invite already does not exists').withContext('rejectInvite')
+
+        async function rejectInvite(username: string, id: string) {
+            try {
+                return await store.rejectInvite(username, id)
+            } catch (e: any) {
+                switch (e.name) {
+                    case 'ConditionalCheckFailedException': {
+                        throw badRequestError('Invite already does not exists').withContext('rejectInvite')
+                    }
+                    default:
+                        throw internalError("Cannot reject invite").withContext("rejectInvite", {cause: e})
                 }
-                default:
-                    throw internalError("Cannot reject invite").withContext("rejectInvite", {cause: e})
             }
         }
+
+        const membership = await rejectInvite(username, id)
+        if (membership === undefined) return undefined
+        return await this.toMembership(membership)
+    }
+
+    private async toMembership(membership: store.MembershipItem) {
+        const {username, store, invitees} = this
+        const [org, users] = await Promise.all([
+            store.fetchOrg(membership.sk),
+            invitees.batchFetch(_.compact([username, membership.invited_by])).then(function (x) { return _.keyBy(x, 'pk') }),
+        ])
+        return toMembership(membership, org ?? {pk: membership.sk, title: ""},
+            users[username],
+            membership.invited_by !== undefined ? users[membership.invited_by] : undefined)
     }
 
     async fetchMembership(orgId: string) {
@@ -166,7 +222,7 @@ export class User {
 
         const membership = await fetchMembership(username, orgId)
         if (membership === undefined) throw notFoundError()
-        return membership
+        return await this.toMembership(membership)
     }
 
     /**
@@ -242,6 +298,16 @@ export class User {
             mangopayUid: mangopayUid,
             walletId: walletId,
         })
+    }
+
+    async fetchLocations() {
+        const {username, store} = this
+        try {
+            const userLocations = await store.userLocations(username)
+            return await store.batchGetLocations(userLocations)
+        } catch (e: any) {
+            throw internalError("Cannot fetch user locations").withContext("fetchLocations", {username, cause: e})
+        }
     }
 }
 

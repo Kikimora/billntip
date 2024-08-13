@@ -4,6 +4,7 @@ import {TemplateRepo} from "@src/templates";
 import {MangopayAPI} from "./mangopay-user";
 import {KYCProcess} from "./schemas";
 import {__init, handler} from "./mangopay-hooks";
+import _ from "lodash";
 
 const testHandler = makeTestHandler(handler, {
     routeKey: "GET /tip/mangopay/callback",
@@ -25,10 +26,7 @@ const fixture = prepare('Once', {
 
         const fetchTemplate = jest.spyOn(TemplateRepo.prototype, 'fetchTemplate')
         const templateBody = jest.fn().mockReturnValue("template HTML")
-        fetchTemplate.mockReturnValue(Promise.resolve({
-            body: templateBody as any as _.TemplateExecutor,
-            metadata: {}
-        }))
+        fetchTemplate.mockReturnValue(Promise.resolve(templateBody as any as _.TemplateExecutor))
 
         const sendEmail = jest.spyOn(SES.prototype, 'sendEmail')
 
@@ -68,14 +66,15 @@ describe("MangoPay hooks", () => {
         ])("notifies user on $eventType", async ({eventType, status, template, title}) => {
             const {fetchKYCDoc, sendEmail, fetchTemplate, templateBody} = fixture()
             //arrange
-            fetchKYCDoc.mockReturnValue(Promise.resolve({
+            const doc: KYCProcess = {
                 created_at: Date.now(),
                 type: 'identity',
                 status: status,
                 process_id: 'kyc_doc_id',
                 processed_at: Date.now(),
                 tag: "mangopay hooks test user"
-            }))
+            };
+            fetchKYCDoc.mockReturnValue(Promise.resolve(doc))
             sendEmail.mockImplementation(() => Promise.resolve({
                 MessageId: "message id"
             }))
@@ -106,7 +105,7 @@ describe("MangoPay hooks", () => {
             expect(fetchTemplate).toHaveBeenCalledWith(template)
             expect(templateBody).toHaveBeenCalledWith({
                 attributes: [{name: "user_attr", value: "attribute value"}],
-                metadata: {env: "dev"},
+                metadata: {env: "dev", ...doc},
                 username: "mangopay hooks test user"
             })
         })

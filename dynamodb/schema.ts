@@ -491,7 +491,7 @@ export type ExpressionGenerator<T extends TableSchema, V> = (context: {
     key: AttributeGenerator<T['key']>,
     attr: AttributeGenerator<T['attributes']>,
     ref: ValuesGenerator<V>
-}) => string
+}) => string | undefined
 
 /**
  * Function generating a DynamoDB projection expression.

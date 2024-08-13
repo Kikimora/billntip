@@ -1,13 +1,52 @@
-import {ValueErrorType} from "@sinclair/typebox/errors";
+import {ValueError, ValueErrorType} from "@sinclair/typebox/errors";
 import {TLiteral, TObject, Type, TypeGuard, Union} from "@sinclair/typebox";
 import {Value} from "@sinclair/typebox/value";
 import type {SchemaOptions, TSchema} from "@sinclair/typebox/build/require/type/schema";
 
-export function TaggedUnion<T extends TSchema[]>(schemas: [...T], options: SchemaOptions & {tag:keyof T[number]['properties']}): Union<T> {
+/**
+ * Creates tagged union type - a specialized union where each member has a tag property specifying type of the member.
+ *
+ * @example
+ * const U = TaggedUnion([
+ *  Type.Object({
+ *      type:Type.Literal("point"),
+ *      x: Type.Number(),
+ *      y: Type.Number()
+ *  }),
+ *  Type.Object({
+ *      type:Type.Literal("line"),
+ *      x1: Type.Number(),
+ *      y1: Type.Number(),
+ *      x2: Type.Number(),
+ *      y2: Type.Number()
+ *  })],
+ *  { tag:"type"})
+ * interface UPoint { type: "point", x: number, y: number }
+ * interface ULine { type: "line", x1: number, y1: number, x2: number, y2: number }
+ * const point : UPoint = {
+ *     type: "point", x: 0, y:0
+ * } satisfies Static<typeof U>
+ * const line: ULine = {
+ *     type: "line",
+ *     x1: 0, y1:0, x2: 10, y2:20,
+ * } satisfies Static<typeof U>
+ *
+ * @param schemas - union members
+ * @param options - union options, tag attribute is the key of the tag property.
+ */
+export function TaggedUnion<T extends TSchema[]>(schemas: [...T], options: SchemaOptions & {
+    tag: keyof T[number]['properties']
+}): Union<T> {
     return Type.Union(schemas, options);
 }
 
-export function specializeUnionError(error: any) {
+/**
+ * Default TypeBox union validation error leaves much to desire in terms of clarity. This method generates tagged union
+ * validation error which is easier to understand.
+ * @param error - validation error
+ * @returns new error object describing problematic property or undefined if incoming error was not a union error.
+ */
+export function taggedUnionError(error: any): ValueError | undefined {
     if (error === undefined) return error
     const {schema, path, value, type} = error
 

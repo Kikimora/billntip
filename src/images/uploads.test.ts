@@ -1,148 +1,103 @@
 import {generateImage} from 'js-image-generator'
-import {CreateUploadResponse, handler, __init} from "@src/images/index";
-import {cognito, prepare, makeTestHandler} from "@app/test";
+import {handler, __init} from "./index";
+import {cognito, prepare, makeTestHandler, clearMock} from "@app/test";
+import {S3Object, Upload, uploadBuilder} from "@src/object-store";
 
 const defaults = {
     headers: {'content-type': 'application/json'},
     authorizer: {lambda: cognito.newSession("test")}
 }
-const getUploads = makeTestHandler(handler, {
-    routeKey: 'GET /uploads',
+
+const createImageFromUpload = makeTestHandler(handler, {
+    routeKey: 'POST /images',
     ...defaults
 })
-const getUpload = makeTestHandler(handler, {
-    routeKey: 'GET /upload/{id}',
-    ...defaults
-})
-const deleteUpload = makeTestHandler(handler, {
-    routeKey: 'DELETE /upload/{id}',
-    ...defaults
-})
-const postUpload = makeTestHandler(handler, {
-    routeKey: 'POST /uploads',
-    ...defaults
-})
-const updateUpload = makeTestHandler(handler, {
-    routeKey: 'POST /upload/{id}',
-    ...defaults
+
+const fixture = prepare('Each', {
+    async before() {
+        const {s3} = await __init()
+
+        async function makeUpload(key: string) {
+            const upload = uploadBuilder(key, {bucket: s3.bucket, prefix: s3.tmpPrefix ?? "tmp"})
+                .condition(["content-length-range", 1024, 5 * 1024 * 1024])
+                .condition(["starts-with", "$Content-Type", "image/"])
+                .properties({
+                    'transform': 'resize',
+                    'target-width': '100',
+                    'target-height': '100',
+                    'target-format': 'png'
+                })
+            return await upload.build()
+        }
+
+        const uploadFile = jest.fn(async function (response: Upload) {
+                const imageBuffer = await new Promise<Buffer>(function (resolve, reject) {
+                    generateImage(400, 400, 0.5, function (err, img) {
+                        if (err) return reject(err)
+                        return resolve(img.data)
+                    })
+                })
+                const formData = new FormData();
+                Object.entries(response.fields).forEach(([k, v]) => {
+                    formData.append(k, v);
+                });
+                formData.append("Content-Type", "image/jpeg");
+                //use blob to upload data, simple call like
+                //formData.append("file", imageBuffer);
+                //does upload but result in a garbage bytes written to the S3 object.
+                const blob = new Blob([imageBuffer], {type: "image/jpeg"})
+                formData.append("file", blob, 'image.jpeg');
+                const s3Response = await fetch(response.url, {method: "POST", body: formData})
+                const message = await s3Response.text();
+                if (message != "") console.error(message)
+                expect(s3Response.status).toEqual(204)
+                //This is what you send in POST /uploads body.
+                return response.fields.key
+            }
+        )
+        const s3Copy = jest.spyOn(S3Object.prototype, 'copy')
+        const s3Put = jest.spyOn(S3Object.prototype, 'put')
+        return {s3, makeUpload, uploadFile, s3Copy, s3Put}
+    },
+    async after({s3, uploadFile, s3Copy, s3Put}) {
+
+        await clearMock(s3Put, async function (this: S3Object, x: any, self: S3Object) {
+            await this.delete().catch(console.log)
+        })
+        await clearMock(s3Copy, async function (this: S3Object, {value}) {
+            if (value !== undefined) await value.delete().catch(console.log)
+        })
+        await clearMock(uploadFile, async function ({value: key}) {
+            if (key !== undefined) {
+                const obj = new S3Object(s3.bucket, key)
+                await obj.delete().catch(console.log)
+            }
+        })
+    }
 })
 
 describe("Uploads", () => {
 
-    const fixture = prepare('Each', {
-        async before() {
-            return await __init()
-        },
-        async after() {
-            const {files} = await getUploads({})
-            for (const file of files) {
-                await deleteUpload({path: {id: file}})
-            }
-        }
-    })
-
-    describe("POST /uploads", () => {
-        it("return an upload URL with parameters", async () => {
-            const {s3: {bucket}} = fixture()
-            const response = await createUpload()
-            expect(response).toEqual({
-                type: 'profile_pic',
-                id: expect.toBeString(),
-                uploadUrl: `https://${bucket}.s3.eu-south-1.amazonaws.com/`,
-                uploadFields: {
-                    key: expect.stringMatching(`uploads/test/*`),
-                    bucket,
-                    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
-                    'X-Amz-Credential': expect.toBeString(),
-                    'X-Amz-Date': expect.toBeString(),
-                    'X-Amz-Security-Token': expect.toBeString(),
-                    Policy: expect.toBeString(),
-                    'X-Amz-Signature': expect.toBeString()
-                },
-                expires: expect.toBeDateString()
+    describe("POST /images", () => {
+        it("creates image from an upload", async () => {
+            const {s3, makeUpload, uploadFile} = fixture()
+            const upload = await makeUpload("test")
+            const key = await uploadFile(upload)
+            const response = await createImageFromUpload({
+                body: {key}
             })
-            const expiresIn = (Date.parse(response.expires) - Date.now()) / 1000
-            expect(expiresIn).toBeCloseTo(5 * 60, -1)
-        })
-    })
-
-    describe("POST /upload/{id}", () => {
-        it("process (resize) uploaded images", async () => {
-            const {s3: {cdnRoot}} = fixture()
-            const uploadResponse = await createUpload()
-            await uploadImage(uploadResponse)
-            const imageResponse = await updateUpload({path: {id: uploadResponse.id}})
-            const url = `https://static.${cdnRoot}/public/test/profile_pic.png`;
-            expect(imageResponse).toEqual({
-                type: 'profile_pic',
-                id: 'profile_pic.png',
-                contentType: 'image/png',
-                url: url,
-                image: {
-                    height: 100,
-                    width: 100
-                }
+            const url = `https://${s3.cdn}/test`;
+            expect(response).toMatchObject({
+                content_type: 'image/jpeg',
+                key: 'test',
+                url: url
             })
+            const imageRequest = await fetch(url)
+            expect(imageRequest.status).toBe(200)
+            const imgBytes = await imageRequest.arrayBuffer();
+            expect(imgBytes.byteLength).toBeGreaterThan(1024)
         })
+        // it("validates upload presence")
+        // it("validates upload is an transformable image")
     })
-
-    describe("GET /uploads", () => {
-        it("return uploads", async () => {
-            const uploadResponse = await createUpload()
-            await uploadImage(uploadResponse)
-            await updateUpload({path: {id: uploadResponse.id}})
-            const uploads = await getUploads({})
-            expect(uploads).toEqual({
-                lastKey: undefined,
-                files: [
-                    'profile_pic.png'
-                ]
-            })
-        })
-    })
-
-    describe("GET /upload/{id}", () => {
-        it("return upload", async () => {
-            const {s3: {cdnRoot}} = fixture()
-            const uploadResponse = await createUpload()
-            await uploadImage(uploadResponse)
-            const imageResponse = await updateUpload({path: {id: uploadResponse.id}})
-            const upload = await getUpload({path: {id: imageResponse.id}})
-            expect(upload).toEqual({
-                contentType: 'image/png',
-                type: 'profile_pic',
-                id: 'profile_pic.png',
-                url: `https://static.${cdnRoot}/public/test/profile_pic.png`,
-                image: {width: 100, height: 100}
-            })
-        })
-    })
-
-    async function createUpload() {
-        return await postUpload({body: {type: "profile_pic"}})
-    }
 })
-
-async function uploadImage(response: CreateUploadResponse) {
-    const imageBuffer = await new Promise<Buffer>(function (resolve, reject) {
-        generateImage(400, 400, 0.5, function (err, img) {
-            if (err) return reject(err)
-            return resolve(img.data)
-        })
-    })
-    const formData = new FormData();
-    formData.append("Content-Type", "image/jpeg");
-    Object.entries(response.uploadFields).forEach(([k, v]) => {
-        formData.append(k, v);
-    });
-    formData.append('x-amz-meta-type', 'profile_pic')
-    //use blob to upload data, simple call like
-    //formData.append("file", imageBuffer);
-    //does upload but result in a garbage bytes written to the S3 object.
-    const blob = new Blob([imageBuffer], {type: "image/jpeg"})
-    formData.append("file", blob, 'image.jpeg');
-    const s3Response = await fetch(response.uploadUrl, {method: "POST", body: formData})
-    expect(s3Response.status).toEqual(204)
-    console.log(await s3Response.text())
-    return imageBuffer;
-}

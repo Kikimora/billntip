@@ -3,7 +3,7 @@ import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {UserAttribute} from "@src/users/attributes";
 import {unmarshall} from "@aws-sdk/util-dynamodb";
 import * as Schemas from "@src/users/schemas";
-import {internalError} from "@app/lambda";
+import {TableAttributes} from "@app/dynamodb";
 
 
 // pk               sk          attributes
@@ -55,7 +55,7 @@ const AttributeKey = {
     /**
      * Attribute or user record discriminator.
      */
-    sk: ddb.Type.String as `A#${string}` | `U`
+    sk: ddb.Type.String as `A#${string}`
 };
 const Attributes = {
     /**
@@ -74,14 +74,45 @@ const Attributes = {
      * Indicates whenever attribute is an alias (valid for sk = 'A#*').
      */
     isAlias: ddb.Type.Boolean,
+};
+
+type AttributesTable = ddb.TableSchema<typeof AttributeKey, typeof Attributes>
+type Attribute = ddb.TableItem<AttributesTable>
+
+function isAttribute(record: Record<string, any>): record is Attribute {
+    return record.sk.startsWith('A#')
+}
+
+/**
+ * Aliases view maps aliases to Cognito usernames.
+ */
+const UserKey = {
+    /**
+     * Username as provided by the user.
+     */
+    pk: ddb.Type.String as `U#${string}`,
+    /**
+     * Attribute or user record discriminator.
+     */
+    sk: ddb.Type.String as `U`
+};
+const UserAttributes = {
+    /**
+     * Map of all verified attributes.
+     */
+    attributes: ddb.Type.Map(ddb.Type.String),
     /**
      * Soft delete flag (valid for sk = 'U').
      */
     deleted: ddb.Type.Boolean
 };
 
-type AttributesTable = ddb.TableSchema<typeof AttributeKey, typeof Attributes>
-type Attribute = ddb.TableItem<AttributesTable>
+type UsersTable = ddb.TableSchema<typeof UserKey, typeof UserAttributes>
+export type UserItem = TableAttributes<UsersTable> & { pk: string }
+
+function isUser(record: Record<string, any>): record is UserItem {
+    return record.sk === 'U'
+}
 
 const AttributeIndexKey = {
     name: ddb.Type.String,
@@ -93,7 +124,6 @@ const AttributeIndexValue = {
 type AttributesIndex = ddb.TableSchema<typeof AttributeIndexKey, typeof AttributeIndexValue>
 type AttributeIndexValue = ddb.TableItem<AttributesTable>
 
-
 /**
  * User attribute storage item.
  */
@@ -102,13 +132,6 @@ export interface UserAttributeItem {
     value?: string
     unverifiedValue?: string
     isAlias?: boolean
-}
-
-/**
- * User storage item.
- */
-export interface UserItem {
-    deleted: boolean
 }
 
 /**
@@ -148,6 +171,7 @@ export default class UserStore {
     readonly db: DynamoDB
     readonly aliases: AliasTable
     readonly attributes: AttributesTable
+    readonly users: UsersTable
     readonly attributesIndex: AttributesIndex
 
     constructor(options: UserStoreOptions) {
@@ -159,6 +183,7 @@ export default class UserStore {
         this.aliases = ddb.table(options.table, AliasKey, AliasAttributes)
         this.attributes = ddb.table(options.table, AttributeKey, Attributes)
         this.attributesIndex = ddb.table(options.table, AttributeIndexKey, AttributeIndexValue)
+        this.users = ddb.table(options.table, UserKey, UserAttributes)
     }
 
     async lookupAlias(usernameOrAlias: string) {
@@ -200,24 +225,30 @@ export default class UserStore {
         }
 
         for (const dbItem of items) {
-            const item = unmarshall(dbItem) as Attribute
-            if (item.sk.startsWith('A#')) {
+            const item = unmarshall(dbItem)
+            if (isAttribute(item)) {
                 attributes.push(makeAttribute(item))
-            } else if (item.sk === 'U') {
+            } else if (isUser(item)) {
                 deleted = item.deleted ?? false
             }
-
         }
 
         return {attributes, deleted}
     }
 
-    async batchFetch(users: string[]) {
-        if (users.length > 50) throw internalError("").withContext("batchFetch", {users})
-        const queries = users.map((user) => {
-            return this.fetch(user)
+    async batchFetch(usernames: string[], options?: BatchFetchOptions): Promise<UserItem[]> {
+        const deletedOk = options?.fetchDeleted ?? false
+        const batch = ddb.batchGet().add(this.users, {
+            keys: usernames.map(userKey),
         })
-        return Promise.all(queries)
+        const {Responses: response} = await this.db.batchGetItem(batch.input())
+        if (response === undefined) return []
+
+        const users = response[this.users.name]
+        return users.map(x => unmarshall(x)).map(x => ({
+            ...x,
+            pk: x.pk.substring(2/*U#.length*/)
+        }) as UserItem).filter(x => !x.deleted || deletedOk)
     }
 
     isAliasAttribute(attribute: UserAttribute | string): boolean {
@@ -228,8 +259,18 @@ export default class UserStore {
     }
 
     makeTransactBuilder(username: string) {
-        return new UserTxBuilder(username, this.aliases, this.attributes, this.db)
+        return new UserTxBuilder(username, this.aliases, this.attributes, this.users, this.db)
     }
+}
+
+/**
+ * Batch Fetch operation options.
+ */
+export interface BatchFetchOptions {
+    /**
+     * Allow fetch of deleted users, default - false
+     */
+    fetchDeleted?: boolean
 }
 
 class UserTxBuilder {
@@ -238,6 +279,7 @@ class UserTxBuilder {
     constructor(private readonly username: string,
                 private readonly aliases: AliasTable,
                 private readonly attributes: AttributesTable,
+                private readonly users: UsersTable,
                 private readonly db: DynamoDB) {
     }
 
@@ -292,19 +334,19 @@ class UserTxBuilder {
         }
     }
 
-    createUser() {
+    createUser(attributes: Record<string, string>) {
         const {tx, username} = this
-        tx.add(this.attributes, createUser(username))
+        tx.add(this.users, createUser(username, attributes))
     }
 
     deleteUser() {
         const {tx, username} = this
-        tx.add(this.attributes, deleteUser(username))
+        tx.add(this.users, deleteUser(username))
     }
 
-    updateUser(item: UserItem) {
+    updateUser({deleted, attributes}: { deleted?: boolean, attributes?: Record<string, string> }) {
         const {tx, username} = this
-        tx.add(this.attributes, updateUser(username, item.deleted))
+        tx.add(this.users, updateUser(username, deleted, attributes))
     }
 
     async run() {
@@ -355,33 +397,43 @@ function userKey(username: string) {
     return {pk: `U#${username}`, sk: `U`} as const
 }
 
-function createUser(username: string): ddb.TransactWriteItem<AttributesTable> {
+function createUser(username: string, attributes: Record<string, string>): ddb.TransactWriteItem<UsersTable> {
     return {
         action: "update",
         key: userKey(username),
-        values: {false: false},
+        values: {false: false, attributes},
         expression: ({attr, ref}) => ({
             set: {
-                [attr.deleted]: ref('false')
+                [attr.deleted]: ref('false'),
+                [attr.attributes.toString()]: ref('attributes')
             },
         }),
         condition: ({key}) => `attribute_not_exists(${key.pk}) AND attribute_not_exists(${key.sk})`
     }
 }
 
-function updateUser(username: string, deleted: boolean): ddb.TransactWriteItem<AttributesTable> {
+function updateUser(username: string, deleted?: boolean, attributes?: Record<string, string>): ddb.TransactWriteItem<UsersTable> {
     return {
         action: "update",
         key: userKey(username),
-        values: {deleted},
-        expression: ({attr, ref}) => ({
-            set: `${attr.deleted} = ${ref('deleted')}`,
-        }),
+        values: {deleted, attributes},
+        expression({attr, ref}) {
+            const update: Record<string, string> = {}
+            if (deleted !== undefined) {
+                update[attr.deleted] = ref('deleted')
+            }
+            if (attributes !== undefined) {
+                update[attr.attributes.toString()] = ref('attributes')
+            }
+            return ({
+                set: update,
+            })
+        },
         condition: ({key}) => `attribute_exists(${key.pk}) AND attribute_exists(${key.sk})`
     }
 }
 
-function deleteUser(username: string): ddb.TransactWriteItem<AttributesTable> {
+function deleteUser(username: string): ddb.TransactWriteItem<UsersTable> {
     return {
         action: "delete",
         key: userKey(username)

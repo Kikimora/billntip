@@ -2,19 +2,26 @@ import {Static, Type as T, Type} from "@sinclair/typebox";
 import {TaggedUnion} from "@app/lambda/tagged_union";
 
 const ShortUserInfo = Type.Object({
-    email: Type.String({description: "User email"}),
-    first_name: Type.String({description: "User first name"}),
-    last_name: Type.String({description: "User last name"}),
+    id: Type.String({description: "Unique user identifier"}),
+    email: Type.Optional(Type.String({description: "User email"})),
+    profile_pic: Type.Optional(Type.String({description: "User profile picture"})),
+    first_name: Type.Optional(Type.String({description: "User first name"})),
+    last_name: Type.Optional(Type.String({description: "User last name"})),
 });
 
-const Organisation = Type.Object({
-        id: Type.String({description: "Organisation identifier"}),
+export const OrgId = {
+    id: T.String({description: "Organisation identifier", minLength: 1})
+}
+
+export const PublicOrgInfo = Type.Object({
+        ...OrgId,
         title: Type.String({description: "Organisation name"})
     }, {
         $id: "Organisation",
         description: "Target organisation"
     }
 );
+export type PublicOrgInfo = Static<typeof PublicOrgInfo>
 
 const BasicOrganisationInfo = Type.Object({
         id: Type.String({description: "Organisation identifier"}),
@@ -24,20 +31,25 @@ const BasicOrganisationInfo = Type.Object({
         description: "Basic information about an organisation"
     }
 );
+export const MemberRole = Type.Union([
+    Type.Literal("admin"),
+    Type.Literal("member")
+], {$id: "MemberRole", description: "Member role in the organisation"});
+export type MemberRole = Static<typeof MemberRole>
+
 export const MemberSchema = Type.Object({
+    id: Type.String(),
     accepted_at: Type.Optional(Type.Number({
         description: "Invite acceptance timestamp", examples: [1716814592]
     })),
     invited_at: Type.Number({
         description: "Invite creation timestamp", examples: [1716814592]
     }),
-    invited_by: ShortUserInfo,
+    invited_by: Type.Optional(ShortUserInfo),
+    user: Type.Optional(ShortUserInfo),
     org: BasicOrganisationInfo,
     rejected_at: Type.Optional(Type.Number({description: "Rejection timestamp", examples: [1716814592]})),
-    role: Type.Union([
-        Type.Literal("admin"),
-        Type.Literal("member")
-    ], {description: "Member role in the organisation"})
+    role: MemberRole
 }, {$id: "MemberSchema", description: "Organisation member"})
 
 export const AmountSchema = Type.Object({
@@ -152,10 +164,6 @@ export const BankAccountsQuery = {
 }
 const TBankAccountsQuery = Type.Object(BankAccountsQuery)
 export type BankAccountsQuery = Static<typeof TBankAccountsQuery>
-
-export const OrgId = {
-    id: T.String({description: "Organisation identifier"})
-}
 
 export const TxId = {
     id: T.String({
@@ -360,9 +368,12 @@ const CCPayinSchema = Type.Object({
 })
 const WirePayoutSchema = Type.Object({
     type: Type.Literal("wire_payout"),
-    account: Type.String(),
-    wire_ref: Type.String({maxLength: 12})
-})
+    account: Type.String({description: "The unique identifier of the bank account."}),
+    wire_ref: Type.Optional(Type.String({
+        maxLength: 255,
+        description: "Custom description to appear on the user’s bank statement along with the platform name. Banks generally truncate the length, but to different extents depending on the bank. While max length is 255 less than 12 characters is recommended."
+    })),
+}, {$id: "WirePayoutSchema"})
 const WirePayinSchema = Type.Object({
     type: Type.Literal("wire_payin"),
 })
@@ -409,7 +420,6 @@ export const Me = Type.Object({
     wallet: Type.Optional(AmountSchema)
 }, {$id: "Me"})
 
-
 export const Recipient = Type.Object({
     first_name: Type.String({minLength: 3, maxLength: 100}),
     last_name: Type.String({minLength: 3, maxLength: 100}),
@@ -429,3 +439,55 @@ export const Recipient = Type.Object({
     })
 })
 export type Recipient = Static<typeof Recipient>
+
+export const LocationRequest = Type.Object({
+    title: Type.String({minLength: 1}),
+    image_url: Type.Optional(Type.String({format: "uri"}))
+})
+export type LocationRequest = Static<typeof LocationRequest>
+
+export const Location = Type.Object({
+    id: Type.String({
+        description: "Location id"
+    }),
+    org_id: Type.String({
+        description: "Parent organisation id"
+    }),
+    title: Type.String({
+        description: "Location title",
+        examples: ["KFC at Baker's Street"]
+    }),
+    created_at: Type.Number({
+        description: "The date and time at which the object was created",
+        examples: [1716814592]
+    }),
+    updated_at: Type.Number({
+        description: "The date and time at which the object was updated",
+        examples: [1716814592]
+    }),
+    image_url: Type.Optional(Type.String({
+        format: "uri",
+        description: "Location image url",
+        maxLength: 1024,
+        examples: ["https://static.billntip.com/public/my-org/my-loc/9a0c44a5-37b9-4eac-a2c3-63cc50528a53.png"]
+    })),
+    archived: Type.Optional(Type.Boolean({
+        description: "Indicates whenever location is archived or not",
+        default: false
+    }))
+})
+export type Location = Static<typeof Location>
+export const LocationsQuery = {
+    start_key: Type.Optional(Type.String({
+        description: "Start searching locations from this key"
+    })),
+    archived: Type.Optional(Type.Boolean({
+        default: false,
+        description: "Include archived locations into the response"
+    })),
+    title: Type.Optional(Type.String({
+        description: "Filter location by title"
+    }))
+}
+const TLocationsQuery = Type.Object(LocationsQuery)
+export type LocationsQuery = Static<typeof TLocationsQuery>

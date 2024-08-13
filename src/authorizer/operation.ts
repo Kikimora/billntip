@@ -2,7 +2,7 @@ import _ from "lodash";
 import {userPoolClientDetails} from "../cognito";
 import {toSeconds} from "@app/util";
 import {Static, TObject, Type} from "@sinclair/typebox";
-import {registerDefaultFormats, moduleConfig} from "@app/lambda";
+import {registerDefaultFormats, bootstrap} from "@app/lambda";
 import {OperationContext, SessionContextSchema} from "./types";
 import {SessionRepo} from "./session";
 import {OIDCTokensRepo} from "./oidc_tokens";
@@ -44,7 +44,9 @@ export const AuthOptionsSchema = {
         authorizerCacheTtl: Type.Number({minimum: 10}),
     }),
 } as const;
-const config = moduleConfig().parameters(AuthOptionsSchema).build()
+const config = bootstrap()
+    .parameters(AuthOptionsSchema)
+    .buildConfig()
 
 export type AuthOptions = Static<TObject<typeof AuthOptionsSchema>>
 

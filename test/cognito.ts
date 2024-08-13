@@ -151,7 +151,7 @@ export class TestGroup {
     }
 }
 
-interface TestSessionOptions {
+export interface TestSessionOptions {
     email?: string,
     profile?: Partial<Profile>
 }

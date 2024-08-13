@@ -91,12 +91,7 @@ const inviteAndRegister = makeFixture({
                 title: org.title ?? ""
             },
             username: waiter.username,
-            invited_by: {
-                username: admin.username,
-                email: admin.username,
-                first_name: "Business",
-                last_name: "User",
-            },
+            invited_by: admin.username,
             role: 'member'
         })
 
@@ -162,28 +157,33 @@ describe("POST /tip/registration", () => {
 
                 const member = await tipUsers.fetch(waiter.username)
                 const userItem = await member.fetch();
-                expect(userItem).toEqual(expect.objectContaining({
+                expect(userItem).toMatchObject({
                     pk: waiter.username,
                     mangopayUid: expect.toStartWith("usr_"),
                     walletId: expect.toStartWith("wlt_")
-                }))
+                })
                 const membership = await member.fetchMembership(org.pk)
-                expect(membership).toEqual(expect.objectContaining({
-                    pk: waiter.username,
-                    sk: org.pk,
+                expect(membership).toMatchObject({
+                    id: waiter.username,
                     org: {
                         id: org.pk,
                         title: "Test"
                     },
                     role: "member",
                     invited_by: {
-                        username: admin.username,
+                        id: admin.username,
                         first_name: "Business",
                         last_name: "User",
                         email: admin.username,
                     },
-                    invited_at: expect.closeTo(now, -3)
-                }))
+                    invited_at: expect.closeTo(now, -3),
+                    user: {
+                        id: waiter.username,
+                        email: waiter.username,
+                        first_name: "Waiter",
+                        last_name: "User"
+                    },
+                })
             })
 
             it("adds user to 'recipients' group", async () => {
@@ -196,18 +196,27 @@ describe("POST /tip/registration", () => {
             })
 
             it("returns pending invites", async () => {
-                const {now, pendingInvites, org, admin} = fixture()
+                const {now, pendingInvites, org, admin, waiter} = fixture()
 
                 expect(pendingInvites).toEqual({
                     invites: [{
+                        id: waiter.username,
+                        user: {
+                            id: waiter.username,
+                            email: waiter.username,
+                            first_name: "Waiter",
+                            "last_name": "User",
+                            profile_pic: undefined
+                        },
                         invited_at: expect.closeTo(now, -3),
                         accepted_at: undefined,
                         rejected_at: undefined,
                         invited_by: {
                             email: admin.username,
-                            username: admin.username,
+                            id: admin.username,
                             first_name: "Business",
                             last_name: "User",
+                            profile_pic: undefined,
                         },
                         org: {
                             id: org.pk,
@@ -261,7 +270,13 @@ const transactions = makeTestHandler(handler, function () {
     return {
         method: "GET",
         routeKey: "GET /tip/transactions",
-        authorizer: {lambda: cognito.newSession(waiterLogin.username)}
+        authorizer: {
+            lambda: cognito.newSession(waiterLogin.username, {
+                profile: {
+                    "cognito:groups": ["recipient"]
+                }
+            })
+        }
     }
 });
 

@@ -16,7 +16,7 @@ const data = new aws.dynamodb.Table('data', {
         name: "inverse",
         hashKey: "sk",
         rangeKey: "pk",
-        projectionType: "KEYS_ONLY"
+        projectionType: "ALL"
     }],
     tags,
     deletionProtectionEnabled: true
@@ -76,7 +76,9 @@ const users = new aws.dynamodb.Table('users', {
     deletionProtectionEnabled: true
 }, {retainOnDelete: true});
 
-export const DynamoDbCRUDActions = ["dynamodb:GetItem",
+export const DynamoDbCRUDActions = [
+    "dynamodb:GetItem",
+    "dynamodb:BatchGetItem",
     "dynamodb:DeleteItem",
     "dynamodb:PutItem",
     "dynamodb:Scan",

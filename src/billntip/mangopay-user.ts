@@ -113,7 +113,6 @@ export class MangopayAPI {
         const doc = await api.KycDocuments.get(rid).catch(function (e) {
             throw mangopayError(e, "fetchKYCDocument", {rid})
         })
-
         return toKycProcess(doc)
     }
 }

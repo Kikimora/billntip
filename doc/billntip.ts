@@ -16,6 +16,13 @@ Invites user to join the organisation. Caller must be the organisation admin. Wh
 * If user does exist but not confirmed then re-send invitation email.
 * If user exists and confirmed then send an email with a link opening prompt screen asking if user would like to join the organisation. 
             `
+        },
+        'DELETE /bill/{orgId}/locations/{id}': {
+            description: `
+Move location into the archive. Archived locations can be accessed using \`GET\` requests either by specifying location 
+id or by adding \`archived\` to the query string. Location is moved back from archive when it is updated using 
+\`PUT /bill/{orgId}/locations/{id}\`.
+            `
         }
     }
 }

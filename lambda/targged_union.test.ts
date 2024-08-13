@@ -1,4 +1,4 @@
-import {specializeUnionError, TaggedUnion} from "./tagged_union";
+import {taggedUnionError, TaggedUnion} from "./tagged_union";
 import {Kind, Type} from "@sinclair/typebox";
 import {Value} from "@sinclair/typebox/value";
 
@@ -21,7 +21,7 @@ describe("prettifyUnionValidationError", () => {
 
     it("works", () => {
 
-        const e = specializeUnionError({
+        const e = taggedUnionError({
             "type": 62,
             "schema": {
                 "anyOf": [{
@@ -125,7 +125,7 @@ describe("prettifyUnionValidationError", () => {
 
     it("skips normal errors", () => {
         const error = new Error()
-        expect(specializeUnionError(error)).toBe(error)
+        expect(taggedUnionError(error)).toBe(error)
     })
 
     it("validates faulty value against union member", () => {
@@ -133,7 +133,7 @@ describe("prettifyUnionValidationError", () => {
         try {
             Value.Decode(BankAccountDetails, {"type": "IBAN", "iban": 1})
         } catch (e: any) {
-            error = specializeUnionError(e.error)
+            error = taggedUnionError(e.error)
         }
         expect(error).toEqual({
             "message": "Expected string",
@@ -152,7 +152,7 @@ describe("prettifyUnionValidationError", () => {
         try {
             Value.Decode(BankAccountDetails, {"type": "Invalid discriminator value", "iban": "some iban"})
         } catch (e: any) {
-            error = specializeUnionError(e.error)
+            error = taggedUnionError(e.error)
         }
         expect(error).toEqual({
             "message": "Expected union value",

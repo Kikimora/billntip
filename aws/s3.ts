@@ -5,12 +5,16 @@ import {newPolicy} from "@aws/util";
 import makeOpenAPISpec from "../doc/main";
 import fs from "fs";
 import {usEast1Certificate} from "./certificate"
-import {configFolder, domain, tags} from "./config"
+import {configFolder, domain, tags, stack} from "./config"
+
+const tmpPrefix = "tmp"
+const publicPrefix = "public"
+const originalsPrefix = "uploads"
 
 const s3Bucket = new aws.s3.Bucket("bucket", {
     lifecycleRules: [{
         enabled: true,
-        prefix: 'uploads/',
+        prefix: `${tmpPrefix}/`,
         expiration: {
             days: 1,
             expiredObjectDeleteMarker: true
@@ -28,9 +32,9 @@ const accessBlock = new aws.s3.BucketPublicAccessBlock("bucket-access-block", {
     ignorePublicAcls: false
 })
 const spec = loadAndBundleSpec(makeOpenAPISpec())
-new aws.s3.BucketObject("openapi-spec", {
+const specObject = new aws.s3.BucketObject("openapi-spec", {
     bucket: s3Bucket,
-    key: `public/static/openapi.json`,
+    key: `${publicPrefix}/static/openapi.json`,
     source: new pulumi.asset.StringAsset(spec.then(JSON.stringify)),
     contentType: "application/json",
     cacheControl: 's-maxage=300'
@@ -42,9 +46,9 @@ async function makeOpenAPIHtml() {
     return new pulumi.asset.StringAsset(html.replace('{{URL}}', `/openapi.json`))
 }
 
-new aws.s3.BucketObject("openapi-html", {
+const docObject = new aws.s3.BucketObject("openapi-html", {
     bucket: s3Bucket,
-    key: "public/static/openapi.html",
+    key: `${publicPrefix}/static/openapi.html`,
     source: makeOpenAPIHtml(),
     contentType: "text/html",
     cacheControl: 's-maxage=300'
@@ -89,7 +93,7 @@ const cf = new aws.cloudfront.Distribution("cdn", {
         domainName: s3Bucket.bucketRegionalDomainName,
         originId: s3Bucket.arn,
         originAccessControlId: originAccessControl.id,
-        originPath: "/public"
+        originPath: `/${publicPrefix}`
     }],
     defaultRootObject: "index.html",
     defaultCacheBehavior: {
@@ -129,7 +133,7 @@ new aws.s3.BucketPolicy("bucket-public-access", {
                 "AWS:SourceArn": arn
             }
         })))
-        .on(pulumi.interpolate`arn:aws:s3:::${s3Bucket.id}/public/*`)
+        .on(pulumi.interpolate`arn:aws:s3:::${s3Bucket.id}/${publicPrefix}/*`)
         .buildPolicy()
 }, {dependsOn: [s3Bucket]})
 
@@ -148,8 +152,14 @@ const parameter = new aws.ssm.Parameter("s3-config", {
     type: "String",
     value: pulumi.jsonStringify({
         bucket: s3Bucket.id,
-        cdnRoot: domain
+        cdnRoot: domain,
+        cdn: pulumi.interpolate`static.${domain}`,
+        tmpPrefix: tmpPrefix,
+        publicPrefix: publicPrefix,
+        originalsPrefix: originalsPrefix
     }),
 })
 
 export const config = parameter.arn
+export const docId = docObject.id
+export const specId = specObject.id

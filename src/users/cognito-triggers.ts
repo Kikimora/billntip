@@ -10,23 +10,19 @@ import _ from "lodash";
 import {BaseTriggerEvent} from "aws-lambda/trigger/cognito-user-pool-trigger/_common";
 import {Type} from "@sinclair/typebox";
 import diagnostics, {errorWithContext, Tracer, TracingOptions} from "@app/diagnostics";
-import {moduleConfig, pipeline, TracedEvent} from "@app/lambda";
+import {bootstrap, pipeline, TracedEvent} from "@app/lambda";
 import {TemplateRepo} from "../templates";
 import {UserAttribute} from "./attributes";
 import {generatePassword} from "@src/users/cognito";
 
 const cognito = new CognitoIdentityProvider()
 const tracer = new Tracer("cognito")
-const config = moduleConfig()
+const config = bootstrap()
     .parameters({
         s3: Type.Object({bucket: Type.String()}),
         'cognito-triggers': Type.Object({}, {relaxed: true, default: {triggers: {request: true}}}),
     })
-    .build()
-
-// noinspection JSUnusedGlobalSymbols
-export async function __init() {
-    return config.parameters.then(function ({s3, 'cognito-triggers': diag}) {
+    .buildModule(function ({s3, 'cognito-triggers': diag}) {
         const templates = new TemplateRepo({
             bucket: s3.bucket,
             cache: process.env.ENV === 'prod'
@@ -34,6 +30,10 @@ export async function __init() {
         diagnostics(diag as TracingOptions)
         return {templates}
     })
+
+// noinspection JSUnusedGlobalSymbols
+export async function __init() {
+    return config.exports
 }
 
 function eventTriggerSource(event: BaseTriggerEvent<string>) {
@@ -159,7 +159,7 @@ export const trigger = async function (event: BaseTriggerEvent<any> & TracedEven
             password
         }
         const messageTemplate = await templates.fetchTemplate(context.type + "-email.html")
-        response.emailMessage = messageTemplate.body(context)
+        response.emailMessage = messageTemplate(context)
 
         switch (event.triggerSource) {
             case 'CustomMessage_AdminCreateUser':

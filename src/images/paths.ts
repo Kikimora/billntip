@@ -2,7 +2,8 @@ import {RouteMap} from "@app/lambda";
 import {Type} from "@sinclair/typebox";
 
 const UploadType = Type.Union([
-    Type.Literal("profile_pic")
+    Type.Literal("profile_pic"),
+    Type.Literal("location_pic"),
 ])
 
 export const CreateEmptyImageResponse = Type.Object({
@@ -22,7 +23,25 @@ export const Upload = Type.Object({
         height: Type.Number(),
     })),
 });
+export const Upload2 = Type.Object({
+    url: Type.String(),
+    key: Type.String(),
+    content_type: Type.String(),
+    image: Type.Optional(Type.Object({
+        width: Type.Number(),
+        height: Type.Number(),
+    })),
+});
+
 export default {
+    'POST /images': {
+        operationId: "POST /images",
+        body: Type.Object({
+            key: Type.String({description: "Upload key"})
+        }),
+        success: Upload2
+    },
+
     'GET /uploads': {
         operationId: "ListUploads",
         query: {
