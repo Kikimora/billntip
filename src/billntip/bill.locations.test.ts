@@ -260,11 +260,11 @@ describe("PATCH /bill/{orgId}/locations/{id}", () => {
             path: {orgId: location.org_id, id: location.id},
             body: {addUser: "37e17866-a0d9-4f4c-bde6-d5d1310f3f7a"}
         })
-        expect(response).toEqual(expect.objectContaining({
+        expect(response).toMatchObject({
             id: location.id,
             org_id: location.org_id,
             user_id: "37e17866-a0d9-4f4c-bde6-d5d1310f3f7a"
-        }))
+        })
     })
 
     it("removes users from locations", async () => {
@@ -314,7 +314,7 @@ describe("PATCH /bill/{orgId}/locations/{id}", () => {
             body
         })
         expect(response.statusCode).toBe("400")
-        expect(JSON.parse(response.body)).toEqual(expect.objectContaining(responseBody))
+        expect(JSON.parse(response.body)).toMatchObject(responseBody)
     })
 
     validatesOrgId(function (path) {

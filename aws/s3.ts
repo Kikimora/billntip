@@ -5,7 +5,7 @@ import {newPolicy} from "@aws/util";
 import makeOpenAPISpec from "../doc/main";
 import fs from "fs";
 import {usEast1Certificate} from "./certificate"
-import {configFolder, domain, tags, stack} from "./config"
+import {configFolder, domain, tags} from "./config"
 
 const tmpPrefix = "tmp"
 const publicPrefix = "public"

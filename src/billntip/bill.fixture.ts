@@ -68,11 +68,13 @@ export const locations = {
     },
 
     async cleanupUserLocations() {
-        const {store} = init()
-        for (const result of locations.patch.mock.results) {
-            if (result.type !== 'return') continue
-            const userLocation = await result.value
-            await store.removeUserFromLocation(userLocation.id, userLocation.user_id)
+        const {store, org} = init()
+        for (const {value} of locations.patch.mock.results) {
+            if (value === undefined) continue
+            const userLocation = await value
+            //Skip HTTP errors (they all have statusCode and body properties while responses are plain objects.
+            if ('statusCode' in userLocation) continue
+            await store.modifyUserLocation(org.pk, userLocation.id, userLocation.user_id, 'delete')
         }
         locations.patch.mockClear()
     }

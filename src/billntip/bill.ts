@@ -2,7 +2,7 @@ import _ from "lodash";
 import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
 import {Context} from "aws-lambda";
 import {SES} from "@aws-sdk/client-ses";
-import {DynamoDB} from "@aws-sdk/client-dynamodb";
+import {DynamoDB, TransactionCanceledException} from "@aws-sdk/client-dynamodb";
 import {Static, Type} from "@sinclair/typebox";
 import {
     accessDeniedError,
@@ -16,7 +16,7 @@ import {
     registerDefaultFormats,
     TracedEvent
 } from '@app/lambda'
-import diagnostics, {errorWithContext, TracingOptions} from "@app/diagnostics";
+import diagnostics, {errorWithContext, TraceAttributes, TracingOptions} from "@app/diagnostics";
 import {SessionContext, SessionContextSchema} from "@src/authorizer/types";
 import {TemplateRepo} from "@src/templates";
 import UserRepo, {UserAttribute} from "@src/users/user";
@@ -24,7 +24,6 @@ import {generatePassword} from "@src/users/cognito";
 import {keyToToken, tokenToKey, toLocation, toMembership} from "./util";
 import Routes from "./bill-paths";
 import Store, {InviteRequest, MembershipItem, Org} from "./store";
-import {MemberRole} from "@src/billntip/schemas";
 
 registerDefaultFormats()
 const cognito = new CognitoIdentityProvider()
@@ -104,9 +103,18 @@ export const handler = pipeline()
 
         switch (req.routeKey) {
             case 'GET /bill/{orgId}/members': {
-                const {query: {startKey}, path: {orgId}} = req.parse()
+                const {query: {startKey, locationId}, path: {orgId}} = req.parse()
                 const org = await assertOrgAdmin(req.principal, orgId)
-                const {members, lastKey} = await store.orgMembers(orgId, tokenToKey(startKey))
+                let members: MembershipItem[]
+                let lastKey: string | undefined
+                if (locationId !== undefined) {
+                    const memberIds = await store.locationMembers(orgId, locationId)
+                    members = await store.batchGetMembers(memberIds)
+                } else {
+                    const orgMembers = await store.orgMembers(orgId, tokenToKey(startKey))
+                    members = orgMembers.members
+                    lastKey = keyToToken(orgMembers.lastKey)
+                }
                 const [users, invitees] = await Promise.all([
                     await userRepo.batchFetch(_(members).map('pk').uniq().valueOf()).then(x => _.keyBy(x, 'pk')),
                     await userRepo.batchFetch(_(members).map('invited_by').compact().uniq().valueOf()).then(x => _.keyBy(x, 'pk'))
@@ -116,7 +124,7 @@ export const handler = pipeline()
                         const inviter = member.invited_by !== undefined ? invitees[member.invited_by] : undefined
                         return toMembership(member, org, users[member.pk], inviter)
                     }),
-                    lastKey: keyToToken(lastKey)
+                    lastKey
                 } satisfies Static<typeof req.route.success>
             }
             case 'POST /bill/{orgId}/members': {
@@ -146,24 +154,6 @@ export const handler = pipeline()
                         .withContext('inviteUser', {inviteeEmail})
                 }
 
-                async function createMember(invite: InviteRequest) {
-                    try {
-                        return await store.inviteToOrg(invite)
-                    } catch (e: any) {
-                        switch (e.name) {
-                            case 'ConditionalCheckFailedException': {
-                                throw badRequestError('Member already exists').withContext('createInvite', {
-                                    invite
-                                })
-                            }
-                            default:
-                                throw errorWithContext(e, 'createInvite', {
-                                    invite
-                                })
-                        }
-                    }
-                }
-
                 const invite = {
                     role: 'member',
                     invited_by: invitedBy.username,
@@ -189,17 +179,7 @@ export const handler = pipeline()
                 const {path: {orgId, id}} = req.parse()
                 const org = await assertOrgAdmin(req.principal, orgId)
 
-                async function fetchMembership(id: string, orgId: string) {
-                    try {
-                        return await store.fetchMembership(id, orgId)
-                    } catch (e: any) {
-                        throw internalError("Unexpected error fetching membership information").withContext("GET /bill/{orgId}/members/{id}", {
-                            orgId, id, cause: e
-                        })
-                    }
-                }
-
-                const member = await fetchMembership(id, orgId)
+                const member = await fetchMembership(orgId, id)
                 if (member === undefined) throw notFoundError()
 
                 return await memberWithRelatedUsers(member, org, id) satisfies Static<typeof req.route.success>;
@@ -207,40 +187,14 @@ export const handler = pipeline()
             case 'DELETE /bill/{orgId}/members/{id}': {
                 const {path: {orgId, id}} = req.parse()
                 const org = await assertOrgAdmin(req.principal, orgId)
-
-                async function removeMembership(id: string, orgId: string) {
-                    try {
-                        return await store.removeMembership(id, orgId)
-                    } catch (e) {
-                        throw internalError("Unexpected error deleting membership record").withContext("DELETE /bill/{orgId}/members/{id}", {
-                            orgId, id
-                        })
-                    }
-                }
-
-                const member = await removeMembership(id, orgId)
+                const member = await removeMembership(orgId, id)
                 if (member === undefined) throw notFoundError()
                 return await memberWithRelatedUsers(member, org, id) satisfies Static<typeof req.route.success>;
             }
             case "PUT /bill/{orgId}/members/{id}": {
                 const {path: {orgId, id}, body} = req.parse()
                 const org = await assertOrgAdmin(req.principal, orgId)
-
-                async function updateMembership(id: string, orgId: string, body: { role: MemberRole }) {
-                    try {
-                        return await store.updateMembership(id, orgId, body)
-                    } catch (e: any) {
-                        if (e.name === 'ConditionalCheckFailedException') {
-                            throw notFoundError()
-                        }
-                        throw internalError("Unexpected error").withContext("PUT /bill/{orgId}/members/{id}", {
-                            orgId,
-                            id
-                        })
-                    }
-                }
-
-                const member = await updateMembership(id, orgId, body)
+                const member = await updateMembership(orgId, id, body)
                 return await memberWithRelatedUsers(member, org, id) satisfies Static<typeof req.route.success>;
             }
 
@@ -260,7 +214,7 @@ export const handler = pipeline()
             case "GET /bill/{orgId}/locations/{id}": {
                 const {path: {orgId, id}} = req.parse()
                 await assertOrgAdmin(req.principal, orgId)
-                const location = await store.fetchLocation(orgId, id)
+                const location = await store.location(orgId, id)
                 if (location === undefined) throw notFoundError()
                 return toLocation(location) satisfies Static<typeof req.route.success>
             }
@@ -284,13 +238,13 @@ export const handler = pipeline()
                 if (body.addUser !== undefined && body.removeUser !== undefined)
                     throw badRequestError("Cannot add and remove user in the same query")
 
-                const loc = await store.fetchLocation(orgId, id)
+                const loc = await location(orgId, id)
                 if (loc === undefined) throw notFoundError()
 
                 if (body.addUser !== undefined) {
-                    const member = await store.fetchMembership(body.addUser, orgId)
+                    const member = await fetchMembership(orgId, body.addUser)
                     if (member === undefined) throw badRequestError("User is not a member of the organisation")
-                    const location = await store.assignUserToLocation(orgId, id, body.addUser)
+                    const location = await modifyUserLocation(orgId, id, body.addUser, 'add')
                     if (location === undefined) throw notFoundError()
                     return {
                         id: location.sk,
@@ -298,8 +252,9 @@ export const handler = pipeline()
                         user_id: location.pk
                     } satisfies Static<typeof req.route.success>
                 }
+
                 if (body.removeUser !== undefined) {
-                    const location = await store.removeUserFromLocation(id, body.removeUser)
+                    const location = await modifyUserLocation(orgId, id, body.removeUser, 'delete')
                     if (location === undefined) throw notFoundError()
                     return {
                         id: location.sk,
@@ -307,6 +262,7 @@ export const handler = pipeline()
                         user_id: location.pk
                     } satisfies Static<typeof req.route.success>
                 }
+
                 throw badRequestError("Request cannot be empty")
             }
             case "DELETE /bill/{orgId}/locations/{id}": {
@@ -346,6 +302,73 @@ export const handler = pipeline()
                 return org
             } else {
                 throw accessDeniedError().withContext('assertOrgAdmin', {groups, orgId})
+            }
+        }
+
+        function error(tag: string, ctx: TraceAttributes) {
+            return internalError("Unexpected error").withContext(tag, ctx)
+        }
+
+        async function fetchMembership(orgId: string, uid: string) {
+            try {
+                return await store.fetchMembership(uid, orgId)
+            } catch (e: any) {
+                throw error("fetchMembership", {orgId, uid, cause: e})
+            }
+        }
+
+        async function location(orgId: string, id: string) {
+            try {
+                return await store.location(orgId, id)
+            } catch (e: any) {
+                throw error("location", {orgId, id, cause: e})
+            }
+        }
+
+        async function modifyUserLocation(orgId: string, locationId: string, uid: string, action: "add" | "delete") {
+            try {
+                return await store.modifyUserLocation(orgId, locationId, uid, action)
+            } catch (e: any) {
+                if (e.name === 'TransactionCanceledException') {
+                    const message = "Organisation member does not exists, already has too many locations or location cannot accept more members";
+                    throw badRequestError(message).withContext("modifyUserLocation", {
+                        orgId, locationId, uid, action, cause: e
+                    })
+                }
+                throw error("modifyUserLocation", {orgId, locationId, uid, action, cause: e})
+            }
+        }
+
+        async function createMember(invite: InviteRequest) {
+            try {
+                return await store.inviteToOrg(invite)
+            } catch (e: any) {
+                switch (e.name) {
+                    case 'ConditionalCheckFailedException': {
+                        throw badRequestError('Member already exists').withContext('createInvite', {invite})
+                    }
+                    default:
+                        throw error('createInvite', {invite, cause: e})
+                }
+            }
+        }
+
+        async function removeMembership(orgId: string, uid: string) {
+            try {
+                return await store.removeMembership(uid, orgId)
+            } catch (e: any) {
+                throw error('removeMembership', {orgId, uid, cause: e})
+            }
+        }
+
+        async function updateMembership(orgId: string, uid: string, body: { role: "admin" | "member" }) {
+            try {
+                return await store.updateMembership(uid, orgId, body)
+            } catch (e: any) {
+                if (e.name === 'ConditionalCheckFailedException') {
+                    throw notFoundError()
+                }
+                throw error('updateMembership', {orgId, uid, body, cause: e})
             }
         }
 

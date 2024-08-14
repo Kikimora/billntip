@@ -30,7 +30,8 @@ export default {
         security: authenticatedEndpoint,
         path: OrgId,
         query: {
-            startKey: Type.Optional(Type.String())
+            startKey: Type.Optional(Type.String()),
+            locationId: Type.Optional(Type.String()),
         },
         success: Type.Object({
             lastKey: Type.Optional(Type.String()),

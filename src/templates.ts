@@ -46,7 +46,7 @@ export class TemplateRepo {
         }
 
         async function fetchTemplate(bucket: string, prefix: string) {
-            const {Body: body, Metadata: metadata} = await s3.getObject({
+            const {Body: body} = await s3.getObject({
                 Bucket: bucket,
                 Key: _([prefix, name]).compact().join('/')
             })

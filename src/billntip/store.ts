@@ -1,7 +1,7 @@
-import * as ddb from "@app/dynamodb";
 import {AttributeValue, DynamoDB} from "@aws-sdk/client-dynamodb";
 import {unmarshall} from "@aws-sdk/util-dynamodb";
 import _ from "lodash";
+import * as ddb from "@app/dynamodb";
 import {Schema, TableAttributes, TableSchema} from "@app/dynamodb";
 import {uuid} from "short-uuid";
 import {internalError} from "@app/lambda";
@@ -10,7 +10,7 @@ import {MemberRole} from "@src/billntip/schemas";
 
 // pk               sk              attributes
 // Users
-// U#<username>     M               mangopayUid, walletId
+// U#<username>     M               mangopayUid, walletId, locations[]
 // U#<username>     O#<name>        role, invited_by, invited_at, accepted_at, rejected_at
 // U#<name>         L#<loc id>      org_id, created_at
 
@@ -19,36 +19,37 @@ import {MemberRole} from "@src/billntip/schemas";
 // O#<name>         U#<username>    same as U:<username>, O#<name>
 
 //Locations
-// O#<name>         L#<loc id>      title, created_at, updated_at, image_url, deleted
+// O#<name>         L#<loc id>      title, created_at, updated_at, image_url, deleted, users[]
 
 
 const UserKey = {
     pk: ddb.Type.String as `U#${string}`,
     sk: ddb.Type.String as `M`,
 } as const
-
+type UserKey = typeof UserKey
 const UserAttributes = {
     mangopayUid: ddb.Type.String,
     walletId: ddb.Type.String
 } as const
-
-export type UsersTable = TableSchema<typeof UserKey, typeof UserAttributes>;
+type UserAttributes = typeof UserAttributes
+export type UsersTable = TableSchema<UserKey, UserAttributes>;
 export type UserItem = TableAttributes<UsersTable> & { pk: string }
 
-const MemberhipKey = {
+const MembershipKey = {
     pk: ddb.Type.String as `U#${string}`,
     sk: ddb.Type.String as `O#${string}`,
 } as const
-
+type MembershipKey = typeof MembershipKey
 const MembershipAttributes = {
     role: ddb.Type.String,
     invited_by: ddb.Type.String,
     invited_at: ddb.Type.Number,
     accepted_at: ddb.Type.Number,
     rejected_at: ddb.Type.Number,
+    locations: ddb.Type.StringSet
 } as const
-
-type MembershipsTable = TableSchema<typeof MemberhipKey, typeof MembershipAttributes>;
+type MembershipAttributes = typeof MembershipAttributes
+type MembershipsTable = TableSchema<MembershipKey, MembershipAttributes>;
 export type MembershipItem = TableAttributes<MembershipsTable> & { pk: string, sk: string }
 
 const OrgKey = {
@@ -82,22 +83,11 @@ const OrgLocationAttributes = {
     created_at: ddb.Type.Number,
     updated_at: ddb.Type.Number,
     image_url: ddb.Type.String,
-    deleted: ddb.Type.Boolean
+    deleted: ddb.Type.Boolean,
+    users: ddb.Type.StringSet
 } as const
 type OrgLocationsTable = TableSchema<typeof OrgLocationKey, typeof OrgLocationAttributes>;
 export type OrgLocation = TableAttributes<OrgLocationsTable> & { pk: string, sk: string }
-
-const UserLocationKey = {
-    pk: ddb.Type.String as `U#${string}`,
-    sk: ddb.Type.String as `L#${string}`
-} as const
-type UserLocationKey = Schema<typeof UserLocationKey>
-const UserLocationAttributes = {
-    org_id: ddb.Type.String,
-    created_at: ddb.Type.Number,
-} as const
-type UserLocationTable = TableSchema<typeof UserLocationKey, typeof UserLocationAttributes>
-export type UserLocation = TableAttributes<UserLocationTable> & { pk: string, sk: string }
 
 export interface StoreOptions {
     db?: DynamoDB
@@ -141,20 +131,18 @@ export default class Store {
     members: UsersTable;
     _org: OrgsTable;
     _orgLocations: OrgLocationsTable;
-    _userLocations: UserLocationTable;
 
     constructor(options: StoreOptions) {
         this.db = options.db ?? new DynamoDB()
         this.table = options.table
-        this.membership = ddb.table(this.table, MemberhipKey, MembershipAttributes)
+        this.membership = ddb.table(this.table, MembershipKey, MembershipAttributes)
         this.members = ddb.table(this.table, UserKey, UserAttributes)
         this._org = ddb.table(this.table, OrgKey, OrgAttributes)
         this._orgLocations = ddb.table(this.table, OrgLocationKey, OrgLocationAttributes)
-        this._userLocations = ddb.table(this.table, UserLocationKey, UserLocationAttributes)
     }
 
     async memberships(username: string, filters: MembershipFilters = {
-        accepted: false,
+        accepted: true,
         rejected: false
     }): Promise<MembershipItem[]> {
         const attributes = {
@@ -441,7 +429,7 @@ export default class Store {
         }
     }
 
-    async fetchLocation(orgId: string, locId: string): Promise<OrgLocation | undefined> {
+    async location(orgId: string, locId: string): Promise<OrgLocation | undefined> {
         const {Item: item} = await this.db.getItem(ddb.get(this._orgLocations, {
             key: {pk: `O#${orgId}`, sk: `L#${locId}`},
         }))
@@ -453,47 +441,42 @@ export default class Store {
         }
     }
 
-    async userLocations(username: string) {
-        let locations = []
-        const pk = `U#${username}`;
-        const ddbQuery = ddb.query(this._userLocations, {
-            values: {pk, prefix: 'L#'},
-            keyCondition: ({key, ref}) =>
-                `${key.pk} = ${ref('pk')} AND begins_with(${key.sk}, ${ref('prefix')})`
-        });
-        do {
-            const {Items: items, LastEvaluatedKey: lastKey} = await this.db.query(ddbQuery)
-            ddbQuery.ExclusiveStartKey = lastKey
-            if (items !== undefined) {
-                locations.push(...items.map(function (loc) {
-                        return {
-                            ...unmarshall(loc),
-                            pk: username,
-                            sk: loc['sk'].S?.substring(2)
-                        } as UserLocation
-                    })
-                )
-            }
-        } while (ddbQuery.ExclusiveStartKey !== undefined)
-        return locations
-    }
-
-    async batchGetLocations(locations: UserLocation[]) {
-
-        if (locations.length === 0) return []
-
+    async batchGetMembers(ids: string[]) {
         const batchGet = ddb.batchGet()
-            .add(this._orgLocations, {
-                keys: locations.map(({sk, org_id}) => ({pk: `O#${org_id}`, sk: `L#${sk}`} as OrgLocationKey))
+            .add(this.members, {
+                keys: ids.map(id => ({pk: `U#${id}`, sk: `M`} satisfies UserKey))
             })
         const {Responses: responses} = await this.db.batchGetItem(batchGet.input())
-        const orgLocations = responses?.[this._orgLocations.name]
-        if (orgLocations === undefined) return []
-        return orgLocations.map(({pk, sk, ...loc}) => ({
-            ...unmarshall(loc) as OrgLocation,
-            pk: pk.S!.substring(2),
-            sk: sk.S!.substring(2)
-        }))
+        const members = responses?.[this.members.name]
+        if (members === undefined) return []
+        return members.map(x => makeMembershipItem(x))
+    }
+
+    async locationMembers(orgId: string, locId: string): Promise<string[]> {
+        const locPk = `L#${locId}`;
+        const membersQuery = ddb.get(this._orgLocations, {
+            key: {pk: `O#${orgId}`, sk: `L#${locPk}`},
+
+        })
+        const {Item: location} = await this.db.getItem(membersQuery)
+        return location?.users.SS ?? []
+    }
+
+    async batchGetLocations(locationIds: { orgId: string, locationId: string }[]) {
+        if (locationIds.length === 0) return []
+        const batchGet = ddb.batchGet().add(this._orgLocations, {
+            keys: locationIds.map(function ({orgId, locationId}) {
+                return {pk: `O#${orgId}`, sk: `L#${locationId}`} satisfies OrgLocationKey
+            })
+        })
+        const {Responses: responses} = await this.db.batchGetItem(batchGet.input())
+        const locations = responses?.[this._orgLocations.name]
+        if (locations === undefined) return []
+        return locations.map(x => unmarshall(x)).map(x => ({
+            ...x,
+            pk: x.pk.substring(2 /*O#.length*/),
+            sk: x.sk.substring(2 /*L#.length*/)
+        } as OrgLocation))
     }
 
     async locations(orgId: string, query: { startKey: OrgLocationKey, archived: boolean, title?: string }): Promise<{
@@ -619,41 +602,50 @@ export default class Store {
         }
     }
 
-    async assignUserToLocation(orgId: string, locId: string, userId: string): Promise<UserLocation> {
-        const key = {pk: `U#${userId}`, sk: `L#${locId}`} as const;
-        const item = {
-            created_at: Date.now() / 1000,
-            orgId
-        } as const;
-        await this.db.updateItem(ddb.update(this._userLocations, {
-            key,
-            values: item,
-            expression: ({attr, ref}) => ({
-                set: {
-                    [attr.org_id]: ref('orgId'),
-                    [attr.created_at]: `if_not_exists(${attr.created_at}, ${ref('created_at')})`,
-                }
+    async modifyUserLocation(orgId: string, locationId: string, userId: string, action: 'add' | 'delete') {
+        const locationKey = {pk: `O#${orgId}`, sk: `L#${locationId}`} as const;
+        const userKey = {pk: `U#${userId}`, sk: `O#${orgId}`} as const;
+        const tx = ddb.transactWrite()
+            .add(this._orgLocations, {
+                action: "update",
+                key: locationKey,
+                values: {userId: new Set([userId]), action, limit: 100},
+                expression: ({attr, ref}) => ({
+                    [action]: `${attr.users} ${ref('userId')}`
+                }),
+                //Limit location users to 100 to guarantee we can batch get them in one query.
+                condition: ({attr, key, ref}) =>
+                    `(
+                           ${ref('action')} = ${ref.val('delete')} 
+                        or contains(${attr.users}, ${ref('userId')}) 
+                        or size(${attr.users}) < ${ref('limit')}
+                        or attribute_not_exists(${attr.users})
+                     ) 
+                    and attribute_exists(${key.pk}) 
+                    and attribute_exists(${key.sk})
+                    `
             })
-        }))
+            .add(this.membership, {
+                action: "update",
+                key: userKey,
+                values: {locationId: new Set([locationId]), action, limit: 10},
+                expression: ({attr, ref}) => ({
+                    [action]: `${attr.locations} ${ref('locationId')}`
+                }),
+                condition: ({attr, key, ref}) =>
+                    `(
+                           ${ref.val(action)} = ${ref.val('delete')} 
+                        or contains(${attr.locations},  ${ref('locationId')}) 
+                        or size(${attr.locations}) < ${ref('limit')}
+                        or attribute_not_exists(${attr.locations})
+                    ) 
+                    and attribute_exists(${key.pk}) 
+                    and attribute_exists(${key.sk})`
+            })
+        await this.db.transactWriteItems(tx.input())
         return {
             pk: userId,
-            sk: locId,
-            ...item
+            sk: locationId
         }
     }
-
-    async removeUserFromLocation(locId: string, userId: string): Promise<UserLocation | undefined> {
-        const key = {pk: `U#${userId}`, sk: `L#${locId}`} as const;
-        const {Attributes: item} = await this.db.deleteItem(ddb.deleteItem(this._userLocations, {
-            key,
-            return: "ALL_OLD"
-        }))
-        if (item === undefined) return undefined
-        return {
-            ...unmarshall(item),
-            pk: userId,
-            sk: locId
-        }
-    }
-
 }

@@ -1,5 +1,4 @@
 import _ from "lodash";
-import {OptionalKeysOf, RequiredKeysOf} from "type-fest";
 
 /**
  * Describes structure of a DynamoDB record. That is, any entries except [`x:{$array:...}`]{@link DynamoDbArraySchema} or [`x:{$map:...}`]{@link DynamoDbMapSchema}.

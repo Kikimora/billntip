@@ -1,9 +1,9 @@
+import _ from "lodash";
 import {badRequestError, internalError, notFoundError} from "@app/lambda";
 import {UserAttribute} from "@src/users/attributes";
 import InviteesRepo from "@src/users/user";
 import Store, * as store from "./store";
 import MangopayUser, {MangopayAPI, MangopayOptions} from "./mangopay-user";
-import _ from "lodash";
 import {toMembership} from "@src/billntip/util";
 
 export interface StoreOptions {
@@ -155,7 +155,7 @@ export class User {
     }
 
     async acceptInvite(orgId: string) {
-        const {username, store, invitees} = this
+        const {username, store} = this
 
         async function acceptInvite(username: string, id: string) {
             try {
@@ -202,7 +202,9 @@ export class User {
         const {username, store, invitees} = this
         const [org, users] = await Promise.all([
             store.fetchOrg(membership.sk),
-            invitees.batchFetch(_.compact([username, membership.invited_by])).then(function (x) { return _.keyBy(x, 'pk') }),
+            invitees.batchFetch(_.compact([username, membership.invited_by])).then(function (x) {
+                return _.keyBy(x, 'pk')
+            }),
         ])
         return toMembership(membership, org ?? {pk: membership.sk, title: ""},
             users[username],
@@ -303,8 +305,16 @@ export class User {
     async fetchLocations() {
         const {username, store} = this
         try {
-            const userLocations = await store.userLocations(username)
-            return await store.batchGetLocations(userLocations)
+            const memberships = await store.memberships(username)
+            const locations = memberships.reduce(function (batch, {sk, locations}) {
+                if (locations !== undefined) {
+                    locations.forEach(function (locationId) {
+                        batch.add({orgId: sk, locationId: locationId})
+                    })
+                }
+                return batch
+            }, new Set<{ orgId: string, locationId: string }>())
+            return await store.batchGetLocations(Array.from(locations))
         } catch (e: any) {
             throw internalError("Cannot fetch user locations").withContext("fetchLocations", {username, cause: e})
         }

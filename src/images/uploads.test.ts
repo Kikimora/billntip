@@ -61,7 +61,7 @@ const fixture = prepare('Each', {
     },
     async after({s3, uploadFile, s3Copy, s3Put}) {
 
-        await clearMock(s3Put, async function (this: S3Object, x: any, self: S3Object) {
+        await clearMock(s3Put, async function (this: S3Object) {
             await this.delete().catch(console.log)
         })
         await clearMock(s3Copy, async function (this: S3Object, {value}) {

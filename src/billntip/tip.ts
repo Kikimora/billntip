@@ -1,4 +1,3 @@
-import _ from "lodash";
 import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {Static, Type} from "@sinclair/typebox";
@@ -6,7 +5,6 @@ import {accessDeniedError, bootstrap, pipeline, registerDefaultFormats} from '@a
 import {SessionContextSchema} from "@src/authorizer/types";
 import UserRepo from "@src/users/user";
 import Paths from "./tip-paths";
-import {toMembership} from "./util";
 import TipUserRepo from "./user";
 import diagnostics from "@app/diagnostics";
 import {MangopayOptions} from "./mangopay-user";
@@ -76,9 +74,7 @@ export const handler = pipeline()
                         Username: user.username,
                         UserPoolId: userPoolId
                     }),
-                    tipUser.memberships({
-                        rejected: false
-                    })
+                    tipUser.memberships({accepted: false, rejected: false})
                 ])
                 return {invites} satisfies Static<typeof req.route.success>
             }
