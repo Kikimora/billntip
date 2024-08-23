@@ -1,6 +1,4 @@
-import {createLockStore, LockHandle, LockStore, makeLockStore} from "@app/dynamodb/lock";
-import {getCommand} from "@app/dynamodb";
-import {unmarshall} from "@aws-sdk/util-dynamodb";
+import {createLockStore, LockHandle, LockStore, makeLockStore} from ".";
 import {retry} from "@app/util";
 
 beforeAll(async () => {
@@ -82,12 +80,10 @@ describe("DynamoDb locks", () => {
 
     async function loadLockItem(handle: LockHandle, version?: number) {
         return await retry(async function () {
-            const {Item: dynamoItem} = await store.dynamoDb.send(getCommand(store.table, {
-                key: {pk: handle.lock.pk}
-            }))
-            const item = unmarshall(dynamoItem!);
-            if (version !== undefined && item.version < version) throw new Error("Old item")
-            return item
+            const {Item: item} = await store.table.get({pk: handle.lock.pk})
+            if (item === undefined) throw Error("Unexpected error: item is undefined")
+            if (version !== undefined && item.version! < version) throw new Error("Old item")
+            return item as Required<typeof item>
         }, {maxIterations: 10, delay: 20})
     }
 

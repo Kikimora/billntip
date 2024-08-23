@@ -23,6 +23,57 @@ Move location into the archive. Archived locations can be accessed using \`GET\`
 id or by adding \`archived\` to the query string. Location is moved back from archive when it is updated using 
 \`PUT /bill/{orgId}/locations/{id}\`.
             `
+        },
+        'POST /pay/card': {
+            description: `
+Starts card tokenization process. Entire tokenization process is described in pseudocode below.
+\`\`\'js
+async function createEmptyCard() {
+    return await post("/tip/card", {
+        body:{
+            currency: "EUR",
+            type: "CB_VISA_MASTERCARD"
+        }
+    })
+}
+
+async function tokenizeCard(tokenization: any) {
+    const response = await post(tokenization.url, {
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: new URLSearchParams({
+            'accessKeyRef': tokenization.access_key,
+            'data': tokenization.data,
+            'cardNumber': '4970107111111119',
+            'cardExpirationDate': '1235',
+            'cardCvx': '123',
+        })
+    })
+    const bodyText = await response.text()
+    if (response.status >= 300) {
+        throw bodyText
+    }
+    return bodyText
+}
+
+async function updateCard(cardId: string, token: string) {
+    return await put({
+        id: registrationId,
+        token,
+        cardholder_name: "Andrei Verbin"
+    })
+}
+
+try {
+    const emptyCard = await createEmptyCard()    
+    const token = await tokenizeCard(emptyCard.tokenization)    
+    const updatedRegistration = await updateCard(emptyCard.id, token)    
+} catch (e) {
+    console.log("Error", JSON.stringify(e))
+}         
+\`\`\`           
+`
         }
     }
 }

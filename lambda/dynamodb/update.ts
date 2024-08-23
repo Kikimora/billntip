@@ -14,7 +14,7 @@ import _ from "lodash";
 /**
  * DynamoDb {@link ddb.UpdateItemCommandInput} for a given {@link TableSchema}
  */
-interface UpdateCommand<T extends TableSchema, V> {
+export interface UpdateCommand<T extends TableSchema, V> {
     /**
      * See {@link ddb.UpdateItemInput.Key}
      */

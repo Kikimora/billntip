@@ -1,9 +1,8 @@
-import * as ddb from "@app/dynamodb";
+import {ddb} from "@app/lambda";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {UserAttribute} from "@src/users/attributes";
 import {unmarshall} from "@aws-sdk/util-dynamodb";
 import * as Schemas from "@src/users/schemas";
-import {TableAttributes} from "@app/dynamodb";
 
 
 // pk               sk          attributes
@@ -40,8 +39,7 @@ const AliasAttributes = {
      */
     verified: ddb.Type.Boolean
 } as const;
-
-type AliasTable = ddb.TableSchema<typeof AliasKey, typeof AliasAttributes>
+type AliasTable = ddb.TableSchema<{pk: `AL#${string}`, sk:`AL`}, typeof AliasAttributes>
 type Alias = ddb.TableItem<AliasTable>
 
 /**
@@ -108,7 +106,7 @@ const UserAttributes = {
 };
 
 type UsersTable = ddb.TableSchema<typeof UserKey, typeof UserAttributes>
-export type UserItem = TableAttributes<UsersTable> & { pk: string }
+export type UserItem = ddb.TableAttributes<UsersTable> & { pk: string }
 
 function isUser(record: Record<string, any>): record is UserItem {
     return record.sk === 'U'
@@ -121,7 +119,7 @@ const AttributeIndexKey = {
 const AttributeIndexValue = {
     pk: ddb.Type.String as `U#${string}`
 }
-type AttributesIndex = ddb.TableSchema<typeof AttributeIndexKey, typeof AttributeIndexValue>
+type AttributesIndex = ddb.TableSchema<{name:string, value:string}, typeof AttributeIndexValue>
 type AttributeIndexValue = ddb.TableItem<AttributesTable>
 
 /**
@@ -165,7 +163,7 @@ export interface UserStoreOptions {
     locks: string
 }
 
-export default class UserStore {
+class UserStore {
     private readonly aliasAttributes: Set<string>;
     readonly maxAttributes: number;
     readonly db: DynamoDB
@@ -180,10 +178,10 @@ export default class UserStore {
         this.aliasAttributes.add('username')
         this.maxAttributes = options.maxAttributes ?? Schemas.MaxAttributes
 
-        this.aliases = ddb.table(options.table, AliasKey, AliasAttributes)
-        this.attributes = ddb.table(options.table, AttributeKey, Attributes)
-        this.attributesIndex = ddb.table(options.table, AttributeIndexKey, AttributeIndexValue)
-        this.users = ddb.table(options.table, UserKey, UserAttributes)
+        this.aliases = ddb.tableOld(options.table, AliasKey, AliasAttributes)
+        this.attributes = ddb.tableOld(options.table, AttributeKey, Attributes)
+        this.attributesIndex = ddb.tableOld(options.table, AttributeIndexKey, AttributeIndexValue)
+        this.users = ddb.tableOld(options.table, UserKey, UserAttributes)
     }
 
     async lookupAlias(usernameOrAlias: string) {
@@ -454,3 +452,5 @@ function updateAttribute(username: string, attribute: UserAttributeItem): ddb.Tr
         item: attribute
     }
 }
+//https://youtrack.jetbrains.com/issue/WEB-68793
+export default UserStore

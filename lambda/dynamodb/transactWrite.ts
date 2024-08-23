@@ -133,6 +133,21 @@ interface TransactCheckItem<T extends TableSchema, V> {
     returnOnConditionFailure?: ddb.ReturnValuesOnConditionCheckFailure
 }
 
+export interface TransactWriteOptions {
+    /**
+     * See {@link ddb.TransactWriteItemsInput.ReturnConsumedCapacity}
+     */
+    returnConsumedCapacity?: ddb.ReturnConsumedCapacity
+    /**
+     * See {@link ddb.TransactWriteItemsInput.ReturnItemCollectionMetrics}
+     */
+    returnItemCollectionMetrics?: ddb.ReturnItemCollectionMetrics,
+    /**
+     * See {@link ddb.TransactWriteItemsInput.ClientRequestToken}
+     */
+    clientRequestToken?: string
+}
+
 /**
  * Builds batch write operation.
  */
@@ -161,6 +176,12 @@ export interface TransactWriteBuilder {
      * @param token - idempotency token
      */
     clientRequestToken(token: string): TransactWriteBuilder
+
+    /**
+     * Set all options with a single call.
+     * @param options - transaction options
+     */
+    options(options: TransactWriteOptions): TransactWriteBuilder
 
     /**
      * Build {@link ddb.TransactWriteItemsCommandInput}
@@ -301,6 +322,12 @@ export function transactWrite(): TransactWriteBuilder {
         },
         clientRequestToken(token: string) {
             clientRequestToken = token
+            return this
+        },
+        options(options: TransactWriteOptions) {
+            returnConsumedCapacity = options.returnConsumedCapacity
+            returnItemCollectionMetrics = options.returnItemCollectionMetrics
+            clientRequestToken = options.clientRequestToken
             return this
         },
         input() {

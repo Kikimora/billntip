@@ -55,6 +55,8 @@ export const handler = pipeline()
 
         switch (req.routeKey) {
             case 'POST /tip/registration':
+            case 'POST /pay/card':
+            case 'PUT /pay/card':
                 break
             default:
                 assertRecipient()
@@ -139,6 +141,8 @@ export const handler = pipeline()
                 ])
                 return {
                     transactions,
+                    page: query.page ?? 1,
+                    per_page: query.per_page ?? 10,
                     wallet: wallet.balance
                 } satisfies Static<typeof req.route.success>
             }
@@ -213,8 +217,8 @@ export const handler = pipeline()
                 const locations = await user.fetchLocations()
                 return locations.map(function (loc) {
                     return {
-                        id: loc.pk,
-                        org_id: loc.sk,
+                        id: loc.sk,
+                        org_id: loc.pk,
                         image_url: loc.image_url,
                         archived: loc.deleted ?? false,
                         created_at: loc.created_at ?? 0,
@@ -222,6 +226,20 @@ export const handler = pipeline()
                         updated_at: loc.updated_at ?? 0,
                     }
                 }) satisfies Static<typeof req.route.success>
+            }
+            case "POST /pay/card": {
+                const {body} = req.parse()
+                const user = await tipUsers.fetch(username)
+                const mangopayUser = user.mangopayUser
+                const card = await mangopayUser.createEmptyCard(body)
+                return card satisfies Static<typeof req.route.success>
+            }
+            case "PUT /pay/card": {
+                const {body} = req.parse()
+                const user = await tipUsers.fetch(username)
+                const mangopayUser = user.mangopayUser
+                const card = await mangopayUser.updateCard(body)
+                return card satisfies Static<typeof req.route.success>
             }
         }
 

@@ -1,7 +1,7 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
 import {marshall} from "@aws-sdk/util-dynamodb";
 import {TableType, TableSchema, TableAttributes, TableKey,} from "./schema";
-import {MarshalOptions} from "@app/dynamodb/util";
+import {MarshalOptions} from "./util";
 
 /**
  * DynamoDb {@link ddb.WriteRequest} for a given {@link TableSchema}
@@ -40,6 +40,17 @@ interface BatchDeleteItem<T extends TableSchema> {
     key: TableKey<T>
 }
 
+export interface BatchWriteOptions {
+    /**
+     * See {@link ddb.BatchWriteItemInput.ReturnConsumedCapacity}
+     */
+    returnConsumedCapacity?: ddb.ReturnConsumedCapacity
+    /**
+     * See {@link ddb.BatchWriteItemInput.ReturnItemCollectionMetrics}
+     */
+    returnItemCollectionMetrics?: ddb.ReturnItemCollectionMetrics
+}
+
 /**
  * Builds batch write operation.
  */
@@ -62,6 +73,12 @@ export interface BatchWriteBuilder {
      * @param metrics - item collection metric setting
      */
     returnItemCollectionMetrics(metrics: ddb.ReturnItemCollectionMetrics): BatchWriteBuilder
+
+    /**
+     * Set operation options with a single call.
+     * @param options - operation options
+     */
+    options(options: BatchWriteOptions): BatchWriteBuilder
 
     /**
      * Build {@link ddb.BatchWriteItemCommandInput}
@@ -111,6 +128,11 @@ export function batchWrite(): BatchWriteBuilder {
         },
         returnItemCollectionMetrics(metrics: ddb.ReturnItemCollectionMetrics) {
             returnItemCollectionMetrics = metrics
+            return this
+        },
+        options(options: BatchWriteOptions) {
+            returnConsumedCapacity = options.returnConsumedCapacity
+            returnItemCollectionMetrics = options.returnItemCollectionMetrics
             return this
         },
         input() {

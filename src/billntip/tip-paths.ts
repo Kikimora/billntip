@@ -49,6 +49,8 @@ export default {
         query: schemas.TransactionsQuery,
         success: Type.Object({
             transactions: T.Array(schemas.Transaction),
+            page: Type.Required(schemas.PaymentGatewayQuery.page),
+            per_page: Type.Required(schemas.PaymentGatewayQuery.page),
             wallet: schemas.AmountSchema
         }),
         responses: [401, 403],
@@ -138,7 +140,23 @@ export default {
         success: Type.Array(schemas.Location),
         responses: [401, 403],
         tags: ['Tip']
+    },
+    "POST /pay/card": {
+        operationId: "POST /tip/card",
+        body: schemas.NewEmptyCardRequest,
+        success: schemas.EmptyCard,
+        responses: [401, 403],
+        tags: ['Tip']
+    },
+    "PUT /pay/card": {
+        operationId: "PUT /tip/card",
+        body: Type.Object({
+            id: Type.String({maxLength: 40}),
+            cardholder_name: Type.String({maxLength: 120}),
+            token: Type.String(),
+        }),
+        success: schemas.Card,
+        responses: [400, 401, 403],
+        tags: ['Tip']
     }
 } as const satisfies RouteMap
-
-

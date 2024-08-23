@@ -7,7 +7,7 @@ import _ from "lodash";
 /**
  * DynamoDb {@link ddb.PutItemCommandInput} for a given {@link TableSchema}
  */
-interface PutCommand<T extends TableSchema, V> {
+export interface PutCommand<T extends TableSchema, V> {
     /**
      * A key portion of the {@link ddb.PutItemInput.Item}
      */

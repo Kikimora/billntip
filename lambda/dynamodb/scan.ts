@@ -7,7 +7,7 @@ import _ from "lodash";
 /**
  * DynamoDb {@link ddb.ScanCommandInput} for a given {@link TableSchema}
  */
-interface ScanCommand<T extends TableSchema, V> {
+export interface ScanCommand<T extends TableSchema, V> {
     /**
      * See {@link ddb.ScanInput.IndexName}
      */
@@ -71,7 +71,7 @@ export function scan<T extends TableType<T>, V>(tbl: T, command: ScanCommand<T, 
 
     return {
         TableName: tbl.name,
-        IndexName: command.indexName,
+        IndexName: tbl.index ?? command.indexName,
         ProjectionExpression: projection?.({key, attr}).join(', '),
         FilterExpression: filter?.({attr, ref: ref}),
         Select: command.select,

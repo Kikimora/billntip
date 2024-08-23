@@ -1,9 +1,5 @@
-
-import {
-    Type,
-    attributeGenerator,
-    Schema,
-} from "@app/dynamodb/schema";
+import {Type, SchemaToType,} from "./schema";
+import {attributeGenerator} from "./command-context";
 
 const SampleSchema = {
     numberArray: Type.Array(Type.Number),
@@ -31,7 +27,7 @@ const SampleSchema = {
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 // noinspection JSUnusedLocalSymbols
-const sampleObj: Schema<typeof SampleSchema> = {
+const sampleObj: SchemaToType<typeof SampleSchema> = {
     numberArray: [1],
     arrayOfArrays: [[1]],
     arrayOfArraysOfObjects: [[{s: "", n: 1}]],

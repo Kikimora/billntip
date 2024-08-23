@@ -491,3 +491,39 @@ export const LocationsQuery = {
 }
 const TLocationsQuery = Type.Object(LocationsQuery)
 export type LocationsQuery = Static<typeof TLocationsQuery>
+
+export const CardType = Type.Union([
+    Type.Literal("CB_VISA_MASTERCARD"),
+    Type.Literal("DINERS"),
+    Type.Literal("MASTERPASS"),
+    Type.Literal("MAESTRO"),
+    Type.Literal("P24"),
+    Type.Literal("IDEAL"),
+    Type.Literal("BCMC"),
+    Type.Literal("PAYLIB")
+], {$id: "CardType"})
+export type CardType = Static<typeof CardType>
+export const Card = Type.Object({
+    id: Type.String({maxLength: 40}),
+    type: CardType,
+    currency: Type.String({maxLength: 3}),
+}, {$id: "Card"})
+export type Card = Static<typeof Card>
+export const EmptyCard = Type.Intersect([
+    Card,
+    Type.Object({
+        tokenization: Type.Object({
+            url: Type.String(),
+            access_key: Type.String(),
+            data: Type.String()
+        })
+    })], {$id: "EmptyCard"})
+export type EmptyCard = Static<typeof EmptyCard>
+export const NewEmptyCardRequest = Type.Omit(Card, ['id'])
+export type NewEmptyCardRequest = Static<typeof NewEmptyCardRequest>
+export const UpdateCardRequest = Type.Object({
+    id: Type.String({maxLength: 40}),
+    cardholder_name: Type.Optional(Type.String({maxLength: 120})),
+    token: Type.String(),
+}, {$id: "UpdateCardRequest"})
+export type UpdateCardRequest = Static<typeof UpdateCardRequest>

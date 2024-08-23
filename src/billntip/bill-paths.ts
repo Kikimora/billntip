@@ -3,8 +3,10 @@ import {Type} from "@sinclair/typebox";
 import {SecurityRequirementObject} from "openapi3-ts/src/model/openapi31";
 import * as schemas from "./schemas";
 import {MemberRole} from "./schemas";
+import {Upload} from "@src/object-store";
 
 export const authenticatedEndpoint: SecurityRequirementObject[] = [{"Cookie": ["admin", "business"]}]
+export const adminEndpoint: SecurityRequirementObject[] = [{"Cookie": ["admin"]}]
 
 const OrgId = {
     orgId: Type.String({
@@ -25,16 +27,31 @@ const LocationId = {
     })
 } as const;
 export default {
+
+    "GET /admin/organizations": {
+        operationId: "GET /admin/organizations",
+        security: adminEndpoint,
+        query: {
+            from: Type.Optional(Type.String())
+        },
+        success: Type.Object({
+            next: Type.Optional(Type.String()),
+            organizations: Type.Array(schemas.PublicOrgInfo)
+        }),
+        responses: [401, 403],
+        tags: ['Admin']
+    },
+
     "GET /bill/{orgId}/members": {
         operationId: "GET /bill/{orgId}/members",
         security: authenticatedEndpoint,
         path: OrgId,
         query: {
-            startKey: Type.Optional(Type.String()),
-            locationId: Type.Optional(Type.String()),
+            from: Type.Optional(Type.String()),
+            location: Type.Optional(Type.String()),
         },
         success: Type.Object({
-            lastKey: Type.Optional(Type.String()),
+            next: Type.Optional(Type.String()),
             members: Type.Array(schemas.MemberSchema)
         }),
         responses: [401, 403, 404],
@@ -55,7 +72,10 @@ export default {
         operationId: "GET /bill/{orgId}/members/{id}",
         security: authenticatedEndpoint,
         path: {...OrgId, ...UserId},
-        success: schemas.MemberSchema,
+        success: Type.Object({
+            member: schemas.MemberSchema,
+            locations: Type.Array(schemas.Location)
+        }),
         responses: [401, 403, 404],
         tags: ['Bill']
     },
@@ -94,7 +114,10 @@ export default {
         operationId: "GET /bill/{orgId}/locations/{id}",
         security: authenticatedEndpoint,
         path: {...OrgId, ...LocationId},
-        success: schemas.Location,
+        success: Type.Object({
+            location: schemas.Location,
+            members: Type.Array(schemas.MemberSchema)
+        }),
         responses: [401, 403, 404],
         tags: ['Bill']
     },
@@ -105,6 +128,14 @@ export default {
         body: schemas.LocationRequest,
         success: schemas.Location,
         responses: [400, 401, 403],
+        tags: ['Bill']
+    },
+    "POST /bill/{orgId}/locations/image": {
+        operationId: "POST /bill/{orgId}/locations/image",
+        security: authenticatedEndpoint,
+        path: {...OrgId, ...LocationId},
+        success: Upload,
+        responses: [401, 403],
         tags: ['Bill']
     },
     "PUT /bill/{orgId}/locations/{id}": {

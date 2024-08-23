@@ -148,9 +148,9 @@ export class User {
                 const org = orgs[member.sk]
                 return toMembership(member, org, users[member.pk], inviter)
             })
-        } catch (e) {
+        } catch (e:any) {
             throw internalError("Unexpected error loading user memberships.")
-                .withContext("memberships", {filters, username})
+                .withContext("memberships", {filters, username, cause: e})
         }
     }
 

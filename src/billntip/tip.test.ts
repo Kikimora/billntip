@@ -338,6 +338,8 @@ describe("GET /tip/transactions", () => {
                 result_message: "Transaction successful",
                 status: "SUCCEEDED"
             }],
+            page: 1,
+            per_page: 10,
             wallet: {
                 amount: 10, currency: "EUR"
             }

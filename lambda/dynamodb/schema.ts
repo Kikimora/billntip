@@ -1,4 +1,5 @@
 import _ from "lodash";
+import {Simplify} from "type-fest";
 
 /**
  * Describes structure of a DynamoDB record. That is, any entries except [`x:{$array:...}`]{@link DynamoDbArraySchema} or [`x:{$map:...}`]{@link DynamoDbMapSchema}.
@@ -20,6 +21,8 @@ export type DynamoDbSchema = { [key: string]: DynamoDbType } & { $array?: never 
  * Describes basic DynamoDb type.
  */
 export type DynamoDbBasicType = "S" | "N" | "B" | "SS" | "NS" | "BS" | "NULL" | "BOOL"
+export type DynamoDbKeyType = "S" | "N" | "B"
+export type DynamoDbKeySchema = { [key: string]: DynamoDbKeyType };
 /**
  * Describes DynamoDb array schema.
  */
@@ -54,7 +57,7 @@ export type DynamoDbType = DynamoDbSchema
  *     }
  * }
  */
-export type Schema<T> = (
+export type SchemaToType<T> = (
       T extends "S" ? string
     : T extends "N" ? number
     : T extends "B" ? Uint8Array
@@ -63,12 +66,61 @@ export type Schema<T> = (
     : T extends "BS" ? Set<Uint8Array>
     : T extends "NULL" ? undefined
     : T extends "BOOL" ? boolean
-    : T extends { $array: any } ? Array<Schema<T['$array']>>
-    : T extends { $map: any } ? {[key:string]: Schema<T['$map']>}
-    : T extends DynamoDbSchema ? { -readonly [k in keyof T] -?: Schema<T[k]>; }
+    : T extends { $array: any } ? Array<SchemaToType<T['$array']>>
+    : T extends { $map: any } ? {[key:string]: SchemaToType<T['$map']>}
+    : T extends DynamoDbSchema ? { -readonly [k in keyof T] -?: SchemaToType<T[k]>; }
     : T extends string ? T
     : never
 )
+
+export namespace schema {
+    export interface TableSchema {
+        /**
+         * DynamoDB table name
+         */
+        readonly name: string
+        /**
+         * Key attributes (partition and sort key).
+         */
+        readonly key: DynamoDbKeySchema
+        /**
+         * All other than key attributes of the table.
+         */
+        readonly attributes: DynamoDbSchema
+        /**
+         * DynamoDB index name
+         */
+        readonly index?: string
+    }
+    export type KeySchema<T extends TableSchema> = T['key']
+    export type AttributesSchema<T extends TableSchema> = T['attributes']
+
+    export type KeyType<T extends TableSchema> = KeySchemaToType<T['key']>
+    export type AttributesType<T extends TableSchema> = Partial<SchemaToType<T['attributes']>>
+    export type ItemType<T extends TableSchema> = AttributesType<T> & KeyType<T>
+
+    type KeySchemaToType<T> = Simplify<{
+        [key in keyof T & string]: T[key] extends "S" ? string : T[key] extends "N" ? number : T[key] extends "B" ? Uint8Array : never
+    }>
+//<!-- @formatter:off -->
+    type SchemaToType<T> = (
+          T extends "S" ? string
+        : T extends "N" ? number
+        : T extends "B" ? Uint8Array
+        : T extends "SS" ? Set<string>
+        : T extends "NS" ? Set<number>
+        : T extends "BS" ? Set<Uint8Array>
+        : T extends "NULL" ? undefined
+        : T extends "BOOL" ? boolean
+        : T extends { $array: any } ? Array<SchemaToType<T['$array']>>
+        : T extends { $map: any } ? {[key:string]: SchemaToType<T['$map']>}
+        : T extends DynamoDbSchema ? { -readonly [k in keyof T] -?: SchemaToType<T[k]>; }
+        : T extends string ? T
+        : never
+    )
+//<!-- @formatter:on -->
+}
+
 
 /**
  * Anything with `toString()` method.
@@ -98,6 +150,8 @@ export type AttributeGenerator<T> = (
     : never
     )
     & ((val: string) => string)
+
+
 //<!-- @formatter:on -->
 
 /**
@@ -316,19 +370,19 @@ function collection<T extends DynamoDbMapSchema | DynamoDbArraySchema>(col: T): 
     return value
 }
 
-function isBasicDynamoType(x: DynamoDbType): x is DynamoDbBasicType {
+export function isBasicDynamoType(x: DynamoDbType): x is DynamoDbBasicType {
     return typeof x === "string"
 }
 
-function isDynamoArray(x: DynamoDbType): x is DynamoDbArraySchema {
+export function isDynamoArray(x: DynamoDbType): x is DynamoDbArraySchema {
     return typeof x === "object" && '$array' in x
 }
 
-function isDynamoMap(x: DynamoDbType): x is DynamoDbMapSchema {
+export function isDynamoMap(x: DynamoDbType): x is DynamoDbMapSchema {
     return typeof x === "object" && '$map' in x
 }
 
-function isDynamoSchema(x: DynamoDbType): x is DynamoDbSchema {
+export function isDynamoSchema(x: DynamoDbType): x is DynamoDbSchema {
     return typeof x === "object" && !('$array' in x) && !('$map' in x)
 }
 
@@ -366,9 +420,8 @@ interface BuilderHolder {
     readonly [__builder]?: Builder
 }
 
-
 /**
- * Defines DynamoDB table or part of the table structure. Constructed using the {@link table} function.
+ * Defines DynamoDB table or part of the table structure. Constructed using the {@link tableOld} function.
  *
  * @example
  * //note use of `as const`, this is critical for the type inference to work.
@@ -386,9 +439,13 @@ export interface TableSchema<Key = any, Attributes = any> {
      */
     readonly key: DynamoDbSchemaType<Key>
     /**
-     * Other than key attributes of the table.
+     * All other than key attributes of the table.
      */
     readonly attributes: DynamoDbSchemaType<Attributes>
+    /**
+     * DynamoDB index name
+     */
+    readonly index?: string
 }
 
 /**
@@ -406,7 +463,7 @@ export interface TableSchema<Key = any, Attributes = any> {
  * }
  * function x<T extends DynamoDbSchema, K extends DynamoDbSchema>(table: Table<T, K>) {}
  */
-type DynamoDbSchemaType<T> = T extends DynamoDbSchema ? T : never
+export type DynamoDbSchemaType<T> = T extends DynamoDbSchema ? T : never
 /**
  * Require T to be {@link TableSchema}, otherwise yield `never`.
  *
@@ -436,15 +493,15 @@ type AttributesSchema<T> = T extends TableSchema ? T['attributes'] : never
 /**
  * Combined key and attributes schema of the {@link TableSchema}
  */
-export type TableItem<T extends TableSchema> = Schema<T['key']> & Partial<Schema<T['attributes']>>
+export type TableItem<T extends TableSchema> = SchemaToType<T['key']> & Partial<SchemaToType<T['attributes']>>
 /**
  * Type of the table attributes.
  */
-export type TableAttributes<T extends TableSchema> = Partial<Schema<T['attributes']>>
+export type TableAttributes<T extends TableSchema> = Partial<SchemaToType<T['attributes']>>
 /**
  * Type of the table key attributes.
  */
-export type TableKey<T extends TableSchema> = Schema<T['key']>
+export type TableKey<T extends TableSchema> = SchemaToType<T['key']>
 
 /**
  * Make DynamoDB table definition.
@@ -468,16 +525,15 @@ export type TableKey<T extends TableSchema> = Schema<T['key']>
  *     score: D.Number
  * })
  */
-export function table<Key, Attributes>(name: string,
-                                       key: DynamoDbSchemaType<Key>,
-                                       attributes: DynamoDbSchemaType<Attributes>): TableSchema<Key, Attributes> {
+export function tableOld<Key, Attributes>(name: string,
+                                                                 key: DynamoDbSchemaType<Key>,
+                                                                 attributes: DynamoDbSchemaType<Attributes>): TableSchema<Key, Attributes> {
     return {
         name,
         key,
         attributes
     } as const
 }
-
 
 /**
  * Function generating a DynamoDB expression such as {@link ddb.UpdateItemCommandInput.UpdateExpression} or {@link ddb.PutItemCommand.ConditionExpression}.
@@ -513,7 +569,7 @@ type UpdateExpression = {
     delete?: string | string[],
 }
 
-export function updateExpression(exp: string | string[] | UpdateExpression) {
+export function updateExpression(exp?: string | string[] | UpdateExpression): string | undefined {
     if (exp === undefined) return undefined
     if (typeof exp === "string") return exp
     if (Array.isArray(exp))

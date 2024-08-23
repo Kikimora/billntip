@@ -3,7 +3,7 @@ import _ from "lodash";
 import {Static, Type} from "@sinclair/typebox";
 import {intervalToDuration} from "date-fns";
 import {Value} from "@sinclair/typebox/value";
-import {toCamelCase} from "@app/util";
+import {toPascalCase} from "@app/util";
 import {badRequestError, internalError, notFoundError, notImplementedError, map, Mapping} from "@app/lambda";
 import {TraceAttributes} from "@app/diagnostics";
 import {UserAttribute} from "@src/users/attributes";
@@ -118,13 +118,74 @@ export class MangopayAPI {
 }
 
 export default class MangopayUser {
-
-    private readonly api: mangopay
+    public readonly api: mangopay
 
     constructor(options: MangopayOptions,
-                private readonly username: string,
+                public readonly username: string,
                 private readonly member: RegisteredMemberItem) {
         this.api = new mangopay(options)
+    }
+
+    get uid() {
+        return this.member.mangopayUid
+    }
+
+    get walletId() {
+        return this.member.walletId
+    }
+
+    async createEmptyCard(request: schemas.NewEmptyCardRequest): Promise<schemas.EmptyCard> {
+        const {member, username, api} = this
+        const card = await api.CardRegistrations.create({
+            UserId: this.member.mangopayUid,
+            Currency: request.currency as any,
+            CardType: request.type,
+            Tag: this.username
+        }).catch(function (e) {
+            throw mangopayError(e, "createEmptyCard", {request, member, username})
+        })
+        if (card.Status !== 'CREATED') {
+            throw internalError("Unexpected error creating card").withContext("createEmptyCard", {
+                request,
+                member,
+                username,
+                card
+            })
+        }
+        return {
+            id: card.Id,
+            type: card.CardType,
+            currency: card.Currency,
+            tokenization: {
+                access_key: card.AccessKey,
+                data: card.RegistrationData,
+                url: card.CardRegistrationURL
+            }
+        }
+    }
+
+    async updateCard(request: schemas.UpdateCardRequest): Promise<schemas.Card> {
+        const {member, username, api} = this
+        const card = await api.CardRegistrations.update({
+            Id: request.id,
+            RegistrationData: request.token,
+            CardHolderName: request.cardholder_name
+        }).catch(function (e) {
+            throw mangopayError(e, "createEmptyCard", {request, member, username})
+        })
+        if (card.Status !== 'VALIDATED') {
+            throw internalError("Unexpected error creating card").withContext("updateCard", {
+                request,
+                member,
+                username,
+                card
+            })
+        }
+        return {
+            id: card.Id,
+            currency: card.Currency,
+            type: card.CardType
+        }
     }
 
     async fetchWallet() {
@@ -177,6 +238,7 @@ export default class MangopayUser {
     async transactions(query: schemas.TransactionsQuery) {
         const {member, api} = this
         const request = {parameters: toQuery(query),};
+        console.log(request)
         const response = await api.Wallets.getTransactions(member.walletId, request).catch(function (e) {
             throw mangopayError(e, "transactions", {member, request})
         })
@@ -497,15 +559,20 @@ function toQuery(query: Record<string, string | number | boolean>): (mangopay.ba
                 case 'per_page':
                     return 'Per_Page'
                 default:
-                    return toCamelCase(key)
+                    return toPascalCase(key)
             }
         })
         .mapValues(function (value, key) {
             switch (key) {
                 case 'Sort':
                     if (typeof value === 'string') {
-                        const [column, dir] = value.split(':')
-                        return `${toCamelCase(column)}:${dir}`
+                        let [column, dir] = value.split(':')
+                        switch (column) {
+                            case 'created_at':
+                                column = 'CreationDate';
+                                break;
+                        }
+                        return `${toPascalCase(column)}:${dir}`
                     }
                     return value
                 default:

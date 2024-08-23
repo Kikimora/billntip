@@ -67,11 +67,9 @@ function handler(event) {
     const response = event.response
     const host = request.headers['host'].value.split('.')    
     const prefix = host[0]
-    if (prefix === 'static') {
-        request.uri = \`/\${prefix}\${request.uri}\`
-    } else {
-        request.uri = \`/\${prefix}/index.html\`
-    } 
+    const isRoot = request.uri === "/"
+    request.uri = \`/\${prefix}\${request.uri}\`
+    if (isRoot) request.uri += "index.html"
     return request
 }
 `,
@@ -83,7 +81,7 @@ function handler(event) {
 const cf = new aws.cloudfront.Distribution("cdn", {
     enabled: true,
     aliases: [
-        `bill.${domain}`, `tip.${domain}`, `static.${domain}`
+        `bill.${domain}`, `tip.${domain}`, `static.${domain}`, `pay.${domain}`, `admin.${domain}`
     ],
     viewerCertificate: {
         acmCertificateArn: usEast1Certificate.arn,
@@ -112,6 +110,7 @@ const cf = new aws.cloudfront.Distribution("cdn", {
             eventType: "viewer-request",
             functionArn: rewriteFn.arn,
         }],
+        compress: true
     },
     restrictions: {
         geoRestriction: {

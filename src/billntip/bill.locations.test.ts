@@ -197,7 +197,10 @@ describe("GET /bill/{orgId}/locations/{id}", () => {
         const response = await locations.get({
             path: {orgId: location.org_id, id: location.id}
         })
-        expect(response).toEqual(location)
+        expect(response).toMatchObject({
+            location,
+            members: []
+        })
     })
 
     validatesOrgId(function (path) {

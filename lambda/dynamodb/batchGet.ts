@@ -21,7 +21,12 @@ export interface BatchGetItem<T extends TableSchema> {
      */
     consistentRead?: boolean,
 }
-
+export interface BatchGetOptions {
+    /**
+     * See {@link ddb.BatchGetItemCommandInput.ReturnConsumedCapacity}
+     */
+    returnConsumedCapacity: ddb.ReturnConsumedCapacity
+}
 /**
  * Builds batch get operation.
  */
@@ -38,6 +43,12 @@ export interface BatchGetBuilder {
      * @param capacity
      */
     returnConsumedCapacity(capacity: ddb.ReturnConsumedCapacity): BatchGetBuilder
+
+    /**
+     * Set operation options with a single call.
+     * @param options - operation options
+     */
+    options(options: BatchGetOptions): BatchGetBuilder
 
     /**
      * Build {@link ddb.BatchGetItemCommandInput}
@@ -96,6 +107,10 @@ export function batchGet(): BatchGetBuilder {
             returnConsumedCapacity = capacity
             return builder
         },
+        options(options: BatchGetOptions) {
+            returnConsumedCapacity = options.returnConsumedCapacity
+            return builder
+        },
         input() {
             return {
                 RequestItems: _.mapValues(items, (x) => {
@@ -107,7 +122,8 @@ export function batchGet(): BatchGetBuilder {
                     if (_.isEmpty(expressionAttributeNames)) expressionAttributeNames = undefined
                     return {
                         ...x,
-                        ProjectionExpression: projectionExpression
+                        ProjectionExpression: projectionExpression,
+                        ExpressionAttributeNames: expressionAttributeNames
                     }
                 }),
                 ReturnConsumedCapacity: returnConsumedCapacity

@@ -2,15 +2,15 @@ import _ from "lodash";
 import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
 import {Context} from "aws-lambda";
 import {SES} from "@aws-sdk/client-ses";
-import {DynamoDB, TransactionCanceledException} from "@aws-sdk/client-dynamodb";
+import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {Static, Type} from "@sinclair/typebox";
 import {
     accessDeniedError,
     badRequestError,
+    bootstrap,
     internalError,
     LambdaAuthorizedRequest,
     Middleware,
-    bootstrap,
     notFoundError,
     pipeline,
     registerDefaultFormats,
@@ -24,6 +24,7 @@ import {generatePassword} from "@src/users/cognito";
 import {keyToToken, tokenToKey, toLocation, toMembership} from "./util";
 import Routes from "./bill-paths";
 import Store, {InviteRequest, MembershipItem, Org} from "./store";
+import {uploadBuilder} from "@src/object-store";
 
 registerDefaultFormats()
 const cognito = new CognitoIdentityProvider()
@@ -41,7 +42,8 @@ const Module = bootstrap()
             userPoolId: Type.String(),
         }),
         s3: Type.Object({
-            bucket: Type.String()
+            bucket: Type.String(),
+            tmpPrefix: Type.String({default: "/tmp"})
         }),
         'bill-diagnostics': Type.Object({}, {relaxed: true, default: {triggers: {request: true}}})
     })
@@ -65,7 +67,8 @@ const Module = bootstrap()
             userPoolId: oidc.userPoolId,
             templates,
             userRepo,
-            store
+            store,
+            s3
         }
     })
 
@@ -99,32 +102,42 @@ export const handler = pipeline()
         throw accessDeniedError()
     })
     .done(async function (req) {
-        const {store, userRepo, userPoolId, templates} = await __init()
+        const {store, userRepo, userPoolId, templates, s3} = await __init()
 
         switch (req.routeKey) {
-            case 'GET /bill/{orgId}/members': {
-                const {query: {startKey, locationId}, path: {orgId}} = req.parse()
-                const org = await assertOrgAdmin(req.principal, orgId)
-                let members: MembershipItem[]
-                let lastKey: string | undefined
-                if (locationId !== undefined) {
-                    const memberIds = await store.locationMembers(orgId, locationId)
-                    members = await store.batchGetMembers(memberIds)
-                } else {
-                    const orgMembers = await store.orgMembers(orgId, tokenToKey(startKey))
-                    members = orgMembers.members
-                    lastKey = keyToToken(orgMembers.lastKey)
-                }
-                const [users, invitees] = await Promise.all([
-                    await userRepo.batchFetch(_(members).map('pk').uniq().valueOf()).then(x => _.keyBy(x, 'pk')),
-                    await userRepo.batchFetch(_(members).map('invited_by').compact().uniq().valueOf()).then(x => _.keyBy(x, 'pk'))
-                ])
+
+            case 'GET /admin/organizations': {
+                await assertAdmin(req.principal)
+                const {query: {from}} = req.parse()
+                const {organizations, lastKey} = await store.organizations(tokenToKey(from))
                 return {
-                    members: members.map(function (member) {
-                        const inviter = member.invited_by !== undefined ? invitees[member.invited_by] : undefined
-                        return toMembership(member, org, users[member.pk], inviter)
+                    organizations: organizations.map(function (org) {
+                        return {
+                            id: org.pk,
+                            title: org.title ?? ""
+                        }
                     }),
-                    lastKey
+                    next: keyToToken(lastKey)
+                } satisfies Static<typeof req.route.success>
+            }
+
+            case 'GET /bill/{orgId}/members': {
+                const {query: {from, location}, path: {orgId}} = req.parse()
+                const org = await assertOrgAdmin(req.principal, orgId)
+                let memberItems: MembershipItem[]
+                let next: string | undefined
+                if (location !== undefined) {
+                    const memberIds = await store.locationMembers(orgId, location)
+                    memberItems = await store.batchGetMembers(memberIds)
+                } else {
+                    const orgMembers = await store.orgMembers(orgId, tokenToKey(from))
+                    memberItems = orgMembers.members
+                    next = keyToToken(orgMembers.lastKey)
+                }
+                const members = await membersWithRelatedUsers(org, memberItems);
+                return {
+                    members,
+                    next
                 } satisfies Static<typeof req.route.success>
             }
             case 'POST /bill/{orgId}/members': {
@@ -178,11 +191,13 @@ export const handler = pipeline()
             case 'GET /bill/{orgId}/members/{id}': {
                 const {path: {orgId, id}} = req.parse()
                 const org = await assertOrgAdmin(req.principal, orgId)
-
                 const member = await fetchMembership(orgId, id)
                 if (member === undefined) throw notFoundError()
-
-                return await memberWithRelatedUsers(member, org, id) satisfies Static<typeof req.route.success>;
+                const locations = await batchGetLocations(orgId, member.locations)
+                return {
+                    member: await memberWithRelatedUsers(member, org, id),
+                    locations: locations.map(toLocation)
+                } satisfies Static<typeof req.route.success>;
             }
             case 'DELETE /bill/{orgId}/members/{id}': {
                 const {path: {orgId, id}} = req.parse()
@@ -213,10 +228,14 @@ export const handler = pipeline()
             }
             case "GET /bill/{orgId}/locations/{id}": {
                 const {path: {orgId, id}} = req.parse()
-                await assertOrgAdmin(req.principal, orgId)
+                const org = await assertOrgAdmin(req.principal, orgId)
                 const location = await store.location(orgId, id)
                 if (location === undefined) throw notFoundError()
-                return toLocation(location) satisfies Static<typeof req.route.success>
+                const members = await batchGetMembers(orgId, location.users)
+                return {
+                    location: toLocation(location),
+                    members: await membersWithRelatedUsers(org, members)
+                } satisfies Static<typeof req.route.success>
             }
             case "POST /bill/{orgId}/locations": {
                 const {path: {orgId}, body} = req.parse()
@@ -225,11 +244,32 @@ export const handler = pipeline()
                 if (location === undefined) throw notFoundError()
                 return toLocation(location) satisfies Static<typeof req.route.success>
             }
+            case "POST /bill/{orgId}/locations/image": {
+                const {path: {orgId}} = req.parse()
+                await assertOrgAdmin(req.principal, orgId)
+                //how to make sure people won't spam images?
+                //how to clear old images, when image url changes in a model?
+                //
+                const upload = uploadBuilder(`${orgId}/${req.principal.id}`, {bucket: s3.bucket, prefix: s3.tmpPrefix})
+                    .condition(["content-length-range", 1024, 5 * 1024 * 1024])
+                    .condition(["starts-with", "$Content-Type", "image/"])
+                    .properties({
+                        //'destination': `${orgId}/${}`,
+                        'transform': 'resize',
+                        'target-width': '100',
+                        'target-height': '100',
+                        'target-format': 'png'
+                    })
+                return await upload.build() satisfies Static<typeof req.route.success>
+            }
             case "PUT /bill/{orgId}/locations/{id}": {
                 const {path: {orgId, id}, body} = req.parse()
                 await assertOrgAdmin(req.principal, orgId)
                 const location = await store.updateLocation(orgId, body, id)
                 if (location === undefined) throw notFoundError()
+                //const {before, after} = update
+                // if (before.image_url !== after.image_url && before.image_url !== undefined) {
+                // }
                 return toLocation(location) satisfies Static<typeof req.route.success>
             }
             case "PATCH /bill/{orgId}/locations/{id}": {
@@ -285,6 +325,21 @@ export const handler = pipeline()
             }
         }
 
+        async function membersWithRelatedUsers(org: Org, memberItems: MembershipItem[]) {
+            try {
+                const [users, invitees] = await Promise.all([
+                    await userRepo.batchFetch(_(memberItems).map('pk').uniq().valueOf()).then(x => _.keyBy(x, 'pk')),
+                    await userRepo.batchFetch(_(memberItems).map('invited_by').compact().uniq().valueOf()).then(x => _.keyBy(x, 'pk'))
+                ])
+                return memberItems.map(function (member) {
+                    const inviter = member.invited_by !== undefined ? invitees[member.invited_by] : undefined
+                    return toMembership(member, org, users[member.pk], inviter)
+                });
+            } catch (e: any) {
+                throw error("membersWithRelatedUsers", {org, memberItems})
+            }
+        }
+
         async function assertOrgAdmin(sessions: SessionContext, orgId: string) {
             const {isBusiness, isAdmin, groups} = principalGroups(sessions)
             if (isAdmin) {
@@ -305,6 +360,14 @@ export const handler = pipeline()
             }
         }
 
+        async function assertAdmin(sessions: SessionContext) {
+            const {isAdmin} = principalGroups(sessions)
+            if (!isAdmin) {
+                throw accessDeniedError()
+            }
+        }
+
+
         function error(tag: string, ctx: TraceAttributes) {
             return internalError("Unexpected error").withContext(tag, ctx)
         }
@@ -317,11 +380,34 @@ export const handler = pipeline()
             }
         }
 
+        async function batchGetMembers(orgId: string, members?: Set<string>) {
+            if (members === undefined) return []
+            if (members.size === 0) return []
+            try {
+                return await store.batchGetMembers(Array.from(members))
+            } catch (e: any) {
+                throw error("batchGetMembers", {orgId, locations: members, cause: e})
+            }
+        }
+
+
         async function location(orgId: string, id: string) {
             try {
                 return await store.location(orgId, id)
             } catch (e: any) {
                 throw error("location", {orgId, id, cause: e})
+            }
+        }
+
+        async function batchGetLocations(orgId: string, locations?: Set<string>) {
+            if (locations === undefined) return []
+            if (locations.size === 0) return []
+            try {
+                return await store.batchGetLocations(Array.from(locations, function (locationId) {
+                    return {orgId, locationId}
+                }))
+            } catch (e: any) {
+                throw error("fetchLocations", {orgId, locations, cause: e})
             }
         }
 

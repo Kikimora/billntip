@@ -1,7 +1,7 @@
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import shortUUID from "short-uuid"
 import {jwtDecode} from "jwt-decode";
-import * as ddb from "@app/dynamodb";
+import {ddb} from "@app/lambda";
 import {SessionCookie, SessionCookieRepo} from "./cookie";
 import {OidcTokens} from "./oidc_tokens";
 import {OperationContext, SessionContext} from "./types";
@@ -40,7 +40,7 @@ export class SessionRepo {
     constructor(private readonly options: SessionOptions) {
         const {locksTable, sessionTable} = options
         this.locks = ddb.makeLockStore(locksTable, {dynamoDb})
-        this.Sessions = ddb.table(sessionTable, SessionKey, SessionAttributes)
+        this.Sessions = ddb.tableOld(sessionTable, SessionKey, SessionAttributes)
     }
 
     /**

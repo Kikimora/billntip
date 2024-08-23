@@ -1,11 +1,10 @@
 import {ConditionalCheckFailedException, CreateTableCommand, DynamoDB} from "@aws-sdk/client-dynamodb";
 import {unmarshall} from "@aws-sdk/util-dynamodb";
-import {TableSchema, table, Type} from "./schema";
-import {update,} from "./update";
 import {Just, repeat, retry} from "@app/util";
-import {deleteItem} from "./delete";
 import {Tracer, errorWithContext} from "@app/diagnostics";
-import {get} from "./get";
+import {internalError} from "@app/lambda";
+import {Type, schema} from "./schema";
+import dynamodb, {DDBTable} from "./commands";
 
 const tracer = new Tracer("dynamodb_locks")
 
@@ -17,12 +16,7 @@ export interface LockStore {
     /**
      * Lock table
      */
-    readonly table: TableSchema<typeof LockKey, typeof LockAttributes>
-
-    /**
-     * DynamoDB client
-     */
-    readonly dynamoDb: DynamoDB
+    readonly table: DDBTable<LocksTable>
 
     /**
      * Acquire a lock with a given id. If lock is taken then wait and retry given number of times.
@@ -133,16 +127,23 @@ type Lock = Readonly<{
 
 type TryLockResult = Just<Lock, "Success"> | Just<Lock, "Failure">
 
-export const LockKey = {
+const LockKey = {
     pk: Type.String
 } as const
 
-export const LockAttributes = {
+const LockAttributes = {
     version: Type.Number,
     owner: Type.String,
     lease_ms: Type.Number,
     ttl: Type.Number
 } as const
+
+const LocksTable = {
+    key: LockKey,
+    attributes: LockAttributes
+} as const
+
+type LocksTable = (typeof LocksTable) & { name: string }
 
 /**
  * Create DynamoDb table for lock storage.
@@ -175,13 +176,17 @@ class LockError extends Error {
 export function makeLockStore(tableName: string, storeOptions?: StoreOptions): LockStore {
 
     const dynamoDb = storeOptions?.dynamoDb ?? new DynamoDB()
+    const d = dynamodb({db: dynamoDb})
+    const LocksTable = d.table({
+        name: tableName,
+        key: LockKey,
+        attributes: LockAttributes
+    })
 
-    const Locks = table(tableName, LockKey, LockAttributes)
-    const locker = new Locker(dynamoDb, Locks)
+    const locker = new Locker(LocksTable)
 
     return {
-        table: Locks,
-        dynamoDb,
+        table: LocksTable,
 
         tryLock: function (id: string, owner: string, options?: TryLockOptions): Promise<LockHandle> {
             return this.lock(id, owner, {...options, retries: 1})
@@ -339,55 +344,60 @@ function lockExpiration(lock: Lock) {
  * Provides low level lock operations.
  */
 class Locker {
-    constructor(private readonly dynamoDb: DynamoDB,
-                private readonly table: TableSchema<typeof LockKey, typeof LockAttributes>) {
+    constructor(private readonly locksTable: DDBTable<LocksTable>) {
     }
 
     async tryLock(lock: Lock): Promise<TryLockResult> {
-        tryLock: try {
-            const expiresAt = lockExpiration(lock)
-            const lockItem = update(this.table, {
-                key: {pk: lock.pk},
+        const {locksTable} = this
+        const expiresAt = lockExpiration(lock)
+        let lockItem: schema.ItemType<LocksTable> | undefined
+        try {
+            const response = await locksTable.update({pk: lock.pk}, {
                 return: "ALL_NEW",
                 values: {...lock, expiresAt},
                 returnOnConditionFailure: "ALL_OLD",
-                expression: ({attr, ref}) => `SET
-                            ${attr.version} = ${ref('version')},
-                            ${attr.lease_ms} = ${ref('leaseDuration')},
-                            ${attr.ttl} = ${ref('expiresAt')},
-                            ${attr.owner} = ${ref('owner')}`,
-                condition: ({key, attr, ref}) => `
-                           attribute_not_exists(${key.pk}) OR ${attr.version} < ${ref('version')}`
-            });
-            const {Attributes: attributes} = await this.dynamoDb.updateItem(lockItem)
-            if (attributes === undefined) break tryLock;
-            return {type: "Success", value: fromDynamoDb(unmarshall(attributes))}
+                expression: ({attr, ref}) => ({
+                    set: {
+                        [attr.version]: ref('version'),
+                        [attr.lease_ms]: ref('leaseDuration'),
+                        [attr.ttl]: ref('expiresAt'),
+                        [attr.owner]: ref('owner'),
+                    }
+                }),
+                condition: ({key, attr, ref}) =>
+                    `attribute_not_exists(${key.pk}) OR ${attr.version} < ${ref('version')}`
+            })
+            lockItem = response.Attributes
         } catch (e) {
             if (!(e instanceof ConditionalCheckFailedException)) {
                 throw e
             }
             const attributes = e.Item
-            if (attributes === undefined) break tryLock;
-            const dynamoDbLock = fromDynamoDb(unmarshall(attributes));
-            return {type: "Failure", value: dynamoDbLock}
+            if (attributes !== undefined) {
+                const dynamoDbLock = fromDynamoDb(unmarshall(attributes));
+                return {type: "Failure", value: dynamoDbLock}
+            }
         }
-        throw new Error("Unexpected error while acquiring lock " + lock.pk)
+
+        if (lockItem === undefined) throw unexpectedError()
+        if (Object.values(lockItem).some(el => el === undefined)) throw unexpectedError()
+        return {type: "Success", value: fromDynamoDb(lockItem)}
+
+        function unexpectedError() {
+            return internalError("Unexpected error while acquiring lock").withContext("tryLock", {lock, lockItem})
+        }
     }
 
     async load(pk: string): Promise<Lock | undefined> {
-        const lockItem = get(this.table, {
-            key: {pk}
-        });
-        const {Item: item} = await this.dynamoDb.getItem(lockItem)
-        if (item === undefined) return undefined
-        return fromDynamoDb(unmarshall(item))
+        const lockItem = await this.locksTable.get({pk})
+        if (lockItem === undefined) return undefined
+        return fromDynamoDb(lockItem)
     }
 
     async bump(lock: Lock): Promise<Lock> {
         const {pk, version} = lock
         const expiresAt = lockExpiration(lock)
-        const command = update(this.table, {
-            key: {pk},
+        const {Attributes:lockItem} = await this.locksTable.update({pk}, {
             values: {expiresAt, version, one: 1},
             return: "ALL_NEW",
             expression: ({attr, ref}) => `SET 
@@ -395,31 +405,36 @@ class Locker {
                             ${attr.ttl} = ${ref('expiresAt')}`,
             condition: ({key, attr, ref}) =>
                 `attribute_exists(${key.pk}) AND ${attr.version} = ${ref('version')}`
-        });
-        const {Attributes: attributes} = await this.dynamoDb.updateItem(command)
-        if (attributes === undefined) throw new Error("Unexpected condition while bumping a lock version")
-        const item = unmarshall(attributes)
-        return fromDynamoDb(item)
+        })
+        if (lockItem === undefined) throw new Error("Unexpected condition while bumping a lock version")
+        return fromDynamoDb(lockItem)
     }
 
     async deleteLock(lock: Lock) {
         const {pk, version} = lock
-        const {Attributes: attributes} = await this.dynamoDb.deleteItem(deleteItem(this.table, {
-            key: {pk},
+        const {Attributes: lockItem} = await this.locksTable.delete({pk}, {
             values: {version},
             return: "ALL_OLD",
             condition: ({key, attr, ref}) =>
                 `attribute_exists(${key.pk}) AND ${attr.version} = ${ref('version')}`
-        }))
-        if (attributes === undefined) {
+        })
+        if (lockItem === undefined) {
             throw new Error("Unexpected condition while removing a lock")
         }
-        const item = unmarshall(attributes)
-        return fromDynamoDb(item)
+        return fromDynamoDb(lockItem)
     }
 }
 
 function fromDynamoDb(lock: Record<string, any>): Lock {
+    return {
+        pk: lock.pk,
+        version: lock.version,
+        owner: lock.owner,
+        leaseDuration: lock.lease_ms
+    }
+}
+
+function fromDynamoDbTable(lock: Required<schema.ItemType<LocksTable>>): Lock {
     return {
         pk: lock.pk,
         version: lock.version,

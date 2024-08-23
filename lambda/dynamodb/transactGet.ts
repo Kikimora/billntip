@@ -7,7 +7,7 @@ import _ from "lodash";
 /**
  * DynamoDb {@link ddb.KeysAndAttributes} for a given {@link TableSchema}
  */
-interface TransactGetItem<T extends TableSchema> {
+export interface TransactGetItem<T extends TableSchema> {
     /**
      * See {@link ddb.TransactGetItem.Get.Key}
      */
@@ -16,6 +16,13 @@ interface TransactGetItem<T extends TableSchema> {
      * Function generating {@link ddb.TransactGetItem.Get.ProjectionExpression}
      */
     projection?: ProjectionGenerator<T>
+}
+
+export interface TransactGetOptions {
+    /**
+     * See {@link ddb.TransactGetItemsInput.ReturnConsumedCapacity}
+     */
+    returnConsumedCapacity?: ddb.ReturnConsumedCapacity
 }
 
 /**
@@ -34,6 +41,12 @@ export interface TransactGetBuilder {
      * @param capacity
      */
     returnConsumedCapacity(capacity: ddb.ReturnConsumedCapacity): TransactGetBuilder
+
+    /**
+     * Set operation options with a single call.
+     * @param options - operation options
+     */
+    options(options: TransactGetOptions): TransactGetBuilder
 
     /**
      * Build {@link ddb.TransactGetItemsInput}
@@ -75,6 +88,10 @@ export function transactGet(): TransactGetBuilder {
         },
         returnConsumedCapacity(capacity: ddb.ReturnConsumedCapacity) {
             returnConsumedCapacity = capacity
+            return builder
+        },
+        options(options: TransactGetOptions) {
+            returnConsumedCapacity = options.returnConsumedCapacity
             return builder
         },
         input() {

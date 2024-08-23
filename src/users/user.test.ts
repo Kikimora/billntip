@@ -2,6 +2,7 @@ import UserRepo, {UserAttribute, User} from "./user";
 import {__init} from "./index";
 import {clearMock, prepare} from "@app/test/util"
 import {uuid} from "short-uuid";
+import {DynamoDB, QueryCommandOutput} from "@aws-sdk/client-dynamodb";
 
 const fixture = prepare('Once', {
     async before() {
@@ -39,27 +40,110 @@ async function clearUsers() {
     await clearMock(createLockedUser, removeUser)
 }
 
-it.skip("Updates", async () => {
-    const {repo} = fixture()
-    const {Items: users} = await repo.db.query({
-        TableName: 'billntip-averbin-users',
-        IndexName: "user_attributes",
-        KeyConditionExpression: "#name = :name",
-        ExpressionAttributeValues: {
-            ':name': {S: "email"}
-        },
-        ExpressionAttributeNames: {
-            '#name': 'name'
-        }
-    })
+it("Migrate Org Type info -> O", async () => {
+    const table = "billntip-dev-data"
+    const db = new DynamoDB()
+    let next = undefined
+    do {
+        const result: QueryCommandOutput = await db.query({
+            TableName: table,
+            IndexName: "inverse",
+            KeyConditionExpression: "#sk = :type",
+            ExpressionAttributeValues: {
+                ':type': {S: "info"}
+            },
+            ExpressionAttributeNames: {
+                '#sk': 'sk'
+            },
+            ExclusiveStartKey: next,
+            Limit: 25
+        })
+        next = result.LastEvaluatedKey
+        const items = result.Items ?? []
+        if (items.length === 0) continue
+        await db.batchWriteItem({
+            RequestItems: {
+                [table]: items.map(function (org) {
+                    return {
+                        PutRequest: {
+                            Item: {
+                                ...org,
+                                sk: {S: "O"},
+                            }
+                        }
+                    }
+                })
+            }
+        })
+        await db.batchWriteItem({
+            RequestItems: {
+                [table]: items.map(function (org) {
+                    return {
+                        DeleteRequest: {
+                            Key: {
+                                pk: org.pk,
+                                sk: org.sk,
+                            }
+                        }
+                    }
+                })
+            }
+        })
+    } while (next !== undefined)
+}, 60000)
 
-    for (const {pk: {S: uid}} of users ?? []) {
-        if (uid === undefined) continue
-        console.log(uid)
-        const user = await repo.fetch(uid.substring(2))
-        await user.updateAttributes('trusted', [{name: 'email', value: user.attributeMap['email']}])
-    }
-})
+it("Migrate user type M -> U", async () => {
+    const table = "billntip-dev-data"
+    const db = new DynamoDB()
+    let next = undefined
+    do {
+        const result: QueryCommandOutput = await db.query({
+            TableName: table,
+            IndexName: "inverse",
+            KeyConditionExpression: "#sk = :type",
+            ExpressionAttributeValues: {
+                ':type': {S: "M"}
+            },
+            ExpressionAttributeNames: {
+                '#sk': 'sk'
+            },
+            ExclusiveStartKey: next,
+            Limit: 25
+        })
+        next = result.LastEvaluatedKey
+        const items = result.Items ?? []
+        if (items.length === 0) continue
+        await db.batchWriteItem({
+            RequestItems: {
+                [table]: items.map(function (org) {
+                    return {
+                        PutRequest: {
+                            Item: {
+                                ...org,
+                                sk: {S: "U"},
+                            }
+                        }
+                    }
+                })
+            }
+        })
+        await db.batchWriteItem({
+            RequestItems: {
+                [table]: items.map(function (org) {
+                    return {
+                        DeleteRequest: {
+                            Key: {
+                                pk: org.pk,
+                                sk: org.sk,
+                            }
+                        }
+                    }
+                })
+            }
+        })
+    } while (next !== undefined)
+}, 60000)
+
 
 describe("User", () => {
 
@@ -148,7 +232,7 @@ describe("User", () => {
                 name: 'alt_email',
                 value: `${userId}.test@example.com`
             }])).rejects.toThrow(expect.objectContaining({
-                name: 'UsernameExistsException'
+                name: 'InvalidAliasException'
             }))
         })
     })

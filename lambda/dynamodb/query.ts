@@ -11,7 +11,7 @@ import _ from "lodash";
 /**
  * DynamoDb {@link ddb.QueryCommandInput} for a given {@link TableSchema}
  */
-interface QueryCommand<T extends TableSchema, V> {
+export interface QueryCommand<T extends TableSchema, V> {
     /**
      * See {@link ddb.QueryInput.IndexName}
      */
@@ -78,7 +78,7 @@ export function query<T extends TableType<T>, V>(tbl: T, command: QueryCommand<T
     if (filterExpression?.trim() === '') filterExpression = undefined
     return {
         TableName: tbl.name,
-        IndexName: command.indexName,
+        IndexName: tbl.index ?? command.indexName,
         KeyConditionExpression: keyCondition?.({key, ref: ref}),
         ProjectionExpression: projection?.({key, attr}).join(', '),
         FilterExpression: filterExpression,

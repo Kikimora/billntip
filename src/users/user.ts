@@ -1,6 +1,5 @@
-import {AppError, internalError} from "@app/lambda";
+import {AppError, internalError, ddb} from "@app/lambda";
 import {TransactionCanceledException} from "@aws-sdk/client-dynamodb";
-import * as ddb from "@app/dynamodb";
 import _, {mergeJoin, MergePair} from "@app/util";
 import {ErrorContext, errorWithContext} from "@app/diagnostics";
 import * as Schemas from "./schemas";
@@ -29,7 +28,7 @@ export {UserItem} from "./store"
 /**
  * User data repository provides methods to load users from the storage.
  */
-export default class UserRepo {
+class UserRepo {
     private readonly store: UserStore
     readonly lockStore: ddb.LockStore;
 
@@ -154,6 +153,7 @@ export default class UserRepo {
      * @param options - fetch options
      */
     async batchFetch(users: string[], options?: BatchFetchOptions): Promise<UserItem[]> {
+        if (users.length === 0) return []
         const context = {
             name: "batchFetch",
             value: {users, options}
@@ -161,19 +161,6 @@ export default class UserRepo {
         if (users.length > 50) throw internalError("Too many users in a batch").withContext(context)
         try {
             return await this.store.batchFetch(users, options)
-        } catch (e: any) {
-            throw errorWithContext(e, context)
-        }
-    }
-
-    async fetchUserItem(user: string): Promise<UserItem> {
-        const context = {
-            name: "fetchUserItem",
-            value: {user}
-        }
-        try {
-            const x = await this.store.batchFetch([user], {fetchDeleted: true})
-            return x[0]
         } catch (e: any) {
             throw errorWithContext(e, context)
         }
@@ -641,18 +628,30 @@ export class User {
             await tx.run()
         } catch (e: any) {
             if (e instanceof TransactionCanceledException) {
-                const cause = {cause: e, cancellationReasons: e.CancellationReasons}
-                const expectedError = _.every(e.CancellationReasons, function ({Code}) {
-                    return Code === "None" || Code === "ConditionalCheckFailed"
-                })
-                if (expectedError) {
-                    if (mode === 'create') throw userExistsError()
-                        .withContext(context, cause)
-                    throw invalidAliasException()
-                        .withContext(context, cause)
+                const cancellationReasons = e.CancellationReasons?.toReversed() ?? [];
+                let errorContext
+                if (mode === 'create') {
+                    const [createUsernameAlias, createUser, ...attributes] = cancellationReasons
+                    errorContext = {
+                        cause: e,
+                        createUser,
+                        createUsernameAlias,
+                        attributes
+                    }
+                    if (createUser.Code === 'ConditionalCheckFailed')
+                        throw userExistsError().withContext(context, errorContext)
+                } else {
+                    const [updateUser, ...attributes] = cancellationReasons
+                    errorContext = {
+                        cause: e,
+                        updateUser,
+                        attributes
+                    }
                 }
-                throw internalError("TransactionCanceledException due to an unexpected condition.")
-                    .withContext(context, cause)
+                if (_.some(errorContext.attributes, x => x.Code === 'ConditionalCheckFailed')) {
+                    throw invalidAliasException().withContext(context, errorContext)
+                }
+                throw internalError(e.message).withContext(context, errorContext)
             }
             throw internalError(e.message)
                 .withContext(context, {cause: e})
@@ -706,3 +705,6 @@ function invalidAttributeException(attr?: UserAttribute, details?: any) {
         statusCode: '400'
     })
 }
+
+//See https://youtrack.jetbrains.com/issue/WEB-68793/Member-variable-incorrectly-highlighted-as-unused
+export default UserRepo;

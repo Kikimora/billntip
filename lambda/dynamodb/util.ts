@@ -2,7 +2,6 @@ import * as ddb from "@aws-sdk/client-dynamodb";
 import {convertToAttr} from "@aws-sdk/util-dynamodb";
 import {attributeGenerator, TableType, valueGenerator} from "./schema";
 
-
 export function prepareCommand<T extends TableType<T>, V>(tbl: T,
                                                           context: V,
                                                           marshalledValues?: Record<string, ddb.AttributeValue>) {

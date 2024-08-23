@@ -13,6 +13,7 @@ then
   echo "./bin/logs dev users-handler --since 1h"
   echo "./bin/logs dev users-handler --filter-pattern '{$.requestId=\"09225cd0-cbb5-491c-afd3-0ee87912f02d\"}'"
   echo "./bin/logs dev users-handler --filter-pattern '{$.level=\"ERROR\"}'"
+  echo "./bin/logs dev users-handler --log-stream-names '2024/08/19/[\$LATEST]fbe144684311451aa3a6e329d9a185a9'"
   exit 1
 fi
 
