@@ -123,7 +123,11 @@ export const handler = pipeline()
                     },
                     category: userInfo.category,
                     regulatory_status: status,
-                    wallet: wallet.balance,
+                    wallet: {
+                        amount: wallet.amount,
+                        currency: wallet.currency,
+                        pending: wallet.pending,
+                    },
                     //deprecated, to be removed soon
                     kyc_level: userInfo.kycLevel,
                     proof_of_identity: userInfo.proofOfIdentity !== undefined,
@@ -143,7 +147,11 @@ export const handler = pipeline()
                     transactions,
                     page: query.page ?? 1,
                     per_page: query.per_page ?? 10,
-                    wallet: wallet.balance
+                    wallet: {
+                        amount: wallet.amount,
+                        currency: wallet.currency,
+                        pending: wallet.pending,
+                    }
                 } satisfies Static<typeof req.route.success>
             }
             case 'GET /tip/transactions/{id}': {
@@ -157,7 +165,11 @@ export const handler = pipeline()
                 ])
                 return {
                     transaction,
-                    wallet: wallet.balance
+                    wallet: {
+                        amount: wallet.amount,
+                        currency: wallet.currency,
+                        pending: wallet.pending,
+                    }
                 } satisfies Static<typeof req.route.success>
             }
             case 'POST /tip/transactions': {
@@ -170,7 +182,11 @@ export const handler = pipeline()
                 const wallet = await mangopayUser.fetchWallet()
                 return {
                     transaction,
-                    wallet: wallet.balance
+                    wallet: {
+                        amount: wallet.amount,
+                        currency: wallet.currency,
+                        pending: wallet.pending,
+                    }
                 } satisfies Static<typeof req.route.success>
             }
             case 'POST /tip/verification': {
@@ -219,7 +235,7 @@ export const handler = pipeline()
                     return {
                         id: loc.sk,
                         org_id: loc.pk,
-                        image_url: loc.image_url,
+                        image: loc.image,
                         archived: loc.deleted ?? false,
                         created_at: loc.created_at ?? 0,
                         title: loc.title ?? "Unknown",

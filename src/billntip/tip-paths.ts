@@ -51,7 +51,7 @@ export default {
             transactions: T.Array(schemas.Transaction),
             page: Type.Required(schemas.PaymentGatewayQuery.page),
             per_page: Type.Required(schemas.PaymentGatewayQuery.page),
-            wallet: schemas.AmountSchema
+            wallet: schemas.WalletBalance
         }),
         responses: [401, 403],
         tags: ['Tip']
@@ -61,7 +61,7 @@ export default {
         path: schemas.TxId,
         success: Type.Object({
             transaction: schemas.Transaction,
-            wallet: schemas.AmountSchema
+            wallet: schemas.WalletBalance
         }),
         responses: [401, 403, 404],
         tags: ['Tip']
@@ -71,7 +71,7 @@ export default {
         body: schemas.CreateTransactionRequest,
         success: Type.Object({
             transaction: schemas.Transaction,
-            wallet: schemas.AmountSchema
+            wallet: schemas.WalletBalance
         }),
         responses: [400, 401, 403],
         tags: ['Tip']
@@ -142,14 +142,14 @@ export default {
         tags: ['Tip']
     },
     "POST /pay/card": {
-        operationId: "POST /tip/card",
+        operationId: "POST /pay/card",
         body: schemas.NewEmptyCardRequest,
         success: schemas.EmptyCard,
         responses: [401, 403],
-        tags: ['Tip']
+        tags: ['Pay']
     },
     "PUT /pay/card": {
-        operationId: "PUT /tip/card",
+        operationId: "PUT /pay/card",
         body: Type.Object({
             id: Type.String({maxLength: 40}),
             cardholder_name: Type.String({maxLength: 120}),
@@ -157,6 +157,6 @@ export default {
         }),
         success: schemas.Card,
         responses: [400, 401, 403],
-        tags: ['Tip']
+        tags: ['Pay']
     }
 } as const satisfies RouteMap

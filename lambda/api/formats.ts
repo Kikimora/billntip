@@ -6,8 +6,9 @@ import _ from "lodash";
  * Pass input string through an XSS filter.
  */
 export const HtmlString = Type.Transform(Type.String())
-    //Convert String to Html String
+    //Convert input String into safe HtmlString
     .Decode(xss)
+    .Encode(x => x)
 
 export const registerDefaultFormats = _.once(function () {
         FormatRegistry.Set('uri', IsUrl)
@@ -21,10 +22,6 @@ export const registerDefaultFormats = _.once(function () {
     }
 )
 
-
-const Url =
-    /^(?:https?|wss?|ftp):\/\/(?:\S+(?::\S*)?@)?(?:(?!(?:10|127)(?:\.\d{1,3}){3})(?!(?:169\.254|192\.168)(?:\.\d{1,3}){2})(?!172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2})(?:[1-9]\d?|1\d\d|2[01]\d|22[0-3])(?:\.(?:1?\d{1,2}|2[0-4]\d|25[0-5])){2}(?:\.(?:[1-9]\d?|1\d\d|2[0-4]\d|25[0-4]))|(?:(?:[a-z0-9\u{00a1}-\u{ffff}]+-)*[a-z0-9\u{00a1}-\u{ffff}]+)(?:\.(?:[a-z0-9\u{00a1}-\u{ffff}]+-)*[a-z0-9\u{00a1}-\u{ffff}]+)*(?:\.(?:[a-z\u{00a1}-\u{ffff}]{2,})))(?::\d{2,5})?(?:\/[^\s]*)?$/iu
-
 /**
  * A uniform resource locator as defined in [RFC 1738](https://www.rfc-editor.org/rfc/rfc1738)
  * @example `http://domain.com`
@@ -37,7 +34,6 @@ export function IsUrl(value: string) {
         return false;
     }
 }
-
 
 const DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 const DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/

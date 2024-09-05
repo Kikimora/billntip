@@ -29,7 +29,11 @@ describe("MangoPay", () => {
         })
 
         it("Get Wallet Transactions", async () => {
-            const response = await Api.Wallets.getTransactions(wid)
+            const response = await Api.Wallets.getTransactions(wid, {
+                parameters: {
+                    Status: "SUCCEEDED"
+                }
+            })
             console.log("Api.Wallets.getTransactions: ", JSON.stringify(response, null, 2))
         })
 

@@ -1,4 +1,4 @@
-import {AppError, internalError, ddb} from "@app/lambda";
+import {AppError, internalError, DDBLocks} from "@app/lambda";
 import {TransactionCanceledException} from "@aws-sdk/client-dynamodb";
 import _, {mergeJoin, MergePair} from "@app/util";
 import {ErrorContext, errorWithContext} from "@app/diagnostics";
@@ -30,7 +30,7 @@ export {UserItem} from "./store"
  */
 class UserRepo {
     private readonly store: UserStore
-    readonly lockStore: ddb.LockStore;
+    readonly lockStore: DDBLocks.Store;
 
     get db() {
         return this.store.db
@@ -38,7 +38,7 @@ class UserRepo {
 
     constructor(options: UserStoreOptions) {
         this.store = new UserStore(options)
-        this.lockStore = ddb.makeLockStore(options.locks, {dynamoDb: this.db})
+        this.lockStore = DDBLocks.makeStore(options.locks, {dynamoDb: options.db})
     }
 
     /**
@@ -53,7 +53,18 @@ class UserRepo {
      * Given a username or an alias lookup Cognito username.
      */
     async lookupAlias(usernameOrAlias: string) {
+        return this._lookupAlias(usernameOrAlias)
+    }
+
+    async _lookupAlias(usernameOrAlias: string, options?: FetchOptions) {
         const {store} = this
+
+        if (options?.fetchDeleted) {
+            return {
+                username: usernameOrAlias,
+                verified: true
+            }
+        }
 
         async function lookupAlias(usernameOrAlias: string) {
             try {
@@ -148,6 +159,37 @@ class UserRepo {
     }
 
     /**
+     * Fetch only user attributes.
+     * @param usernameOrAlias - username or alias
+     * @param options - fetch options
+     */
+    async fetchAttributes(usernameOrAlias: string, options?: FetchOptions) {
+        const {store} = this
+        const {username, verified} = await this._lookupAlias(usernameOrAlias, options)
+
+        const context: ErrorContext = {
+            name: "fetch",
+            value: {
+                usernameOrAlias,
+                options,
+                username,
+                verified
+            }
+        };
+
+        if (!verified && !(options?.allowUnverifiedAlias ?? false)) {
+            throw userNotFoundException().withContext(context)
+        }
+
+        try {
+            const users = await store.batchFetch([username], { fetchDeleted: options?.fetchDeleted })
+            return users[0]
+        } catch (e: any) {
+            throw internalError(e.message).withContext(context, {cause: e})
+        }
+    }
+
+    /**
      * Fetch batch of users. This method makes one query for each username.
      * @param users - array of usernames, max 50
      * @param options - fetch options
@@ -167,8 +209,7 @@ class UserRepo {
     }
 
     private async _fetch(usernameOrAlias: string, lock: boolean, options?: FetchOptions) {
-        const self = this
-        const {username, verified} = await lookupAlias()
+        const {username, verified} = await this._lookupAlias(usernameOrAlias, options)
 
         const context: ErrorContext = {
             name: "fetch",
@@ -203,18 +244,6 @@ class UserRepo {
             throw userNotFoundException().withContext(context)
 
         return user
-
-
-        async function lookupAlias() {
-            if (options?.fetchDeleted) {
-                return {
-                    username: usernameOrAlias,
-                    verified: true
-                }
-            } else {
-                return await self.lookupAlias(usernameOrAlias)
-            }
-        }
     }
 }
 
@@ -232,19 +261,26 @@ export class User {
     private _attributes: UserAttributeItem[] = []
     private _deleted: boolean = false
 
-    private _lock?: ddb.LockHandle;
+    private _lock?: DDBLocks.Handle;
 
     constructor(public readonly username: string,
                 private readonly store: UserStore,
-                private readonly lockStore: ddb.LockStore,) {
+                private readonly lockStore: DDBLocks.Store,) {
         this._attributes = []
-
     }
 
     private get lockOwner() {
         //AWS_LAMBDA_LOG_STREAM_NAME contains execution environment name
         //which makes good lock owner name
         return process.env.AWS_LAMBDA_LOG_STREAM_NAME ?? "noname"
+    }
+
+    get item(): UserItem {
+        return {
+            id: this.username,
+            attributes: this.attributeMap,
+            deleted: this.deleted
+        }
     }
 
     attr(name: string, verified?: boolean) {

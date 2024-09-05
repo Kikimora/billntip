@@ -1,20 +1,11 @@
 import {convertToAttr} from "@aws-sdk/util-dynamodb";
 import * as ddb from "@aws-sdk/client-dynamodb";
-import * as schemas from "./schema";
-import {
-    DynamoDbArraySchema,
-    DynamoDbMapSchema, DynamoDbSchema, DynamoDbType,
-    isBasicDynamoType,
-    isDynamoArray,
-    isDynamoMap,
-    isDynamoSchema,
-    schema
-} from "./schema";
 import {internalError} from "@app/lambda";
 import _ from "lodash";
+import {Schema} from "type-fest";
+import * as DDB from "./schema";
 
-
-class CommandContext<T extends schema.TableSchema> {
+class CommandContext<Key, Attributes> {
 
     private _attributes?: Record<string, string>
     private _values?: Record<string, ddb.AttributeValue>
@@ -27,13 +18,10 @@ class CommandContext<T extends schema.TableSchema> {
         return !_.isEmpty(this._values) ? this._values : undefined
     }
 
-    private readonly key: KeyAttributes<T>
-    private readonly attr: ItemAttributes<T>
+    private readonly key: TKey<Key>
+    private readonly attr: TAttr<Attributes>
 
-    constructor(keySchema: schema.KeySchema<T>,
-                attributeSchema: schema.AttributesSchema<T>,
-                private readonly marshalOptions: { removeUndefinedValues: boolean }) {
-
+    constructor(schema: DDB.Schema, private readonly marshalOptions: { removeUndefinedValues: boolean }) {
         const attrCallback = (path: string[]) => {
             for (const p of path) {
                 if (p.startsWith("#")) {
@@ -46,16 +34,16 @@ class CommandContext<T extends schema.TableSchema> {
             this._attributes![key] = key.substring(1)
         }
 
-        this.key = keyGenerator(keySchema, keyCallback)
-        this.attr = attributeGenerator(attributeSchema, attrCallback)
+        this.key = keyGenerator(schema.key, keyCallback)
+        this.attr = attributeGenerator(schema.item, attrCallback)
     }
 
     begin<V>(values: V, marshalledValues?: Record<string, ddb.AttributeValue>): {
-        attr: ItemAttributes<T>,
-        key: KeyAttributes<T>,
+        attr: TAttr<Attributes>,
+        key: TKey<Key>,
         ref: Values<V>
     }
-    begin(): { attr: ItemAttributes<T>, key: KeyAttributes<T> }
+    begin(): { attr: TAttr<Attributes>, key: TKey<Key> }
     begin(values?: any, marshalledValues?: Record<string, ddb.AttributeValue>): any {
         const {key, attr, marshalOptions} = this
         this._attributes = {}
@@ -69,7 +57,9 @@ class CommandContext<T extends schema.TableSchema> {
             }
 
             return {
-                key, attr, ref: refGenerator(values, addToValues)
+                key,
+                attr,
+                ref: refGenerator(values, addToValues)
             }
         } else {
             return {
@@ -90,35 +80,42 @@ class CommandContext<T extends schema.TableSchema> {
 //<!-- @formatter:off -->
 
 /**
- * Mirrors shape of a key {@link DynamoDbSchema} with props generating DynamoDb attributes.
- * @example (MySchema described in the example section [here]{@link DynamoDbSchema})
+ * Mirrors shape of a key {@link DDB.Schema} with props generating DynamoDb attributes.
+ * @example (MySchema described in the example section [here]{@link DDB.Schema})
  * const key = keyGenerator(MySchema)
  * console.log(user.pk) //logs #pk
  */
-export type KeyAttributes<T extends schema.TableSchema> =_KeyAttributes<schema.KeySchema<T>>
-type _KeyAttributes<T> = { [key in keyof T]: string }
+export type TKey<T> = Schema<T, string>
 
 /**
- * Mirrors shape of a {@link DynamoDbSchema} with props and functions generating DynamoDb attributes.
- * @example (MySchema described in the example section [here]{@link DynamoDbSchema})
+ * Mirrors shape of a {@link DDB.Schema} with props and functions generating DynamoDb attributes.
+ * @example (MySchema described in the example section [here]{@link DDB.Schema})
  * const user = attributeGenerator(MySchema)
  * console.log(user.uid) //logs #uid
  * console.log(user.profile.firstName) //logs #profile.#firstName
  * console.log(user.recentTransactions(1).amount) //logs #recentTransactions[1].#amount
  * console.log(user.pictures('50x50')) //logs #pictures.#50x50
  */
-export type ItemAttributes<T extends schema.TableSchema> = _ItemAttributes<schema.AttributesSchema<T>>
-type _ItemAttributes<T> = (
-      T extends schemas.DynamoDbBasicType ? string
-    : T extends schemas.DynamoDbArraySchema ? (idx:number)=> _ItemAttributes<T['$array']> & StringBuilder
-    : T extends schemas.DynamoDbMapSchema ? (idx:string)=> _ItemAttributes<T['$map']> & StringBuilder
-    : T extends schemas.DynamoDbSchema ? { [k in KeyOf<T>]: _ItemAttributes<T[k]> & StringBuilder; }
-    : T extends string ? T
-    : never
-    )
-    & ((val: string) => string)
+//<!-- formatter: off -->
+export type TAttr<T> =
+      T extends string ? string
+    : T extends Map<unknown, infer E> ? (idx:string)=> TAttr<E> & StringBuilder
+    : T extends Set<unknown> ? string
+    : T extends ReadonlyMap<unknown, infer E> ? (idx:string)=> TAttr<E> & StringBuilder
+    : T extends ReadonlySet<unknown>? string
+    : T extends ReadonlyArray<infer E> ? (idx:number)=> TAttr<E> & StringBuilder
+    : T extends Array<infer E> ? (idx:number)=> TAttr<E> & StringBuilder
+    : T extends object ? _TAttr<T>
+    : never;
 
-//<!-- @formatter:on -->
+type _TAttr<ObjectType extends object> = {
+    [KeyType in keyof ObjectType]-?: TAttr<ObjectType[KeyType]>;
+};
+type ValuesKeys<T> = T extends Record<string, any> ? keyof T & string
+                   : T extends Record<string, any> | undefined ? keyof T & string
+                   : never
+//<!-- @formatter: on -->
+
 
 /**
  * Helper function to generate property values for the DynamoDB expressions. See {@link refGenerator} for details.
@@ -128,7 +125,7 @@ export interface Values<T> {
      * Reference named value from values, items or similar part of the DynamoDB expression.
      * @param key value key
      */
-    (key: keyof NonNullable<T> & string): string
+    (key: ValuesKeys<T>): string
 
     /**
      * Create DynamoDB expression variable named `__valN` with a given value. N starts with 1.
@@ -157,15 +154,15 @@ function refGenerator<T>(values: T, callback: (key: string, value: any) => void)
     }
     let generator
     if (values !== undefined && values !== null) {
-        const hasValues = function (key: keyof NonNullable<T> & string) {
+        const hasValues = function (key: ValuesKeys<T>) {
             const valueKey = ':' + key
-            callback(valueKey, values[key])
+            callback(valueKey, values[key as keyof T])
             return valueKey
         }
         hasValues.val = val
         generator = hasValues
     } else {
-        const noValues = function (key: keyof NonNullable<T> & string) {
+        const noValues = function (key: ValuesKeys<T>) {
             const valueKey = ':' + key
             callback(valueKey, undefined)
             return valueKey
@@ -177,11 +174,12 @@ function refGenerator<T>(values: T, callback: (key: string, value: any) => void)
 }
 
 /**
- * Create {@link ItemAttributes} for a given schema.
+ * Create {@link TAttr} for a given DDB.
  * @param schema - attributes schema
  * @param callback - callback function to call each time an attribute generated.
  */
-export function attributeGenerator<T>(schema: T, callback?: (path: string[]) => void): _ItemAttributes<T> {
+export function attributeGenerator(schema: DDB.TDynamoAttribute, callback?: (path: string[]) => void) {
+
     const attr = function (attributeName: string) {
         return new Builder(attributeName, undefined, callback)
     }
@@ -189,11 +187,12 @@ export function attributeGenerator<T>(schema: T, callback?: (path: string[]) => 
         return this[__builder]?.toString() ?? ""
     }
 
-    if (schema === null || typeof schema !== "object")
+    if (schema === null || !DDB.isDynamoItem(schema))
         return attr as any
 
-    for (const [key, type] of Object.entries(schema)) {
-        if (schemas.isBasicDynamoType(type)) {
+
+    for (const [key, type] of Object.entries(schema.properties)) {
+        if (DDB.isBasicDynamoType(type)) {
             Object.defineProperty(attr, key, {
                 get: function (this: BuilderHolder) {
                     const builder = new Builder(key, this[__builder], callback);
@@ -202,7 +201,7 @@ export function attributeGenerator<T>(schema: T, callback?: (path: string[]) => 
             })
         }
 
-        if (schemas.isDynamoMap(type) || schemas.isDynamoArray(type)) {
+        if (DDB.isDynamoMap(type) || DDB.isDynamoArray(type)) {
             const collectionFn = collection(type)
             Object.defineProperty(attr, key, {
                 get: function (this: BuilderHolder) {
@@ -212,7 +211,7 @@ export function attributeGenerator<T>(schema: T, callback?: (path: string[]) => 
             })
         }
 
-        if (schemas.isDynamoSchema(type)) {
+        if (DDB.isDynamoItem(type)) {
             const proto = attributeGenerator(type)
             Object.defineProperty(attr, key, {
                 get: function (this: BuilderHolder) {
@@ -225,8 +224,6 @@ export function attributeGenerator<T>(schema: T, callback?: (path: string[]) => 
     }
     return attr as any
 }
-
-type KeyOf<T> = Exclude<keyof T, symbol>
 
 /**
  * Anything with `toString()` method.
@@ -271,30 +268,31 @@ interface BuilderHolder {
     readonly [__builder]?: Builder
 }
 
-type CollectionAttributes<T> = { item(builder: Builder): _ItemAttributes<T> }
+type CollectionAttributes<T> = { item(builder: Builder): TAttr<T> }
 
-function collectionItemType<T extends DynamoDbArraySchema | DynamoDbMapSchema>(collectionType: T): DynamoDbType {
-    if (isDynamoArray(collectionType)) return collectionType.$array
-    return collectionType.$map
+function collectionItemType<T extends DDB.TDynamoArray | DDB.TDynamoMap>(collectionType: T): DDB.TDynamoAttribute {
+    if (DDB.isDynamoArray(collectionType)) return collectionType.items
+    const rec = collectionType.patternProperties
+    return Object.values(rec)[0]
 }
 
-function collection<T extends DynamoDbMapSchema | DynamoDbArraySchema>(col: T): CollectionAttributes<T> {
+function collection<T extends DDB.TDynamoArray | DDB.TDynamoMap>(col: T): CollectionAttributes<T> {
     let itemType = collectionItemType(col)
     let value: any
-    if (isBasicDynamoType(itemType)) {
+    if (DDB.isBasicDynamoType(itemType)) {
         value = function (this: Builder, idx: string | number) {
             return new Builder(idx, this)
         }
     }
 
-    if (isDynamoMap(itemType) || isDynamoArray(itemType)) {
+    if (DDB.isDynamoMap(itemType) || DDB.isDynamoArray(itemType)) {
         const attrs = collection(itemType)
         value = function (this: Builder, idx: string | number) {
             return attrs.item(new Builder(idx, this))
         }
     }
 
-    if (isDynamoSchema(itemType)) {
+    if (DDB.isDynamoItem(itemType)) {
         const proto = attributeGenerator(itemType)
         value = function (this: Builder, idx: string | number) {
             const child = Object.create(proto)
@@ -314,12 +312,12 @@ function collection<T extends DynamoDbMapSchema | DynamoDbArraySchema>(col: T): 
     return value
 }
 
-function keyGenerator<T>(schema: T, callback?: (path: string) => void): _KeyAttributes<T> {
+function keyGenerator(schema: DDB.TDynamoKey, callback?: (path: string) => void) {
     if (schema === null || typeof schema !== "object")
         throw new Error("Invalid schema")
 
     const attr = {}
-    for (const key of Object.keys(schema)) {
+    for (const key of Object.keys(schema.properties)) {
         const x = "#" + key
         Object.defineProperty(attr, key, {
             get: function () {
@@ -331,5 +329,4 @@ function keyGenerator<T>(schema: T, callback?: (path: string) => void): _KeyAttr
     return attr as any
 }
 
-//See https://youtrack.jetbrains.com/issue/WEB-68793/Member-variable-incorrectly-highlighted-as-unused
 export default CommandContext;

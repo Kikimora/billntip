@@ -43,7 +43,7 @@ const specObject = new aws.s3.BucketObject("openapi-spec", {
 async function makeOpenAPIHtml() {
     const buffer = await fs.promises.readFile("../doc/openapi.html")
     const html = buffer.toString('utf8')
-    return new pulumi.asset.StringAsset(html.replace('{{URL}}', `/openapi.json`))
+    return new pulumi.asset.StringAsset(html.replace('{{URL}}', `/openapi.json?t=${Date.now()}`))
 }
 
 const docObject = new aws.s3.BucketObject("openapi-html", {
@@ -78,6 +78,28 @@ function handler(event) {
     publish: true,
 });
 
+const cachePolicy = new aws.cloudfront.CachePolicy("cdn-cache-policy", {
+    defaultTtl: 86400 * 7, //7 days
+    maxTtl: 31536000,      //365 days
+    minTtl: 1,
+    parametersInCacheKeyAndForwardedToOrigin: {
+        enableAcceptEncodingBrotli: true,
+        enableAcceptEncodingGzip: true,
+        queryStringsConfig: {
+            queryStringBehavior: "whitelist",
+            queryStrings: {
+                items: ["v"]
+            }
+        },
+        cookiesConfig: {
+            cookieBehavior: "none"
+        },
+        headersConfig: {
+            headerBehavior: "none"
+        }
+    }
+})
+
 const cf = new aws.cloudfront.Distribution("cdn", {
     enabled: true,
     aliases: [
@@ -99,13 +121,7 @@ const cf = new aws.cloudfront.Distribution("cdn", {
         viewerProtocolPolicy: "redirect-to-https",
         allowedMethods: ["GET", "HEAD", "OPTIONS"],
         cachedMethods: ["GET", "HEAD", "OPTIONS"],
-        forwardedValues: {
-            queryString: false,
-            cookies: {forward: "none"},
-        },
-        minTtl: 300,
-        maxTtl: 86400 * 30,
-        defaultTtl: 86400,
+        cachePolicyId: cachePolicy.id,
         functionAssociations: [{
             eventType: "viewer-request",
             functionArn: rewriteFn.arn,

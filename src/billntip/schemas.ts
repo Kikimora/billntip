@@ -1,4 +1,4 @@
-import {Static, Type as T, Type} from "@sinclair/typebox";
+import {Static, TObject, Type as T, Type} from "@sinclair/typebox";
 import {TaggedUnion} from "@app/lambda/tagged_union";
 
 const ShortUserInfo = Type.Object({
@@ -37,6 +37,13 @@ export const MemberRole = Type.Union([
 ], {$id: "MemberRole", description: "Member role in the organisation"});
 export type MemberRole = Static<typeof MemberRole>
 
+export const MembersQuery = {
+    from: Type.Optional(Type.String()),
+    location: Type.Optional(Type.String()),
+}
+
+export type MembersQuery = Static<TObject<typeof MembersQuery>>
+
 export const MemberSchema = Type.Object({
     id: Type.String(),
     accepted_at: Type.Optional(Type.Number({
@@ -52,20 +59,35 @@ export const MemberSchema = Type.Object({
     role: MemberRole
 }, {$id: "MemberSchema", description: "Organisation member"})
 
-export const AmountSchema = Type.Object({
-    amount: Type.Number({
-        description: 'An amount of money in the smallest sub-division of the currency (e.g., EUR 12.60 would be represented as 1260 whereas JPY 12 would be represented as just 12).',
-        examples: [10]
-    }),
-    currency: Type.String({
-        description: "Currency in the ISO_4217 format",
-        examples: ["EUR"]
-    }),
+export type Member = Static<typeof MemberSchema>
+
+const Amount = Type.Number({
+    $id: "Amount",
+    description: 'An amount of money in the smallest sub-division of the currency (e.g., EUR 12.60 would be represented as 1260 whereas JPY 12 would be represented as just 12).',
+    examples: [10]
+})
+const Currency = Type.String({
+    $id: "Currency",
+    description: "Currency in the ISO_4217 format",
+    examples: ["EUR"]
+})
+
+const AmountSchema = Type.Object({
+    amount: Amount,
+    currency: Currency,
 }, {$id: "AmountSchema"})
+
 export const TxType = T.Union([T.Literal("PAYIN"), T.Literal("TRANSFER"), T.Literal("CONVERSION"), T.Literal("PAYOUT"), T.Literal("CARD_VALIDATION")], {$id: "TxType"});
 export const TxStatus = T.Union([T.Literal("CREATED"), T.Literal("SUCCEEDED"), T.Literal("FAILED")], {$id: "TxStatus"});
 
-export const WalletSchema = Type.Object({
+export const WalletBalance = Type.Object({
+    amount: Amount,
+    pending: Amount,
+    currency: Currency,
+}, {$id: "WalletBalance"})
+export type WalletBalance = Static<typeof WalletBalance>
+
+export const Wallet = Type.Object({
     id: Type.String({
         description: "The unique identifier of the object.",
         examples: ["wlt_m_01HYX1ZERF8SC8D8SGZSHANCA7"]
@@ -78,11 +100,13 @@ export const WalletSchema = Type.Object({
         description: "Wallet description",
         examples: ["Basic wallet holding user funds."]
     })),
-    balance: AmountSchema,
+    ...WalletBalance.properties
 }, {
-    $id: "WalletSchema",
+    $id: "Wallet",
     description: "The digital e-wallet on which funds are stored."
 })
+export type Wallet = Static<typeof Wallet>
+
 export const Transaction = Type.Object({
     id: Type.String({
         description: "The unique identifier of the object.",
@@ -417,7 +441,7 @@ export const Me = Type.Object({
             },
         ]
     }),
-    wallet: Type.Optional(AmountSchema)
+    wallet: Type.Optional(WalletBalance)
 }, {$id: "Me"})
 
 export const Recipient = Type.Object({
@@ -439,10 +463,18 @@ export const Recipient = Type.Object({
     })
 })
 export type Recipient = Static<typeof Recipient>
-
+export const Image = Type.Object({
+    id: Type.String({
+        description: "Image identifier",
+        maxLength: 1024,
+        examples: ["my-org/my-loc/9a0c44a5-37b9-4eac-a2c3-63cc50528a53.png"]
+    }),
+    version: Type.Optional(Type.Number())
+}, {$id: "Image"})
+export type Image = Static<typeof Image>
 export const LocationRequest = Type.Object({
     title: Type.String({minLength: 1}),
-    image_url: Type.Optional(Type.String({format: "uri"}))
+    image: Type.Optional(Image),
 })
 export type LocationRequest = Static<typeof LocationRequest>
 
@@ -471,6 +503,7 @@ export const Location = Type.Object({
         maxLength: 1024,
         examples: ["https://static.billntip.com/public/my-org/my-loc/9a0c44a5-37b9-4eac-a2c3-63cc50528a53.png"]
     })),
+    image: Type.Optional(Image),
     archived: Type.Optional(Type.Boolean({
         description: "Indicates whenever location is archived or not",
         default: false
@@ -513,7 +546,7 @@ export const EmptyCard = Type.Intersect([
     Card,
     Type.Object({
         tokenization: Type.Object({
-            url: Type.String(),
+            id: Type.String(),
             access_key: Type.String(),
             data: Type.String()
         })

@@ -1,7 +1,7 @@
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import shortUUID from "short-uuid"
 import {jwtDecode} from "jwt-decode";
-import {ddb} from "@app/lambda";
+import {DDB, DDBLocks} from "@app/lambda";
 import {SessionCookie, SessionCookieRepo} from "./cookie";
 import {OidcTokens} from "./oidc_tokens";
 import {OperationContext, SessionContext} from "./types";
@@ -11,20 +11,23 @@ import _ from "lodash";
 const dynamoDb = new DynamoDB()
 const sessionIdGenerator = shortUUID(shortUUID.constants.flickrBase58)
 const suffixGenerator = shortUUID(shortUUID.constants.flickrBase58, {consistentLength: false})
-const SessionKey = {session_id: ddb.Type.String} as const;
-const SessionAttributes = {
-    user_id: ddb.Type.String,
-    updated_at: ddb.Type.Number,
-    access_token: ddb.Type.String,
-    id_token: ddb.Type.String,
-    refresh_token: ddb.Type.String,
-    access_token_expires_at: ddb.Type.Number,
-    refresh_token_expires_at: ddb.Type.Number,
-    session_expires_at: ddb.Type.Number,
-    cached_till: ddb.Type.Number
-} as const;
+const SessionKey = DDB.Key({session_id: DDB.String})
+const SessionAttributes = DDB.Item({
+    user_id: DDB.String,
+    updated_at: DDB.Number,
+    access_token: DDB.String,
+    id_token: DDB.String,
+    refresh_token: DDB.String,
+    access_token_expires_at: DDB.Number,
+    refresh_token_expires_at: DDB.Number,
+    session_expires_at: DDB.Number,
+    cached_till: DDB.Number
+});
 
-type SessionsTable = ddb.TableSchema<typeof SessionKey, typeof SessionAttributes>
+type SessionsTable = {
+    key: typeof SessionKey
+    item: typeof SessionAttributes
+}
 
 interface SessionOptions {
     locksTable: string
@@ -34,13 +37,14 @@ interface SessionOptions {
 }
 
 export class SessionRepo {
-    readonly locks: ddb.LockStore;
-    readonly Sessions: SessionsTable
+    readonly locks: DDBLocks.Store;
+    readonly Sessions: DDB.Table<SessionsTable>
 
     constructor(private readonly options: SessionOptions) {
         const {locksTable, sessionTable} = options
-        this.locks = ddb.makeLockStore(locksTable, {dynamoDb})
-        this.Sessions = ddb.tableOld(sessionTable, SessionKey, SessionAttributes)
+        const d = DDB.dynamodb()
+        this.locks = DDBLocks.makeStore(locksTable, {dynamoDb})
+        this.Sessions = d.table(sessionTable, {key: SessionKey, item: SessionAttributes})
     }
 
     /**
@@ -120,17 +124,16 @@ export class SessionRepo {
         return new SessionData(item, false, Sessions, options)
     }
 
-    private async _fetch(sessionId: string, sessionLock?: ddb.LockHandle) {
+    private async _fetch(sessionId: string, sessionLock?: DDBLocks.Handle) {
         const {Sessions, options} = this
         try {
-            const command = ddb.getCommand(Sessions, {key: {session_id: sessionId}});
-            const {Item: attrs} = await dynamoDb.send(command)
+            const {Item: attrs} = await Sessions.get({key: {session_id: sessionId}});
             if (attrs == null) return null
 
-            const accessToken = attrs['access_token'].S;
-            const idToken = attrs['id_token'].S;
-            const userId = attrs['user_id']?.S;
-            const refreshToken = attrs['refresh_token'].S;
+            const accessToken = attrs.access_token;
+            const idToken = attrs.id_token;
+            const userId = attrs.user_id;
+            const refreshToken = attrs.refresh_token;
 
             if (accessToken === undefined) return null
             if (idToken === undefined) return null
@@ -139,15 +142,15 @@ export class SessionRepo {
 
             const item = {
                 sessionId,
-                updatedAt: Number(attrs['updated_at'].N ?? 0),
+                updatedAt: attrs.updated_at,
                 userId,
                 accessToken,
                 idToken,
                 refreshToken,
-                accessExpiresAt: Number(attrs['access_token_expires_at'].N ?? 0),
-                refreshTokenExpiresAt: Number(attrs['refresh_token_expires_at'].N ?? 0),
-                sessionExpiresAt: Number(attrs['session_expires_at']?.N ?? 0),
-                cachedTill: Number(attrs['cached_till'].N ?? 0),
+                accessExpiresAt: attrs.access_token_expires_at,
+                refreshTokenExpiresAt: attrs.refresh_token_expires_at,
+                sessionExpiresAt: attrs.session_expires_at,
+                cachedTill: attrs.cached_till
             }
 
             return new SessionData(item, false, Sessions, options, sessionLock)
@@ -239,9 +242,9 @@ export class SessionData implements SessionItem {
      */
     constructor(item: SessionItem,
                 readonly isRefreshTokenRotated: boolean,
-                readonly Sessions: SessionsTable,
+                readonly Sessions: DDB.Table<SessionsTable>,
                 readonly options: SessionOptions,
-                readonly lock?: ddb.LockHandle) {
+                readonly lock?: DDBLocks.Handle) {
         this.sessionId = item.sessionId
         this.updatedAt = item.updatedAt
         this.userId = item.userId
@@ -332,24 +335,22 @@ export class SessionData implements SessionItem {
      */
     async save() {
         const {Sessions} = this
-        const command = ddb.putCommand(Sessions, {
-            key: {session_id: this.sessionId},
-            item: {
-                updated_at: Date.now(),
-                user_id: this.userId,
-                session_expires_at: this.sessionExpiresAt,
-                refresh_token: this.refreshToken,
-                access_token: this.accessToken,
-                id_token: this.idToken,
-                access_token_expires_at: this.accessExpiresAt,
-                refresh_token_expires_at: this.refreshTokenExpiresAt,
-                cached_till: this.cachedTill,
-            }
-        });
+        const item = {
+            session_id: this.sessionId,
+            updated_at: Date.now(),
+            user_id: this.userId,
+            session_expires_at: this.sessionExpiresAt,
+            refresh_token: this.refreshToken,
+            access_token: this.accessToken,
+            id_token: this.idToken,
+            access_token_expires_at: this.accessExpiresAt,
+            refresh_token_expires_at: this.refreshTokenExpiresAt,
+            cached_till: this.cachedTill,
+        };
         try {
-            await dynamoDb.send(command)
+            await Sessions.put({item});
         } catch (e) {
-            throw errorWithContext(e, "create", {command: command.input})
+            throw errorWithContext(e, "save", {item})
         }
         return this
     }
@@ -376,11 +377,8 @@ export class SessionData implements SessionItem {
      */
     async remove() {
         const {sessionId, Sessions} = this
-        const command = ddb.deleteCommand(Sessions, {
-            key: {session_id: sessionId},
-        });
         try {
-            await dynamoDb.send(command)
+            await Sessions.delete({key: {session_id: sessionId}});
         } catch (e) {
             throw errorWithContext(e, "remove", {sessionId})
         }

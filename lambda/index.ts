@@ -4,6 +4,5 @@
 export * from "./api"
 export * from "./bootstrap"
 export * from "./mapper"
-export {default as dynamodb} from "./dynamodb"
-export * as ddb from "./dynamodb"
+export {DDB, DDBLocks} from "./dynamodb"
 export {default as map} from "./mapper"

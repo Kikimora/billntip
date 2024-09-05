@@ -123,31 +123,36 @@ export class TestGroup {
     }
 
     async createUniqueUser() {
-        const username = `${shortUUIDGenerator.generate()}@mailinator.com`
-        const signupCommand = new AdminCreateUserCommand({
-            UserPoolId: UserPoolId,
-            Username: username,
-            MessageAction: "SUPPRESS",
-            UserAttributes: [
-                {Name: "email_verified", Value: "true"},
-                {Name: "email", Value: username},
-            ]
-        })
-        await cognito.send(signupCommand)
-        const setPasswordCommand = new AdminSetUserPasswordCommand({
-            UserPoolId: UserPoolId,
-            Username: username,
-            Password: password,
-            Permanent: true
-        })
-        await cognito.send(setPasswordCommand)
-        const addToGroup = new AdminAddUserToGroupCommand({
-            UserPoolId: UserPoolId,
-            Username: username,
-            GroupName: this.group.GroupName
-        })
-        await cognito.send(addToGroup)
-        return new TestUser(username)
+        try {
+            const username = `${shortUUIDGenerator.generate()}@mailinator.com`
+            const signupCommand = new AdminCreateUserCommand({
+                UserPoolId: UserPoolId,
+                Username: username,
+                MessageAction: "SUPPRESS",
+                UserAttributes: [
+                    {Name: "email_verified", Value: "true"},
+                    {Name: "email", Value: username},
+                ]
+            })
+            await cognito.send(signupCommand)
+            const setPasswordCommand = new AdminSetUserPasswordCommand({
+                UserPoolId: UserPoolId,
+                Username: username,
+                Password: password,
+                Permanent: true
+            })
+            await cognito.send(setPasswordCommand)
+            const addToGroup = new AdminAddUserToGroupCommand({
+                UserPoolId: UserPoolId,
+                Username: username,
+                GroupName: this.group.GroupName
+            })
+            await cognito.send(addToGroup)
+            return new TestUser(username)
+        } catch (e:any) {
+            console.log(e)
+            throw e
+        }
     }
 }
 

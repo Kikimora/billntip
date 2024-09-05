@@ -156,7 +156,7 @@ export class AppError extends Error implements HttpError {
     }
 }
 
-export function internalError(message: string, details?: object) {
+export function internalError(message: string = "Unexpected error", details?: object) {
     return new AppError(message, {
         ...details,
         statusCode: '500',

@@ -6,7 +6,6 @@ import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import _, {die} from "@app/util";
 import {
     badRequestError,
-    HttpError,
     internalError,
     pipeline,
     requireLambdaAuth,
@@ -65,14 +64,9 @@ export function __init() {
     return Module.exports
 }
 
-declare module "@aws-sdk/client-cognito-identity-provider" {
-    interface UnauthorizedException extends HttpError {
-    }
-}
 Object.defineProperty(Cognito.UnauthorizedException.prototype, 'statusCode', {
     value: '401', writable: false
 })
-
 
 export const handler = pipeline()
     .handleErrors()
@@ -303,7 +297,7 @@ export const handler = pipeline()
                 const user = await userRepo.fetch(username)
                 return user.attributes satisfies Static<typeof req.route.success>
             }
-            case 'POST /user/profile-pic': {
+            case 'POST /user/image': {
                 requireLambdaAuth(req, SessionContextCheck)
                 const upload = uploadBuilder(req.principal.id, {bucket: s3.bucket, prefix: s3.tmpPrefix})
                     .condition(["content-length-range", 1024, 5 * 1024 * 1024])

@@ -2,7 +2,6 @@ import {RouteMap} from "@app/lambda";
 import {Type} from "@sinclair/typebox";
 import {SecurityRequirementObject} from "openapi3-ts/src/model/openapi31";
 import * as schemas from "./schemas";
-import {MemberRole} from "./schemas";
 import {Upload} from "@src/object-store";
 
 export const authenticatedEndpoint: SecurityRequirementObject[] = [{"Cookie": ["admin", "business"]}]
@@ -11,19 +10,22 @@ export const adminEndpoint: SecurityRequirementObject[] = [{"Cookie": ["admin"]}
 const OrgId = {
     orgId: Type.String({
         description: "Organisation id",
-        minLength: 1
+        minLength: 20,
+        maxLength: 36
     })
 } as const;
 const UserId = {
     id: Type.String({
-        format: "uuid",
+        maxLength: 36,
+        minLength: 20,
         description: "User id"
     })
 } as const;
 const LocationId = {
     id: Type.String({
-        format: "uuid",
-        description: "Location id"
+        description: "Location id",
+        minLength: 20,
+        maxLength: 36
     })
 } as const;
 export default {
@@ -38,18 +40,27 @@ export default {
             next: Type.Optional(Type.String()),
             organizations: Type.Array(schemas.PublicOrgInfo)
         }),
-        responses: [401, 403],
+        responses: [400, 401, 403],
         tags: ['Admin']
     },
-
+    "GET /bill/organizations": {
+        operationId: "GET /bill/organizations",
+        security: authenticatedEndpoint,
+        query: {
+            from: Type.Optional(Type.String())
+        },
+        success: Type.Object({
+            next: Type.Optional(Type.String()),
+            organizations: Type.Array(schemas.PublicOrgInfo)
+        }),
+        responses: [400, 401, 403],
+        tags: ['Bill']
+    },
     "GET /bill/{orgId}/members": {
         operationId: "GET /bill/{orgId}/members",
         security: authenticatedEndpoint,
         path: OrgId,
-        query: {
-            from: Type.Optional(Type.String()),
-            location: Type.Optional(Type.String()),
-        },
+        query: schemas.MembersQuery,
         success: Type.Object({
             next: Type.Optional(Type.String()),
             members: Type.Array(schemas.MemberSchema)
@@ -84,7 +95,7 @@ export default {
         security: authenticatedEndpoint,
         path: {...OrgId, ...UserId},
         body: Type.Object({
-            role: MemberRole
+            role: schemas.MemberRole
         }),
         success: schemas.MemberSchema,
         responses: [401, 403, 404],
@@ -133,7 +144,7 @@ export default {
     "POST /bill/{orgId}/locations/image": {
         operationId: "POST /bill/{orgId}/locations/image",
         security: authenticatedEndpoint,
-        path: {...OrgId, ...LocationId},
+        path: {...OrgId},
         success: Upload,
         responses: [401, 403],
         tags: ['Bill']

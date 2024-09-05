@@ -82,8 +82,8 @@ export default {
         security: authenticatedEndpoint,
         tags: ['Attributes']
     },
-    "POST /user/profile-pic": {
-        operationId: "POST /user/profile-pic",
+    "POST /user/image": {
+        operationId: "POST /user/image",
         success: Upload,
         responses: [400, 401, 403],
         security: authenticatedEndpoint,

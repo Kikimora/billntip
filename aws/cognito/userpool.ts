@@ -147,16 +147,17 @@ const manageUsersPolicy = new aws.iam.Policy("cognito-manage-users-policy", {
         .sid("S3Access").allow('s3:GetObject').on(pulumi.interpolate`${bucket.arn}/templates/*`)
         .sid("SSM").allow('ssm:GetParameters').on(pulumi.interpolate`arn:aws:ssm:${region}:${accountId}:parameter/${configFolder}/*`)
         .buildPolicy()
-})
+}, {dependsOn: manageUsersRole})
 
 //There is a strange issue with this attachment. Sometimes it is created, sometimes not.
 //I deploy with `--refresh` it attaches to the role. But then something happens, maybe normal deploy and attachment
 // disappear.
 //I attempt to work around this by adding explicit dependencies to role and policy.
+//https://github.com/pulumi/pulumi-aws/issues/1980
 export const triggersPolicy = new aws.iam.RolePolicyAttachment("cognito-manage-users-policy-attachment", {
     role: manageUsersRole,
     policyArn: manageUsersPolicy.arn
-}, {dependsOn:[manageUsersRole, manageUsersPolicy]})
+}, {dependsOn: manageUsersRole})
 
 const recipients = new aws.cognito.UserGroup("cognito-recipient-group", {
     name: "recipient",

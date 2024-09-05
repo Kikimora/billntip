@@ -16,7 +16,8 @@ const fixture = prepare('Once', {
         })
         const createUser = jest.spyOn(repo, 'create')
         const createLockedUser = jest.spyOn(repo, 'createLocked')
-        return {repo, createUser, createLockedUser}
+        const fetchLockedUser = jest.spyOn(repo, 'fetchLocked')
+        return {repo, createUser, createLockedUser, fetchLockedUser}
     },
 
     async after() {
@@ -25,7 +26,14 @@ const fixture = prepare('Once', {
 })
 
 async function clearUsers() {
-    const {createUser, createLockedUser} = fixture()
+    const {createUser, createLockedUser, fetchLockedUser} = fixture()
+
+    await clearMock(fetchLockedUser, async function (result: { value?: User }) {
+        const {value: user} = result
+        if (user !== undefined) {
+            await user.unlock()
+        }
+    })
 
     const removeUser = async function (result: { value?: User }) {
         const {value: user} = result
@@ -40,7 +48,7 @@ async function clearUsers() {
     await clearMock(createLockedUser, removeUser)
 }
 
-it("Migrate Org Type info -> O", async () => {
+it.skip("Migrate Org Type info -> O", async () => {
     const table = "billntip-dev-data"
     const db = new DynamoDB()
     let next = undefined
@@ -92,7 +100,7 @@ it("Migrate Org Type info -> O", async () => {
     } while (next !== undefined)
 }, 60000)
 
-it("Migrate user type M -> U", async () => {
+it.skip("Migrate user type M -> U", async () => {
     const table = "billntip-dev-data"
     const db = new DynamoDB()
     let next = undefined
@@ -236,6 +244,7 @@ describe("User", () => {
             }))
         })
     })
+
 
     describe("lookupAlias", () => {
 
@@ -553,6 +562,7 @@ describe("User", () => {
             expect(newUser.deleted).toBeFalse()
         })
     })
+
 
     async function verifyAttributes(user: User, expectedAttributes: UserAttribute[]) {
         expect(user.attributes).toContainAllValues(expectedAttributes)

@@ -1,15 +1,2 @@
-
-export {default} from "./commands"
-
-export {Type, SchemaToType, TableSchema, tableOld, TableItem, TableKey, TableAttributes} from "./schema"
-export {get, getCommand, GetCommand} from "./get"
-export {transactGet, TransactGetBuilder} from "./transactGet"
-export {batchGet, BatchGetBuilder, BatchGetItem} from "./batchGet"
-export {query, queryCommand} from "./query"
-export {scan, scanCommand} from "./scan"
-export {put, putCommand} from "./put"
-export {update, updateCommand} from "./update"
-export {transactWrite, TransactWriteBuilder, TransactWriteItem} from "./transactWrite"
-export {batchWrite, BatchWriteBuilder, BatchWriteItem} from "./batchWrite"
-export {deleteItem, deleteCommand} from "./delete"
-export {makeLockStore, createLockStore, LockStore, LockHandle} from "./lock"
+export * as DDB from "./commands"
+export * as DDBLocks from "./lock"

@@ -65,7 +65,7 @@ const data = prepare('Once', {
         await Promise.all([
             admin.delete(true),
             waiter.delete(true),
-            tipUsers.deleteOrg(org.pk),
+            tipUsers.deleteOrg(org.id),
         ])
     }
 })
@@ -87,7 +87,7 @@ const inviteAndRegister = makeFixture({
         const now = Date.now() / 1000
         const inviteFromAdmin = await tipUsers.invite({
             org: {
-                id: org.pk,
+                id: org.id,
                 title: org.title ?? ""
             },
             username: waiter.username,
@@ -105,7 +105,7 @@ const inviteAndRegister = makeFixture({
         const {org, waiter} = data()
         const member = await tipUsers.fetch(waiter.username)
         await Promise.all([
-            member.removeMembership(org.pk),
+            member.removeMembership(org.id),
             member.delete()
         ])
     }
@@ -162,11 +162,11 @@ describe("POST /tip/registration", () => {
                     mangopayUid: expect.toStartWith("usr_"),
                     walletId: expect.toStartWith("wlt_")
                 })
-                const membership = await member.fetchMembership(org.pk)
+                const membership = await member.fetchMembership(org.id)
                 expect(membership).toMatchObject({
                     id: waiter.username,
                     org: {
-                        id: org.pk,
+                        id: org.id,
                         title: "Test"
                     },
                     role: "member",
@@ -219,7 +219,7 @@ describe("POST /tip/registration", () => {
                             profile_pic: undefined,
                         },
                         org: {
-                            id: org.pk,
+                            id: org.id,
                             title: "Test"
                         },
                         role: 'member'
@@ -341,7 +341,9 @@ describe("GET /tip/transactions", () => {
             page: 1,
             per_page: 10,
             wallet: {
-                amount: 10, currency: "EUR"
+                amount: 10,
+                currency: "EUR",
+                pending: 0
             }
         })
     })

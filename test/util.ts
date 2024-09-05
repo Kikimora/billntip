@@ -406,13 +406,23 @@ export function chainFixtures(x: Fixture<any>, ...y: ContextualFixture<any, any>
 
 /**
  * Type inference helper to define fixture which can be instantiated on the context of another fixture. See details [here]{@link ContextualFixture}.
- * @param _ctxFixture - fixture providing context
  * @param fixture - fixture
  */
-export function makeContextualFixture<Ctx, T>(_ctxFixture: Fixture<Ctx>, fixture: ContextualFixture<Ctx, T>): ContextualFixture<Ctx, T>
-export function makeContextualFixture<Ctx, X, Y>(_ctxFixture: ContextualFixture<Ctx, X>, fixture: ContextualFixture<Ctx & X, Y>): ContextualFixture<Ctx & X, Y>
-export function makeContextualFixture(_ctxFixture: any, fixture: any) {
-    return fixture
+export function makeContextualFixture<Ctx, T>(fixture: ContextualFixture<Ctx, T>): ContextualFixture<Ctx, T>
+/**
+ * Type inference helper to define fixture which can be instantiated on the context of another fixture. See details [here]{@link ContextualFixture}.
+ * @param context - fixture providing context
+ * @param fixture - fixture
+ */
+export function makeContextualFixture<Ctx, T>(context: Fixture<Ctx>, fixture: ContextualFixture<Ctx, T>): ContextualFixture<Ctx, T>
+/**
+ * Type inference helper to define fixture which can be instantiated on the context of another fixture. See details [here]{@link ContextualFixture}.
+ * @param context - fixture providing context
+ * @param fixture - fixture
+ */
+export function makeContextualFixture<Ctx, X, Y>(context: ContextualFixture<Ctx, X>, fixture: ContextualFixture<Ctx & X, Y>): ContextualFixture<Ctx & X, Y>
+export function makeContextualFixture(_ctxFixture?: any, fixture?: any) {
+    return fixture ?? _ctxFixture
 }
 
 /**

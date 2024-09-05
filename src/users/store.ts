@@ -1,7 +1,6 @@
-import {ddb} from "@app/lambda";
+import {DDB} from "@app/lambda";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {UserAttribute} from "@src/users/attributes";
-import {unmarshall} from "@aws-sdk/util-dynamodb";
 import * as Schemas from "@src/users/schemas";
 
 
@@ -14,68 +13,71 @@ import * as Schemas from "@src/users/schemas";
 // pk         sk        attributes
 // name       value     username
 
-const AliasKey = {
+const AliasKey = DDB.Key({
     /**
      * Alias key, e.g. `alias#email@example.com`
      */
-    pk: ddb.Type.String as `AL#${string}`,
+    pk: DDB.TemplateLiteral([DDB.Literal("AL#"), DDB.String]),
     /**
      * Constant 'AL'
      */
-    sk: ddb.Type.String as 'AL'
-} as const;
-
-const AliasAttributes = {
+    sk: DDB.Literal('AL')
+})
+const AliasAttribute = DDB.Item({
     /**
      * Username corresponding to the alias.
      */
-    username: ddb.Type.String,
+    username: DDB.String,
     /**
      * Alias attribute name
      */
-    name: ddb.Type.String,
+    name: DDB.String,
     /**
      * Whenever alias verified or not.
      */
-    verified: ddb.Type.Boolean
-} as const;
-type AliasTable = ddb.TableSchema<{pk: `AL#${string}`, sk:`AL`}, typeof AliasAttributes>
-type Alias = ddb.TableItem<AliasTable>
+    verified: DDB.Boolean
+})
+const AliasSchema = {
+    key: AliasKey,
+    item: AliasAttribute
+} as const
+type AliasTable = DDB.Table<typeof AliasSchema>
+type Alias = DDB.ItemType<AliasTable>
 
 /**
  * Aliases view maps aliases to Cognito usernames.
  */
-const AttributeKey = {
+const AttributeKey = DDB.Key({
     /**
      * Username as provided by the user.
      */
-    pk: ddb.Type.String as `U#${string}`,
+    pk: DDB.TemplateLiteral([DDB.Literal('U#'), DDB.String]),
     /**
      * Attribute or user record discriminator.
      */
-    sk: ddb.Type.String as `A#${string}`
-};
-const Attributes = {
+    sk: DDB.TemplateLiteral([DDB.Literal('A#'), DDB.String])
+})
+const Attribute = DDB.Item({
     /**
      * Attribute name (valid for sk = 'A#*').
      */
-    name: ddb.Type.String,
+    name: DDB.String,
     /**
      * Attribute or verified alias value (valid for sk = 'A#*').
      */
-    value: ddb.Type.String,
+    value: DDB.Optional(DDB.String),
     /**
      * Unverified alias value (valid for sk = 'A#*').
      */
-    unverifiedValue: ddb.Type.String,
+    unverifiedValue: DDB.Optional(DDB.String),
     /**
      * Indicates whenever attribute is an alias (valid for sk = 'A#*').
      */
-    isAlias: ddb.Type.Boolean,
-};
-
-type AttributesTable = ddb.TableSchema<typeof AttributeKey, typeof Attributes>
-type Attribute = ddb.TableItem<AttributesTable>
+    isAlias: DDB.Optional(DDB.Boolean)
+})
+const AttributeSchema = {key: AttributeKey, item: Attribute}
+type AttributesTable = DDB.Table<typeof AttributeSchema>
+type Attribute = DDB.ItemType<AttributesTable>
 
 function isAttribute(record: Record<string, any>): record is Attribute {
     return record.sk.startsWith('A#')
@@ -84,43 +86,53 @@ function isAttribute(record: Record<string, any>): record is Attribute {
 /**
  * Aliases view maps aliases to Cognito usernames.
  */
-const UserKey = {
+const UserKey = DDB.Key({
     /**
      * Username as provided by the user.
      */
-    pk: ddb.Type.String as `U#${string}`,
+    pk: DDB.TemplateLiteral([DDB.Literal('U#'), DDB.String]),
     /**
      * Attribute or user record discriminator.
      */
-    sk: ddb.Type.String as `U`
-};
-const UserAttributes = {
+    sk: DDB.Literal('U')
+})
+const User = DDB.Item({
     /**
      * Map of all verified attributes.
      */
-    attributes: ddb.Type.Map(ddb.Type.String),
+    attributes: DDB.Map(DDB.String),
     /**
      * Soft delete flag (valid for sk = 'U').
      */
-    deleted: ddb.Type.Boolean
-};
+    deleted: DDB.Boolean
+})
+const UsersSchema = {key: UserKey, item: User}
+type UsersTable = DDB.Table<typeof UsersSchema>
 
-type UsersTable = ddb.TableSchema<typeof UserKey, typeof UserAttributes>
-export type UserItem = ddb.TableAttributes<UsersTable> & { pk: string }
+export interface UserItem extends DDB.NonKeyType<UsersTable> {
+    id: string
+}
 
 function isUser(record: Record<string, any>): record is UserItem {
     return record.sk === 'U'
 }
 
-const AttributeIndexKey = {
-    name: ddb.Type.String,
-    value: ddb.Type.String,
+const AttributeIndexKey = DDB.Key({
+    name: DDB.String,
+    value: DDB.String,
+})
+const AttributeIndexValue = DDB.Item({
+    pk: DDB.TemplateLiteral([DDB.Literal('U#'), DDB.String])
+})
+const AttributeIndexSchema = {key: AttributeIndexKey, item: AttributeIndexValue}
+type AttributesIndex = DDB.Table<typeof AttributeIndexSchema>
+type AttributeIndexValue = DDB.ItemType<AttributesTable>
+
+const Schema = {
+    key: DDB.Key({pk: DDB.String, sk: DDB.String}),
+    item: DDB.Union([User, Attribute, AliasAttribute])
 }
-const AttributeIndexValue = {
-    pk: ddb.Type.String as `U#${string}`
-}
-type AttributesIndex = ddb.TableSchema<{name:string, value:string}, typeof AttributeIndexValue>
-type AttributeIndexValue = ddb.TableItem<AttributesTable>
+type UsersData = DDB.Table<typeof Schema>
 
 /**
  * User attribute storage item.
@@ -166,45 +178,33 @@ export interface UserStoreOptions {
 class UserStore {
     private readonly aliasAttributes: Set<string>;
     readonly maxAttributes: number;
-    readonly db: DynamoDB
-    readonly aliases: AliasTable
-    readonly attributes: AttributesTable
-    readonly users: UsersTable
-    readonly attributesIndex: AttributesIndex
+    readonly db: DDB.DynamoDB
+    readonly data: UsersData
 
     constructor(options: UserStoreOptions) {
-        this.db = options.db ?? new DynamoDB()
+        this.db = DDB.dynamodb({db: options.db})
         this.aliasAttributes = new Set(options.aliasAttributes ?? DefaultAliasAttributes)
         this.aliasAttributes.add('username')
         this.maxAttributes = options.maxAttributes ?? Schemas.MaxAttributes
 
-        this.aliases = ddb.tableOld(options.table, AliasKey, AliasAttributes)
-        this.attributes = ddb.tableOld(options.table, AttributeKey, Attributes)
-        this.attributesIndex = ddb.tableOld(options.table, AttributeIndexKey, AttributeIndexValue)
-        this.users = ddb.tableOld(options.table, UserKey, UserAttributes)
+        this.data = this.db.table(options.table, Schema)
     }
 
-    async lookupAlias(usernameOrAlias: string) {
-        const aliasItem = ddb.get(this.aliases, {
-            key: aliasKey(usernameOrAlias)
-        });
-        const {Item: userItem} = await this.db.getItem(aliasItem)
+    async lookupAlias(usernameOrAlias: string): Promise<Alias | undefined> {
+        const Alias = this.data.narrow(AliasSchema)
+        const {Item: userItem} = await Alias.get({key: aliasKey(usernameOrAlias)})
         if (userItem === undefined) {
             return undefined
         }
-        return unmarshall(userItem) as Alias
+        return userItem
     }
 
     async fetch(username: string) {
-        const {db} = this
+        const {data} = this
         username = `U#` + username
-        const query = ddb.query(this.attributes, {
-            values: {username},
+        const {Items: items} = await data.query({
             keyCondition: ({key, ref}) => `${key.pk} = ${ref('username')}`
-        })
-
-        const {Items: items} = await db.query(query)
-        if (items === undefined) return undefined
+        }, {username})
 
         const attributes: UserAttributeItem[] = []
         let deleted = false
@@ -222,8 +222,7 @@ class UserStore {
             }
         }
 
-        for (const dbItem of items) {
-            const item = unmarshall(dbItem)
+        for (const item of items) {
             if (isAttribute(item)) {
                 attributes.push(makeAttribute(item))
             } else if (isUser(item)) {
@@ -235,18 +234,18 @@ class UserStore {
     }
 
     async batchFetch(usernames: string[], options?: BatchFetchOptions): Promise<UserItem[]> {
+        const {data} = this
+        const User = data.narrow(UsersSchema)
         const deletedOk = options?.fetchDeleted ?? false
-        const batch = ddb.batchGet().add(this.users, {
+        const {Responses: users} = await User.batchGet({
             keys: usernames.map(userKey),
         })
-        const {Responses: response} = await this.db.batchGetItem(batch.input())
-        if (response === undefined) return []
-
-        const users = response[this.users.name]
-        return users.map(x => unmarshall(x)).map(x => ({
-            ...x,
-            pk: x.pk.substring(2/*U#.length*/)
-        }) as UserItem).filter(x => !x.deleted || deletedOk)
+        return users.filter(x => !x.deleted || deletedOk).map(function (u) {
+            return {
+                ...u,
+                id:u.pk.substring(2/*U#.length*/)
+            }
+        })
     }
 
     isAliasAttribute(attribute: UserAttribute | string): boolean {
@@ -257,7 +256,7 @@ class UserStore {
     }
 
     makeTransactBuilder(username: string) {
-        return new UserTxBuilder(username, this.aliases, this.attributes, this.users, this.db)
+        return new UserTxBuilder(username, this.data, this.db)
     }
 }
 
@@ -272,36 +271,39 @@ export interface BatchFetchOptions {
 }
 
 class UserTxBuilder {
-    private readonly tx = ddb.transactWrite()
+    private readonly tx: DDB.TransactWriteBuilder
 
     constructor(private readonly username: string,
-                private readonly aliases: AliasTable,
-                private readonly attributes: AttributesTable,
-                private readonly users: UsersTable,
-                private readonly db: DynamoDB) {
+                private readonly data: UsersData,
+                db: DDB.DynamoDB) {
+        this.tx = db.transactWrite()
     }
 
     updateAttribute(attr: UserAttributeItem) {
-        const {username, tx} = this
-        tx.add(this.attributes, updateAttribute(username, attr))
+        const {username, tx, data} = this
+        const Attribute = data.narrow(AttributeSchema)
+        updateAttribute(Attribute.with(tx), username, attr)
     }
 
     deleteAttribute(attr: UserAttributeItem) {
-        const {username, tx} = this
-        tx.add(this.attributes, deleteAttribute(username, attr.name))
+        const {username, tx, data} = this
+        const Attribute = data.narrow(AttributeSchema)
+        deleteAttribute(Attribute.with(tx), username, attr.name)
     }
 
     /**
      * Create or update alias record, does nothing if attribute is not an alias.
      */
     refreshAliasRecord(attr: UserAttributeItem, alias: 'verified' | 'unverified' | 'both' = 'both') {
-        const {username, tx} = this
+        const {username, tx, data} = this
         if (attr.isAlias) {
+            const Aliases = data.narrow(AliasSchema)
+            const tableTx = Aliases.with(tx)
             if (attr.value !== undefined && (alias === 'verified' || alias === 'both')) {
-                tx.add(this.aliases, refreshAliasRecord(username, attr.name, attr.value, true))
+                refreshAliasRecord(tableTx, username, attr.name, attr.value, true)
             }
             if (attr.unverifiedValue !== undefined && (alias === 'unverified' || alias === 'both')) {
-                tx.add(this.aliases, refreshAliasRecord(username, attr.name, attr.unverifiedValue, false))
+                refreshAliasRecord(tableTx, username, attr.name, attr.unverifiedValue, false)
             }
         }
     }
@@ -310,48 +312,54 @@ class UserTxBuilder {
      * Delete alias record, does nothing if attribute is not an alias.
      */
     deleteAliasRecord(attr: UserAttributeItem, alias: 'verified' | 'unverified' | 'both' = 'both') {
-        const {username, tx} = this
+        const {username, tx, data} = this
         if (attr.isAlias) {
+            const Aliases = data.narrow(AliasSchema)
+            const tableTx = Aliases.with(tx)
             if (attr.value !== undefined && (alias === 'verified' || alias === 'both')) {
-                tx.add(this.aliases, dropAliasRecord(username, attr.value))
+                dropAliasRecord(tableTx, username, attr.value)
             }
             if (attr.unverifiedValue !== undefined && (alias === 'unverified' || alias === 'both')) {
-                tx.add(this.aliases, dropAliasRecord(username, attr.unverifiedValue))
+                dropAliasRecord(tableTx, username, attr.unverifiedValue)
             }
         }
     }
 
     softDeleteAttribute(attr: UserAttributeItem) {
-        const {tx, username} = this
+        const {username, tx, data} = this
+        const Attribute = data.narrow(AttributeSchema)
         if (attr.isAlias) {
-            tx.add(this.attributes, updateAttribute(username, {
+            updateAttribute(Attribute.with(tx), username, {
                 ...attr,
                 value: undefined,
                 unverifiedValue: attr.value
-            }))
+            })
         }
     }
 
     createUser(attributes: Record<string, string>) {
-        const {tx, username} = this
-        tx.add(this.users, createUser(username, attributes))
+        const {username, tx, data} = this
+        const Users = data.narrow(UsersSchema)
+        createUser(Users.with(tx), username, attributes)
     }
 
     deleteUser() {
-        const {tx, username} = this
-        tx.add(this.users, deleteUser(username))
+        const {username, tx, data} = this
+        const Users = data.narrow(UsersSchema)
+        deleteUser(Users.with(tx), username)
     }
 
     updateUser({deleted, attributes}: { deleted?: boolean, attributes?: Record<string, string> }) {
-        const {tx, username} = this
-        tx.add(this.users, updateUser(username, deleted, attributes))
+        const {username, tx, data} = this
+        const Users = data.narrow(UsersSchema)
+        updateUser(Users.with(tx), username, deleted, attributes)
     }
 
     async run() {
-        const {tx, db} = this
-        const input = tx.input();
-        if ((input.TransactItems?.length ?? 0) > 0)
-            await db.transactWriteItems(input)
+        const {tx} = this
+        if (!tx.isEmpty) {
+            await tx.exec();
+        }
     }
 }
 
@@ -360,11 +368,10 @@ function aliasKey(username: string) {
     return {pk: `AL#${username}`, sk: 'AL'} as const
 }
 
-function refreshAliasRecord(username: string, name: string, alias: string, verified: boolean): ddb.TransactWriteItem<AliasTable> {
-    return {
+function refreshAliasRecord(tx: DDB.TransactWrite<AliasTable>, username: string, name: string, alias: string, verified: boolean) {
+    return tx.add({
         action: "update",
         key: aliasKey(alias),
-        values: {username, verified, name},
         expression: ({attr, ref}) => ({
             set: {
                 [attr.username]: ref('username'),
@@ -375,16 +382,16 @@ function refreshAliasRecord(username: string, name: string, alias: string, verif
         condition: ({key, attr, ref}) =>
             `attribute_not_exists(${key.pk}) OR (${attr.username} = ${ref('username')} AND ${attr.name} = ${ref('name')})`,
         returnOnConditionFailure: "ALL_OLD"
-    }
+    }, {username, verified, name})
 }
 
-function dropAliasRecord(username: string, alias: string): ddb.TransactWriteItem<AliasTable> {
-    return {
+function dropAliasRecord(tx: DDB.TransactWrite<AliasTable>, username: string, alias: string) {
+    return tx.add({
         action: "delete",
         key: aliasKey(alias),
         condition: ({key, attr, ref}) => `attribute_not_exists(${key.pk}) OR ${attr.username} = ${ref.val(username)}`,
         returnOnConditionFailure: "ALL_OLD"
-    }
+    })
 }
 
 function attributeKey(username: string, attribute: string) {
@@ -395,11 +402,10 @@ function userKey(username: string) {
     return {pk: `U#${username}`, sk: `U`} as const
 }
 
-function createUser(username: string, attributes: Record<string, string>): ddb.TransactWriteItem<UsersTable> {
-    return {
+function createUser(tx: DDB.TransactWrite<UsersTable>, username: string, attributes: Record<string, string>) {
+    return tx.add({
         action: "update",
         key: userKey(username),
-        values: {false: false, attributes},
         expression: ({attr, ref}) => ({
             set: {
                 [attr.deleted]: ref('false'),
@@ -407,14 +413,13 @@ function createUser(username: string, attributes: Record<string, string>): ddb.T
             },
         }),
         condition: ({key}) => `attribute_not_exists(${key.pk}) AND attribute_not_exists(${key.sk})`
-    }
+    }, {false: false, attributes})
 }
 
-function updateUser(username: string, deleted?: boolean, attributes?: Record<string, string>): ddb.TransactWriteItem<UsersTable> {
-    return {
+function updateUser(tx: DDB.TransactWrite<UsersTable>, username: string, deleted?: boolean, attributes?: Record<string, string>) {
+    return tx.add({
         action: "update",
         key: userKey(username),
-        values: {deleted, attributes},
         expression({attr, ref}) {
             const update: Record<string, string> = {}
             if (deleted !== undefined) {
@@ -428,29 +433,29 @@ function updateUser(username: string, deleted?: boolean, attributes?: Record<str
             })
         },
         condition: ({key}) => `attribute_exists(${key.pk}) AND attribute_exists(${key.sk})`
-    }
+    }, {deleted, attributes})
 }
 
-function deleteUser(username: string): ddb.TransactWriteItem<UsersTable> {
-    return {
+function deleteUser(tx: DDB.TransactWrite<UsersTable>, username: string) {
+    return tx.add({
         action: "delete",
         key: userKey(username)
-    }
+    })
 }
 
-function deleteAttribute(username: string, attribute: string): ddb.TransactWriteItem<AttributesTable> {
-    return {
+function deleteAttribute(tx: DDB.TransactWrite<AttributesTable>, username: string, attribute: string) {
+    return tx.add({
         action: "delete",
         key: attributeKey(username, attribute)
-    }
+    })
 }
 
-function updateAttribute(username: string, attribute: UserAttributeItem): ddb.TransactWriteItem<AttributesTable> {
-    return {
+function updateAttribute(tx: DDB.TransactWrite<AttributesTable>, username: string, attribute: UserAttributeItem) {
+    return tx.add({
         action: "put",
-        key: attributeKey(username, attribute.name),
-        item: attribute
-    }
+        item: {...attributeKey(username, attribute.name), ...attribute}
+    })
 }
+
 //https://youtrack.jetbrains.com/issue/WEB-68793
 export default UserStore

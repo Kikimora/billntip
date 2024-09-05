@@ -1,22 +1,20 @@
-import {ConditionalCheckFailedException, CreateTableCommand, DynamoDB} from "@aws-sdk/client-dynamodb";
-import {unmarshall} from "@aws-sdk/util-dynamodb";
+import {CreateTableCommand, DynamoDB} from "@aws-sdk/client-dynamodb";
 import {Just, repeat, retry} from "@app/util";
 import {Tracer, errorWithContext} from "@app/diagnostics";
 import {internalError} from "@app/lambda";
-import {Type, schema} from "./schema";
-import dynamodb, {DDBTable} from "./commands";
+import * as DDB from "./commands";
 
 const tracer = new Tracer("dynamodb_locks")
 
 /**
  * Interface to a distributed lock store.
  */
-export interface LockStore {
+export interface Store {
 
     /**
      * Lock table
      */
-    readonly table: DDBTable<LocksTable>
+    readonly table: DDB.Table<LocksTable>
 
     /**
      * Acquire a lock with a given id. If lock is taken then wait and retry given number of times.
@@ -24,7 +22,7 @@ export interface LockStore {
      * @param owner - lock owner, this value is used for information purposes and debug, good idea to put host, lambda invocation id or request id there.
      * @param options - lock options such as lease duration and heartbeat interval.
      */
-    lock(id: string, owner: string, options?: LockOptions): Promise<LockHandle>
+    lock(id: string, owner: string, options?: LockOptions): Promise<Handle>
 
     /**
      * Try to acquire a lock once, fail if lock is taken.
@@ -32,7 +30,7 @@ export interface LockStore {
      * @param owner - lock owner, this value is used for information purposes and debug, good idea to put host, lambda invocation id or request id there.
      * @param options - lock options such as lease duration and heartbeat interval.
      */
-    tryLock(id: string, owner: string, options?: LockOptions): Promise<LockHandle>
+    tryLock(id: string, owner: string, options?: LockOptions): Promise<Handle>
 
     /**
      * Loads lock from store
@@ -44,7 +42,7 @@ export interface LockStore {
 /**
  * A handle to manage a lock.
  */
-export interface LockHandle {
+export interface Handle {
     /**
      * Remove lock
      */
@@ -87,7 +85,7 @@ export type StoreOptions = {
 }
 
 /**
- * Lock operation options (see {@link LockStore.lock})
+ * Lock operation options (see {@link Store.lock})
  */
 export type LockOptions = {
     /**
@@ -120,37 +118,37 @@ type Lock = Readonly<{
      */
     owner: string
     /**
-     * Lease duration in milliseconds. The lease can be extended for another {@link leaseDuration} by {@link LockHandle.bump}
+     * Lease duration in milliseconds. The lease can be extended for another {@link leaseDuration} by {@link Handle.bump}
      */
     leaseDuration: number,
 }>
 
 type TryLockResult = Just<Lock, "Success"> | Just<Lock, "Failure">
 
-const LockKey = {
-    pk: Type.String
-} as const
+const LockKey = DDB.Key({
+    pk: DDB.String
+})
 
-const LockAttributes = {
-    version: Type.Number,
-    owner: Type.String,
-    lease_ms: Type.Number,
-    ttl: Type.Number
-} as const
+const LockAttributes = DDB.Item({
+    version: DDB.Number,
+    owner: DDB.String,
+    lease_ms: DDB.Number,
+    ttl: DDB.Number
+})
 
 const LocksTable = {
     key: LockKey,
-    attributes: LockAttributes
+    item: LockAttributes
 } as const
 
-type LocksTable = (typeof LocksTable) & { name: string }
+type LocksTable = (typeof LocksTable)
 
 /**
  * Create DynamoDb table for lock storage.
  * @param tableName - DynamoDb table name
  * @param storeOptions - store options
  */
-export async function createLockStore(tableName: string, storeOptions?: StoreOptions) {
+export async function createStore(tableName: string, storeOptions?: StoreOptions) {
     const dynamoDb = storeOptions?.dynamoDb ?? new DynamoDB()
     await dynamoDb.send(new CreateTableCommand({
         TableName: tableName,
@@ -173,26 +171,24 @@ class LockError extends Error {
  * @param tableName - lock table name
  * @param storeOptions - store options
  */
-export function makeLockStore(tableName: string, storeOptions?: StoreOptions): LockStore {
+export function makeStore(tableName: string, storeOptions?: StoreOptions): Store {
 
     const dynamoDb = storeOptions?.dynamoDb ?? new DynamoDB()
-    const d = dynamodb({db: dynamoDb})
-    const LocksTable = d.table({
-        name: tableName,
+    const d = DDB.dynamodb({db: dynamoDb})
+    const LocksTable = d.table(tableName, {
         key: LockKey,
-        attributes: LockAttributes
+        item: LockAttributes
     })
-
     const locker = new Locker(LocksTable)
 
     return {
         table: LocksTable,
 
-        tryLock: function (id: string, owner: string, options?: TryLockOptions): Promise<LockHandle> {
+        tryLock: function (id: string, owner: string, options?: TryLockOptions): Promise<Handle> {
             return this.lock(id, owner, {...options, retries: 1})
         },
 
-        async lock(id: string, owner: string, options?: LockOptions): Promise<LockHandle> {
+        async lock(id: string, owner: string, options?: LockOptions): Promise<Handle> {
             const leaseDuration = options?.leaseDuration ?? 1000
             if (leaseDuration < 100) throw new Error("leaseDuration cannot be less than 100")
             const retries = options?.retries ?? 3
@@ -215,13 +211,13 @@ export function makeLockStore(tableName: string, storeOptions?: StoreOptions): L
                 return undefined
             }
         }
-    } as LockStore
+    } as Store
 }
 
 /**
  * Keeps lock state, uses {@link Locker} to acquire, maintain and release the lock.
  */
-class LockImpl implements LockHandle {
+class LockImpl implements Handle {
     private _otherLock?: Lock
     private heartbeatTask: Promise<Lock>
     private _isLocked: boolean
@@ -294,7 +290,7 @@ class LockImpl implements LockHandle {
         //2. Wait until the most recent bump finishes
         await this.heartbeatTask
         //3. Delete lock ignoring any errors
-        const lock = clean ? await locker.deleteLock(this._lock).catch() : this._lock
+        const lock = clean ? await locker.deleteLock(this._lock).catch() ?? this._lock : this._lock
         //4. finally, record a trace
         tracer.info("unlocked", this._lock)
         return this._lock.version === lock.version
@@ -344,97 +340,82 @@ function lockExpiration(lock: Lock) {
  * Provides low level lock operations.
  */
 class Locker {
-    constructor(private readonly locksTable: DDBTable<LocksTable>) {
+    constructor(private readonly locksTable: DDB.Table<LocksTable>) {
     }
 
     async tryLock(lock: Lock): Promise<TryLockResult> {
         const {locksTable} = this
         const expiresAt = lockExpiration(lock)
-        let lockItem: schema.ItemType<LocksTable> | undefined
-        try {
-            const response = await locksTable.update({pk: lock.pk}, {
-                return: "ALL_NEW",
-                values: {...lock, expiresAt},
-                returnOnConditionFailure: "ALL_OLD",
-                expression: ({attr, ref}) => ({
-                    set: {
-                        [attr.version]: ref('version'),
-                        [attr.lease_ms]: ref('leaseDuration'),
-                        [attr.ttl]: ref('expiresAt'),
-                        [attr.owner]: ref('owner'),
-                    }
-                }),
-                condition: ({key, attr, ref}) =>
-                    `attribute_not_exists(${key.pk}) OR ${attr.version} < ${ref('version')}`
-            })
-            lockItem = response.Attributes
-        } catch (e) {
-            if (!(e instanceof ConditionalCheckFailedException)) {
-                throw e
+        const response = await locksTable.update({
+            key: {pk: lock.pk},
+            return: "ALL_NEW",
+            returnOnConditionFailure: "ALL_OLD",
+            expression: ({attr, ref}) => ({
+                set: {
+                    [attr.version]: ref('version'),
+                    [attr.lease_ms]: ref('leaseDuration'),
+                    [attr.ttl]: ref('expiresAt'),
+                    [attr.owner]: ref('owner'),
+                }
+            }),
+            condition: ({key, attr, ref}) =>
+                `attribute_not_exists(${key.pk}) OR ${attr.version} < ${ref('version')}`
+        }, {...lock, expiresAt})
+        if (!response.ConditionCheckFailed) {
+            const lockItem = response.Attributes
+            return {type: "Success", value: fromDynamoDbTable(lockItem)}
+        } else {
+            const oldLock = response.FailedAttributes
+            if (oldLock === undefined) {
+                throw internalError("Unexpected error while acquiring lock").withContext("tryLock", {lock})
             }
-            const attributes = e.Item
-            if (attributes !== undefined) {
-                const dynamoDbLock = fromDynamoDb(unmarshall(attributes));
-                return {type: "Failure", value: dynamoDbLock}
-            }
-        }
-
-        if (lockItem === undefined) throw unexpectedError()
-        if (Object.values(lockItem).some(el => el === undefined)) throw unexpectedError()
-        return {type: "Success", value: fromDynamoDb(lockItem)}
-
-        function unexpectedError() {
-            return internalError("Unexpected error while acquiring lock").withContext("tryLock", {lock, lockItem})
+            return {type: "Failure", value: fromDynamoDbTable(oldLock)}
         }
     }
 
     async load(pk: string): Promise<Lock | undefined> {
-        const lockItem = await this.locksTable.get({pk})
+        const {Item: lockItem} = await this.locksTable.get({key: {pk}})
         if (lockItem === undefined) return undefined
-        return fromDynamoDb(lockItem)
+        return fromDynamoDbTable(lockItem)
     }
 
     async bump(lock: Lock): Promise<Lock> {
         const {pk, version} = lock
         const expiresAt = lockExpiration(lock)
-        const {Attributes:lockItem} = await this.locksTable.update({pk}, {
-            values: {expiresAt, version, one: 1},
+        const response = await this.locksTable.update({
+            key: {pk},
             return: "ALL_NEW",
             expression: ({attr, ref}) => `SET 
                             ${attr.version} = ${attr.version} + ${ref('one')},
                             ${attr.ttl} = ${ref('expiresAt')}`,
             condition: ({key, attr, ref}) =>
                 `attribute_exists(${key.pk}) AND ${attr.version} = ${ref('version')}`
-        })
-        if (lockItem === undefined) throw new Error("Unexpected condition while bumping a lock version")
-        return fromDynamoDb(lockItem)
+        }, {expiresAt, version, one: 1})
+        if (response.ConditionCheckFailed)
+            throw internalError().withContext("bump", {lock, conflictingLock: response.FailedAttributes})
+        return fromDynamoDbTable(response.Attributes)
     }
 
     async deleteLock(lock: Lock) {
         const {pk, version} = lock
-        const {Attributes: lockItem} = await this.locksTable.delete({pk}, {
-            values: {version},
+        const response = await this.locksTable.delete({
+            key: {pk},
             return: "ALL_OLD",
             condition: ({key, attr, ref}) =>
                 `attribute_exists(${key.pk}) AND ${attr.version} = ${ref('version')}`
-        })
+        }, {version})
+        if (response.ConditionCheckFailed)
+            throw internalError("Cannot remove lock. It is either not found or versions do not match")
+                .withContext("deleteLock", {lock, conflictingLock: response.FailedAttributes})
+        const lockItem = response.Attributes;
         if (lockItem === undefined) {
-            throw new Error("Unexpected condition while removing a lock")
+            throw new Error("Lock not found")
         }
-        return fromDynamoDb(lockItem)
+        return fromDynamoDbTable(lockItem)
     }
 }
 
-function fromDynamoDb(lock: Record<string, any>): Lock {
-    return {
-        pk: lock.pk,
-        version: lock.version,
-        owner: lock.owner,
-        leaseDuration: lock.lease_ms
-    }
-}
-
-function fromDynamoDbTable(lock: Required<schema.ItemType<LocksTable>>): Lock {
+function fromDynamoDbTable(lock: DDB.ItemType<DDB.Table<LocksTable>>): Lock {
     return {
         pk: lock.pk,
         version: lock.version,

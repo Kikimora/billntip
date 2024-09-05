@@ -1,9 +1,10 @@
-import {makeTestHandler, prepare, cognito, clearMock, MockResult} from "@app/test";
-import {__init, handler} from "@src/billntip/bill";
+import _ from "lodash";
+import {makeTestHandler, prepare, cognito, clearMock, MockResult, chainFixtures} from "@app/test";
 import {User} from "@src/users/user";
 import {uuid} from "short-uuid";
 import {TestSessionOptions} from "@app/test/cognito";
-import _ from "lodash";
+import UploadsFixture from "@src/images/uploads.fixture";
+import {__init, handler} from "./bill";
 
 export const locations = {
     getAll: makeTestHandler(handler, function () {
@@ -26,6 +27,15 @@ export const locations = {
         const {userSession} = init()
         return {
             routeKey: 'POST /bill/{orgId}/locations',
+            headers: {'content-type': 'application/json'},
+            authorizer: userSession('adminUser')
+        }
+    })),
+
+    image: jest.fn(makeTestHandler(handler, function () {
+        const {userSession} = init()
+        return {
+            routeKey: 'POST /bill/{orgId}/locations/image',
             headers: {'content-type': 'application/json'},
             authorizer: userSession('adminUser')
         }
@@ -72,39 +82,39 @@ export const locations = {
         for (const {value} of locations.patch.mock.results) {
             if (value === undefined) continue
             const userLocation = await value
-            //Skip HTTP errors (they all have statusCode and body properties while responses are plain objects.
+            //Skip HTTP errors (they all have statusCode and body properties while responses are plain objects).
             if ('statusCode' in userLocation) continue
-            await store.modifyUserLocation(org.pk, userLocation.id, userLocation.user_id, 'delete')
+            await store.modifyUserLocation(org.id, userLocation.id, userLocation.user_id, 'delete')
         }
         locations.patch.mockClear()
     }
 }
 
-const init = prepare('Once', {
-    async before() {
-        const {store, userRepo} = await __init()
+const env = chainFixtures(__init, UploadsFixture)
+const init = prepare('Once', chainFixtures(env, {
+    async before({store, profileRepo, uploadFile, makeUpload}) {
 
-        const createUser = jest.spyOn(userRepo, 'create')
-        const createLockedUser = jest.spyOn(userRepo, 'createLocked')
+        const createUser = jest.spyOn(profileRepo, 'create')
+        const createLockedUser = jest.spyOn(profileRepo, 'createLocked')
 
         const normalUser = `normal-user-${uuid()}`
-        await userRepo.create(normalUser, "trusted", [
+        await profileRepo.create(normalUser, "trusted", [
             {name: "email", value: `${normalUser}@example.com`, verified: true}
         ])
         const adminUser = `admin-user-${uuid()}`
-        await userRepo.create(adminUser, "trusted", [
+        await profileRepo.create(adminUser, "trusted", [
             {name: "email", value: `${adminUser}@example.com`, verified: true},
             {name: "first_name", value: "Super", verified: true},
             {name: "last_name", value: "Admin", verified: true}
         ])
         const businessAdminUser = `business-admin-user-${uuid()}`
-        await userRepo.create(businessAdminUser, "trusted", [
+        await profileRepo.create(businessAdminUser, "trusted", [
             {name: "email", value: `${businessAdminUser}@example.com`, verified: true},
             {name: "first_name", value: "Business", verified: true},
             {name: "last_name", value: "Admin", verified: true}
         ])
         const businessUser = `business-user-${uuid()}`
-        await userRepo.create(businessUser, "trusted", [
+        await profileRepo.create(businessUser, "trusted", [
             {name: "email", value: `${businessUser}@example.com`, verified: true},
             {name: "first_name", value: "Business", verified: true},
             {name: "last_name", value: "User", verified: true}
@@ -119,13 +129,13 @@ const init = prepare('Once', {
         await store.inviteToOrg({
             invited_by: adminUser,
             org: {
-                id: org.pk,
+                id: org.id,
                 title: org.title
             },
             role: "admin",
             username: businessAdminUser
         })
-        const acceptInvite = await store.acceptInvite(businessAdminUser, org.pk)
+        const acceptInvite = await store.acceptInvite(businessAdminUser, org.id)
 
         function userSession(user: 'normalUser' | 'businessAdminUser' | 'adminUser' | 'businessUser', options?: TestSessionOptions) {
             const fixture = init()
@@ -164,6 +174,9 @@ const init = prepare('Once', {
             }
         }
 
+        const testFile = await makeUpload("upload/sample")
+        const sampleImage = await uploadFile(testFile)
+
         return {
             org,
             store,
@@ -176,7 +189,8 @@ const init = prepare('Once', {
             adminUser,
             businessAdminUser,
             businessUser,
-            userSession
+            userSession,
+            sampleImage
         }
     },
     async after({store, createUser, createLockedUser, createOrg, inviteToOrg}) {
@@ -184,11 +198,11 @@ const init = prepare('Once', {
         await locations.cleanupLocations()
         await clearMock(inviteToOrg, async function ({value: membership}) {
             if (membership !== undefined)
-                await store.removeMembership(membership.pk, membership.sk)
+                await store.removeMembership(membership.id, membership.orgId)
         })
         await clearMock(createOrg, async function ({value: org}) {
             if (org !== undefined)
-                await store.removeOrg(org.pk)
+                await store.removeOrg(org.id)
         })
         const deleteUser = async function ({value: user}: MockResult<User>) {
             if (user !== undefined) {
@@ -199,6 +213,6 @@ const init = prepare('Once', {
         await clearMock(createLockedUser, deleteUser)
         await clearMock(createUser, deleteUser)
     }
-})
+}))
 
 export default init

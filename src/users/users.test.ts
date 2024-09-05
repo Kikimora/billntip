@@ -60,7 +60,7 @@ const getUserAttributes = makeTestHandler(users.handler, {
     routeKey: "GET /user/attributes",
 })
 const createProfilePic = makeTestHandler(users.handler, {
-    routeKey: "POST /user/profile-pic",
+    routeKey: "POST /user/image",
 })
 
 const init = prepare('Once', {
@@ -612,7 +612,7 @@ describe("GET /user/attributes", () => {
 })
 
 
-describe("POST /user/profile-pic", () => {
+describe("POST /user/image", () => {
     const authenticateUser = prepare('Once', authenticatedUserFixture)
 
     it("requires active session", async () => {

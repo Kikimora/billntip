@@ -1,9 +1,9 @@
-import {createLockStore, LockHandle, LockStore, makeLockStore} from ".";
+import {createStore, Handle, Store, makeStore} from "./lock";
 import {retry} from "@app/util";
 
 beforeAll(async () => {
     try {
-        await createLockStore("TestLocks")
+        await createStore("TestLocks")
     } catch (e) {
         //ignore
     }
@@ -11,10 +11,10 @@ beforeAll(async () => {
 
 describe("DynamoDb locks", () => {
     const options = {retries: 1, heartbeatInterval: 10, leaseDuration: 100};
-    let store: LockStore
-    let handles: LockHandle[] = []
+    let store: Store
+    let handles: Handle[] = []
     beforeAll(() => {
-        store = makeLockStore("TestLocks")
+        store = makeStore("TestLocks")
     })
 
     afterAll(() => {
@@ -43,16 +43,16 @@ describe("DynamoDb locks", () => {
     it("can lock", async () => {
         handles[0] = await store.lock("1", "can lock", options)
         const concurrentLock = store.tryLock("1", "another test")
-        await expect(concurrentLock).rejects.toEqual(expect.objectContaining({
+        await expect(concurrentLock).rejects.toMatchObject({
             message: "Failed to take a lock."
-        }))
+        })
     })
     it("cannot lock twice", async () => {
         handles[0] = await store.lock("1", "cannot lock twice 1", options)
         const actual = store.lock("1", "cannot lock twice 2", options);
-        await expect(actual).rejects.toEqual(expect.objectContaining({
+        await expect(actual).rejects.toMatchObject({
             message: "Failed to take a lock."
-        }))
+        })
     })
     it("can lock after unlock", async () => {
         handles[0] = await store.lock("1", "can lock after unlock 1", options)
@@ -78,9 +78,9 @@ describe("DynamoDb locks", () => {
         await expect(actual).toReject()
     })
 
-    async function loadLockItem(handle: LockHandle, version?: number) {
+    async function loadLockItem(handle: Handle, version?: number) {
         return await retry(async function () {
-            const {Item: item} = await store.table.get({pk: handle.lock.pk})
+            const {Item: item} = await store.table.get({key: {pk: handle.lock.pk}})
             if (item === undefined) throw Error("Unexpected error: item is undefined")
             if (version !== undefined && item.version! < version) throw new Error("Old item")
             return item as Required<typeof item>

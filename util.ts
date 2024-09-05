@@ -2,6 +2,7 @@ import _ from "lodash"
 
 import {Tracer} from "./diagnostics";
 import {v4} from "uuid";
+import shortUUID from "short-uuid";
 
 type TimeUnitsType = "days" | "hours" | "minutes" | "seconds"
 
@@ -310,4 +311,14 @@ export function onceAsync<T extends (...args: any[]) => Promise<any>>(producer: 
 
         return value
     }
+}
+
+export const uuid = shortUUID(shortUUID.constants.flickrBase58)
+const stampGenerator = shortUUID(shortUUID.constants.flickrBase58, {consistentLength: false})
+
+/**
+ * Encodes number using flickr58 encoding.
+ */
+export function flickr58(stamp: number) {
+    return stampGenerator.fromUUID(stamp.toString(16))
 }

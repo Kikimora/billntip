@@ -27,7 +27,8 @@ id or by adding \`archived\` to the query string. Location is moved back from ar
         'POST /pay/card': {
             description: `
 Starts card tokenization process. Entire tokenization process is described in pseudocode below.
-\`\`\'js
+
+\`\`\`js
 async function createEmptyCard() {
     return await post("/tip/card", {
         body:{
@@ -72,7 +73,7 @@ try {
 } catch (e) {
     console.log("Error", JSON.stringify(e))
 }         
-\`\`\`           
+\`\`\`        
 `
         }
     }

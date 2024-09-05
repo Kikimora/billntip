@@ -159,7 +159,7 @@ export default class MangopayUser {
             tokenization: {
                 access_key: card.AccessKey,
                 data: card.RegistrationData,
-                url: card.CardRegistrationURL
+                id: card.CardRegistrationURL
             }
         }
     }
@@ -188,27 +188,36 @@ export default class MangopayUser {
         }
     }
 
-    async fetchWallet() {
+    async fetchWallet(): Promise<schemas.Wallet> {
         const {member, api} = this
         const {walletId} = member
-        const response = await api.Wallets.get(walletId)
-            .catch(function (e) {
-                throw mangopayError(e, "fetchWallet", {member})
-            })
+        const response = await api.Wallets.get(walletId).catch(function (e) {
+            throw mangopayError(e, "fetchWallet", {member})
+        })
+        const pendingPayouts = await api.Wallets.getTransactions(walletId, {
+            parameters: {
+                Status: "CREATED",
+                Type: "PAYOUT"
+            }
+        })
+        const pending = pendingPayouts.reduce(function (acc, p) {
+            return acc + p.DebitedFunds.Amount
+        }, 0)
         return {
             id: this.username,
             created_at: response.CreationDate,
             description: response.Description,
-            balance: {amount: response.Balance.Amount, currency: response.Balance.Currency}
+            amount: response.Balance.Amount,
+            currency: response.Balance.Currency,
+            pending: pending
         }
     }
 
     async fetchUserInfo() {
         const {member, api} = this
-        const response = await api.Users.get(member.mangopayUid)
-            .catch(function (e) {
-                throw mangopayError(e, "fetchUser", {member})
-            }) as mangopay.models.UserNatural
+        const response = await api.Users.get(member.mangopayUid).catch(function (e) {
+            throw mangopayError(e, "fetchUser", {member})
+        }) as mangopay.models.UserNatural
         return {
             id: this.username,
             created_at: response.CreationDate,
@@ -222,10 +231,9 @@ export default class MangopayUser {
     async fetchRegulatoryStatus() {
         const {member, api} = this
         const users = api.Users as unknown as RegulatoryDataProvider;
-        const response = await users.getRegulatory(member.mangopayUid)
-            .catch(function (e) {
-                throw mangopayError(e, "fetchRegulatoryStatus", {member})
-            })
+        const response = await users.getRegulatory(member.mangopayUid).catch(function (e) {
+            throw mangopayError(e, "fetchRegulatoryStatus", {member})
+        })
         return {
             action_code: response.ActionCode,
             blocked: {
@@ -458,7 +466,7 @@ function mangopayError(e: any, name: string, attributes: TraceAttributes, mappin
         ...attributes,
         message: e.Message ?? "Unexpected error.",
         errors: e.errors ?? {},
-        type: e.Type ?? "",
+        type: e.TDynamoAttribute ?? "",
         id: e.Id
     }
 

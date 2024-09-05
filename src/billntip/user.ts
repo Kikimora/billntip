@@ -1,7 +1,7 @@
 import _ from "lodash";
 import {badRequestError, internalError, notFoundError} from "@app/lambda";
 import {UserAttribute} from "@src/users/attributes";
-import InviteesRepo from "@src/users/user";
+import ProfileRepo from "@src/users/user";
 import Store, * as store from "./store";
 import MangopayUser, {MangopayAPI, MangopayOptions} from "./mangopay-user";
 import {toMembership} from "@src/billntip/util";
@@ -15,7 +15,7 @@ export default class UserRepo {
 
     constructor(options: StoreOptions,
                 public readonly mangopayOptions: MangopayOptions,
-                public readonly invitees: InviteesRepo) {
+                public readonly profiles: ProfileRepo) {
         this.store = new Store(options)
     }
 
@@ -97,8 +97,8 @@ export class User {
         return this.repo.mangopayOptions
     }
 
-    get invitees() {
-        return this.repo.invitees
+    get profiles() {
+        return this.repo.profiles
     }
 
     async fetchOrCreate(force: boolean = false) {
@@ -130,23 +130,23 @@ export class User {
      * Fetch member memberships.
      */
     async memberships(filters: store.MembershipFilters = {accepted: false, rejected: false}) {
-        const {username, invitees, store} = this
+        const {username, profiles, store} = this
         const memberships = await this.store.memberships(this.username, filters);
         try {
-            const oids = _(memberships).map('sk').uniq().value()
+            const oids = _(memberships).map('orgId').uniq().value()
             const uids = _(memberships).map('invited_by').concat(this.username).compact().uniq().value()
             const [users, orgs] = await Promise.all([
-                invitees.batchFetch(uids).then(function (users) {
-                    return _.keyBy(users, 'pk')
+                profiles.batchFetch(uids).then(function (users) {
+                    return _.keyBy(users, 'id')
                 }),
-                store.batchFetchOrgs(oids).then(function (orgs) {
-                    return _.keyBy(orgs, 'pk')
+                store.batchGetOrgs(oids).then(function (orgs) {
+                    return _.keyBy(orgs, 'id')
                 })
             ])
             return memberships.map(function (member) {
                 const inviter = member.invited_by !== undefined ? users[member.invited_by] : undefined
-                const org = orgs[member.sk]
-                return toMembership(member, org, users[member.pk], inviter)
+                const org = orgs[member.orgId]
+                return toMembership(member, org, users[member.id], inviter)
             })
         } catch (e:any) {
             throw internalError("Unexpected error loading user memberships.")
@@ -198,15 +198,15 @@ export class User {
         return await this.toMembership(membership)
     }
 
-    private async toMembership(membership: store.MembershipItem) {
-        const {username, store, invitees} = this
+    private async toMembership(membership: store.MemberItem) {
+        const {username, store, profiles} = this
         const [org, users] = await Promise.all([
-            store.fetchOrg(membership.sk),
-            invitees.batchFetch(_.compact([username, membership.invited_by])).then(function (x) {
-                return _.keyBy(x, 'pk')
+            store.fetchOrg(membership.orgId),
+            profiles.batchFetch(_.compact([username, membership.invited_by])).then(function (x) {
+                return _.keyBy(x, 'id')
             }),
         ])
-        return toMembership(membership, org ?? {pk: membership.sk, title: ""},
+        return toMembership(membership, org ?? {id: membership.orgId, title: "", created_at: 0},
             users[username],
             membership.invited_by !== undefined ? users[membership.invited_by] : undefined)
     }
@@ -306,10 +306,10 @@ export class User {
         const {username, store} = this
         try {
             const memberships = await store.memberships(username)
-            const locations = memberships.reduce(function (batch, {sk, locations}) {
+            const locations = memberships.reduce(function (batch, {orgId, locations}) {
                 if (locations !== undefined) {
                     locations.forEach(function (locationId) {
-                        batch.add({orgId: sk, locationId: locationId})
+                        batch.add({orgId, locationId: locationId})
                     })
                 }
                 return batch

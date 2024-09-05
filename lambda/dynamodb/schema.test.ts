@@ -1,37 +1,42 @@
-import {Type, SchemaToType,} from "./schema";
-import {attributeGenerator} from "./command-context";
+import {Static} from "@sinclair/typebox";
+import * as DDB from "./schema";
+import {attributeGenerator} from "./context";
 
-const SampleSchema = {
-    numberArray: Type.Array(Type.Number),
-    arrayOfArrays: Type.Array(Type.Array(Type.Number)),
-    arrayOfArraysOfObjects: Type.Array(Type.Array({s: Type.String, n: Type.Number})),
-    arrayOfNumberMaps: Type.Array(Type.Map(Type.Number)),
-    arrayOfObjectMaps: Type.Array(Type.Map({s: Type.String, n: Type.Number})),
-    numberMap: Type.Map(Type.Number),
-    mapOfMaps: Type.Map(Type.Map({s: Type.String, n: Type.Number})),
-    mapOfArrays: Type.Map(Type.Array(Type.Number)),
-    mapOfObjects: Type.Map({s: Type.String, n: Type.Number}),
-    mapOfObjectArrays: Type.Map(Type.Array({s: Type.String, n: Type.Number})),
-    basic: Type.Number,
-    obj: {
-        s1: Type.String,
-        n1: Type.Number,
-        obj: {
-            s2: Type.String,
-            n2: Type.Number
+const SampleSchema = DDB.Item({
+    numberArray: DDB.Array(DDB.Number),
+    arrayOfArrays: DDB.Array(DDB.Array(DDB.Number)),
+    arrayOfArraysOfObjects: DDB.Array(DDB.Array(DDB.Item({s: DDB.String, n: DDB.Number}))),
+    arrayOfNumberMaps: DDB.Array(DDB.Map(DDB.Number)),
+    arrayOfObjectMaps: DDB.Array(DDB.Map(DDB.Item({s: DDB.String, n: DDB.Number}))),
+    numberMap: DDB.Map(DDB.Number),
+    mapOfMaps: DDB.Map(DDB.Map(DDB.Item({s: DDB.String, n: DDB.Number}))),
+    mapOfArrays: DDB.Map(DDB.Array(DDB.Number)),
+    mapOfObjects: DDB.Map(DDB.Item({s: DDB.String, n: DDB.Number})),
+    mapOfObjectArrays: DDB.Map(DDB.Array(DDB.Item({s: DDB.String, n: DDB.Number}))),
+    basic: DDB.Number,
+    obj: DDB.Item({
+            s1: DDB.String,
+            n1: DDB.Number,
+            obj: DDB.Item({
+                    s2: DDB.String,
+                    n2: DDB.Number
+                }
+            )
         }
-    }
-} as const
+    )
+} as const)
+
+type SampleSchema = Static<typeof SampleSchema>
 
 // This is here to run type check and make sure SchemaType works
-
+//type SampleSchema = SchemaToType<typeof SampleSchema>
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 // noinspection JSUnusedLocalSymbols
-const sampleObj: SchemaToType<typeof SampleSchema> = {
+const sampleObj: SampleSchema = {
     numberArray: [1],
     arrayOfArrays: [[1]],
     arrayOfArraysOfObjects: [[{s: "", n: 1}]],
-    arrayOfNumberMaps: [{"s": 1}],
+    arrayOfNumberMaps: [{"s": 1, n:1}],
     arrayOfObjectMaps: [{"s": {s: "", n: 1}}],
 
     numberMap: {"key": 1},

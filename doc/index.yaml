@@ -25,6 +25,8 @@ x-tagGroups:
     tags:
       - Bill
       - Tip
+      - Pay
+      - Admin
 
 components:
   responses:

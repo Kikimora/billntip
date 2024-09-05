@@ -7,7 +7,7 @@ import {
 } from "@aws-sdk/client-s3";
 import {createPresignedPost} from "@aws-sdk/s3-presigned-post";
 import {StreamingBlobPayloadOutputTypes} from "@smithy/types";
-import {badRequestError, internalError} from "@app/lambda";
+import {badRequestError, internalError, notFoundError} from "@app/lambda";
 import _ from "lodash";
 import type {Readable} from "stream";
 import {CopyObjectResult, DeleteObjectRequest} from "@aws-sdk/client-s3/dist-types/models/models_0";
@@ -248,7 +248,15 @@ export class S3Object {
         return this._body
     }
 
-    async head(options?: S3ReadOptions): Promise<Readonly<S3BObjectMetadata>> {
+    get keyExt() {
+        const path = this.key.split('/');
+        const fname = path[path.length - 1]
+        if (fname === undefined) return ""
+        const parts = fname.split(".")
+        return parts[parts.length - 1] ?? ""
+    }
+
+    private async _headObject(options?: S3ReadOptions): Promise<Readonly<S3BObjectMetadata>> {
         options = options ?? emptyObject
         let {force} = options
         force = force ?? false
@@ -275,7 +283,13 @@ export class S3Object {
         }
     }
 
-    async read(options?: S3ReadOptions): Promise<S3ObjectContent> {
+    head(options?: S3ReadOptions): NothingPromise<Readonly<S3BObjectMetadata>> {
+        let task = this._headObject(options)
+        addReturnNothingIfNotFound(task)
+        return task
+    }
+
+    async _read(options?: S3ReadOptions): Promise<S3ObjectContent> {
         options = options ?? emptyObject
         let {force} = options
         force = force ?? false
@@ -303,6 +317,12 @@ export class S3Object {
         } catch (error: any) {
             throw this.toRequestError(error).withContext("read", {bucket, key, cause: error});
         }
+    }
+
+    read(options?: S3ReadOptions): NothingPromise<S3ObjectContent> {
+        let task = this._read(options)
+        addReturnNothingIfNotFound(task)
+        return task
     }
 
     async put(body: S3ObjectBodyContent, options?: S3PutOptions) {
@@ -423,6 +443,8 @@ export class S3Object {
             case 'InvalidRange':
             case 'PreconditionFailed':
                 return badRequestError(error.message)
+            case 'NotFound':
+                return notFoundError(error.message)
             case 'InternalServerError':
                 return error
             default:
@@ -506,6 +528,19 @@ export function uploadBuilder(key: string, options: UploadBuilderOptions) {
     return new UploadBuilder(key, options)
 }
 
+export async function uploadBuffer(upload: Upload, content: Buffer) {
+    const formData = new FormData();
+    Object.entries(upload.fields).forEach(([k, v]) => {
+        formData.append(k, v);
+    });
+    formData.append("Content-Type", "image/jpeg");
+    //use blob to upload data, simple call like
+    //formData.append("file", imageBuffer);
+    //does upload but result in a garbage bytes written to the S3 object.
+    const blob = new Blob([content], {type: "image/jpeg"})
+    formData.append("file", blob, 'image.jpeg');
+    return await fetch(upload.url, {method: "POST", body: formData})
+}
 
 export class UploadBuilder {
 
@@ -540,7 +575,7 @@ export class UploadBuilder {
     }
 
     properties(f: Record<string, string>) {
-        _.merge(this._fields, _.mapKeys(f, function (_v, k) {
+        this._fields = _.merge(this._fields, _.mapKeys(f, function (_v, k) {
             return 'x-amz-meta-' + k
         }))
         return this
@@ -568,4 +603,20 @@ export class UploadBuilder {
             throw internalError("Unexpected error creating upload").withContext("build", {options})
         }
     }
+}
+
+type ReturnNothing<T> = { returnNothingIfNotFound(): Promise<T | undefined> }
+type NothingPromise<T> = Promise<T> & ReturnNothing<T>
+
+async function returnNothingIfNotFound<T>(this: Promise<T>) {
+    try {
+        return await this;
+    } catch (e: any) {
+        if (e.statusCode === "404") return undefined
+        throw e
+    }
+}
+
+function addReturnNothingIfNotFound<T>(p: Promise<T> & Partial<ReturnNothing<T>>): asserts p is NothingPromise<T> {
+    p.returnNothingIfNotFound = returnNothingIfNotFound
 }

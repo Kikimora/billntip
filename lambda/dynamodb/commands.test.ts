@@ -1,20 +1,18 @@
 import * as ddb from "@aws-sdk/client-dynamodb";
-import {Type} from ".";
-import dynamodb from "./commands";
-import {schema} from "./schema";
+import * as DDB from "./commands";
 
-const Sessions = {
-    name: "sessions",
-    key: {"session_id": Type.String},
-    attributes: {
-        name: Type.String,
-        age: Type.Number,
-        lock: Type.String
-    }
-} as const satisfies schema.TableSchema
-
-const DynamoDB = dynamodb()
-const SessionsTable = DynamoDB.table(Sessions).forKey<{ session_id: `SESSION ${string}` }>()
+const DynamoDB = DDB.dynamodb()
+const SessionSchema = {
+    key: DDB.Key({
+        "session_id": DDB.TemplateLiteral([DDB.Literal("SESSION "), DDB.String])
+    }),
+    item: DDB.Item({
+        name: DDB.String,
+        age: DDB.Number,
+        lock: DDB.Optional(DDB.String)
+    })
+} as const
+const SessionsTable = DynamoDB.table("sessions", SessionSchema)
 
 beforeEach(function () {
     jest.clearAllMocks()
@@ -29,23 +27,28 @@ describe("Update Command", () => {
     })
 
     it("requires key", async () => {
-        await SessionsTable.update({session_id: "SESSION ID"}, {})
-        expect(update).toHaveBeenCalledWith({
+        await SessionsTable.update({
+            key: {session_id: "SESSION ID"},
+            expression() {
+                return ""
+            }
+        })
+        expect(update).toHaveBeenCalledWith(expect.objectContaining({
             TableName: "sessions",
             Key: {session_id: {S: 'SESSION ID'}},
             ExpressionAttributeValues: undefined,
             ExpressionAttributeNames: undefined,
-        })
+        }))
     })
 
     it("expose key and values to expressions and generates attribute names and values", async () => {
-        await SessionsTable.update({session_id: "SESSION ID"}, {
-                values: {lockValue: "ABC", newSession: "NEW SESSION"},
+        await SessionsTable.update({
+                key: {session_id: "SESSION ID"},
                 expression: ({key, attr, ref}) =>
                     `SET ${key.session_id}=${ref('newSession')}, ${attr.lock}=${ref('lockValue')}`,
                 condition: ({key: {session_id}, attr: {lock}, ref}) =>
                     `${lock} = ${ref('lockValue')}, ${session_id} = ${ref('session_id')}`,
-            }
+            }, {lockValue: "ABC", newSession: "NEW SESSION"}
         )
         expect(update).toHaveBeenCalledWith(expect.objectContaining({
             UpdateExpression: 'SET #session_id=:newSession, #lock=:lockValue',
@@ -62,11 +65,12 @@ describe("Update Command", () => {
         }))
     })
     it("expose all other update item command properties", async () => {
-        await SessionsTable.update({session_id: "SESSION ID"}, {
+        await SessionsTable.update({
+            key: {session_id: "SESSION ID"},
             expression: () => "SET lock=1",
             return: "ALL_NEW",
             returnOnConditionFailure: "ALL_OLD",
-            returnCollectionMetrics: "SIZE",
+            returnItemCollectionMetrics: "SIZE",
             returnConsumedCapacity: "TOTAL"
         })
         expect(update).toHaveBeenCalledWith(expect.objectContaining({
@@ -78,15 +82,15 @@ describe("Update Command", () => {
     })
 
     it("accept expression object", async () => {
-        await SessionsTable.update({session_id: "SESSION ID"}, {
-                values: {age: 30},
+        await SessionsTable.update({
+                key: {session_id: "SESSION ID"},
                 expression: ({attr, ref}) => ({
                     set: {
                         [attr.age]: ref('age'),
                         [attr.name]: ref.val("New Name"),
                     }
                 }),
-            }
+            }, {age: 30}
         )
         expect(update).toHaveBeenCalledWith(expect.objectContaining({
             UpdateExpression: "SET #age = :age, #name = :__val1",
@@ -100,6 +104,41 @@ describe("Update Command", () => {
             },
         }))
     })
+
+    it("unmarshall attributes", async () => {
+        update.mockResolvedValueOnce({
+            Attributes: {
+                lock: {S: "ABC"}
+            }
+        })
+        const x: any = await SessionsTable.update({
+            key: {session_id: "SESSION ID"},
+            return: "UPDATED_NEW",
+            expression: ({key, attr, ref}) =>
+                `SET ${key.session_id}=${ref('newSession')}, ${attr.lock}=${ref('lockValue')}`
+        }, {lockValue: "ABC", newSession: "NEW SESSION"})
+        expect(x.ConditionCheckFailed).toBeFalse()
+        expect(x.Attributes).toEqual({lock: "ABC"})
+    })
+
+    it("handles condition failures", async () => {
+        update.mockRejectedValue(new ddb.ConditionalCheckFailedException({
+            $metadata: {},
+            Item: {lock: {S: "ABC"}},
+            message: "Ooops"
+        }))
+
+        const x: any = await SessionsTable.update({
+            key: {session_id: "SESSION ID"},
+            expression: ({key, attr, ref}) =>
+                `SET ${key.session_id}=${ref('newSession')}, ${attr.lock}=${ref('lockValue')}`,
+            condition: ({key: {session_id}, attr: {lock}, ref}) =>
+                `${lock} = ${ref('lockValue')}, ${session_id} = ${ref('session_id')}`,
+            returnOnConditionFailure: "ALL_OLD"
+        }, {lockValue: "ABC", newSession: "NEW SESSION"})
+        expect(x.ConditionCheckFailed).toBeTrue()
+        expect(x.FailedAttributes).toEqual({lock: "ABC"})
+    })
 })
 
 type PutItemFn = (args: ddb.PutItemCommandInput) => Promise<ddb.PutItemOutput>
@@ -111,10 +150,10 @@ describe("Put Command", () => {
     })
 
     it("requires key and item", async () => {
-        await SessionsTable.put({session_id: "SESSION ID"}, {
-                item: {name: "Hello", age: 10}
-            }
-        )
+        await SessionsTable.put({
+            key: {session_id: "SESSION ID"},
+            item: {session_id: "SESSION ID", name: "Hello", age: 10}
+        })
         expect(putItem).toHaveBeenCalledWith(expect.objectContaining({
             Item: {
                 session_id: {S: 'SESSION ID'},
@@ -127,13 +166,11 @@ describe("Put Command", () => {
     })
 
     it("expose key and values to condition expression and generates attribute names and values", async () => {
-        await SessionsTable.put({session_id: "SESSION ID"}, {
-                item: {name: "Hello", age: 10},
-                values: {lockValue: "ABC"},
-                condition: ({key: {session_id}, attr: {lock, name, age}, ref}) =>
-                    `${lock} = ${ref('lockValue')} AND ${session_id} = ${ref('session_id')} AND ${name}='A' AND ${age}=10`,
-            }
-        )
+        await SessionsTable.put({
+            item: {session_id: "SESSION ID", name: "Hello", age: 10},
+            condition: ({key: {session_id}, attr: {lock, name, age}, ref}) =>
+                `${lock} = ${ref('lockValue')} AND ${session_id} = ${ref('session_id')} AND ${name}='A' AND ${age}=10`,
+        }, {lockValue: "ABC"})
         expect(putItem).toHaveBeenCalledWith(expect.objectContaining({
             ConditionExpression: '#lock = :lockValue AND #session_id = :session_id AND #name=\'A\' AND #age=10',
             ExpressionAttributeValues: {
@@ -150,20 +187,55 @@ describe("Put Command", () => {
     })
 
     it("expose all other put item command properties", async () => {
-        await SessionsTable.put({session_id: "SESSION ID"}, {
-                item: {},
-                return: "ALL_NEW",
-                returnOnConditionFailure: "ALL_OLD",
-                returnCollectionMetrics: "SIZE",
-                returnConsumedCapacity: "TOTAL"
-            }
-        )
+        await SessionsTable.put({
+            item: {
+                session_id: "SESSION ID",
+                name: "NAME",
+                age: 30
+            },
+            return: "ALL_OLD",
+            returnOnConditionFailure: "NONE",
+            returnItemCollectionMetrics: "SIZE",
+            returnConsumedCapacity: "TOTAL"
+        })
         expect(putItem).toHaveBeenCalledWith(expect.objectContaining({
-            ReturnValues: "ALL_NEW",
-            ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+            ReturnValues: "ALL_OLD",
+            ReturnValuesOnConditionCheckFailure: "NONE",
             ReturnItemCollectionMetrics: "SIZE",
             ReturnConsumedCapacity: "TOTAL",
         }))
+    })
+
+    it("unmarshall attributes", async () => {
+        putItem.mockResolvedValueOnce({
+            Attributes: {
+                name: {S: "Hello"},
+                age: {N: "10"},
+                session_id: {S: "SESSION ID"},
+            }
+        })
+        const item: DDB.ItemType<typeof SessionsTable> = {session_id: "SESSION ID", name: "Hello", age: 10};
+        const x: any = await SessionsTable.put({
+            item,
+            return: "ALL_OLD",
+        }, {lockValue: "ABC"})
+        expect(x.ConditionCheckFailed).toBeFalse()
+        expect(x.Attributes).toEqual(item)
+    })
+
+    it("handles condition failures", async () => {
+        putItem.mockRejectedValue(new ddb.ConditionalCheckFailedException({
+            $metadata: {},
+            Item: {session_id: {S: "SESSION ID"}},
+            message: "Ooops"
+        }))
+
+        const x: any = await SessionsTable.put({
+            item: {session_id: "SESSION ID", name: "Peter", age: 10},
+            returnOnConditionFailure: "ALL_OLD"
+        }, {lockValue: "ABC", newSession: "NEW SESSION"})
+        expect(x.ConditionCheckFailed).toBeTrue()
+        expect(x.FailedAttributes).toEqual({session_id: "SESSION ID"})
     })
 })
 
@@ -176,7 +248,7 @@ describe("Delete Command", () => {
     })
 
     it("requires key", async () => {
-        await SessionsTable.delete({session_id: "SESSION ID"})
+        await SessionsTable.delete({key: {session_id: "SESSION ID"}})
         expect(deleteItem).toHaveBeenCalledWith(expect.objectContaining({
             Key: {session_id: {S: 'SESSION ID'}},
             ExpressionAttributeValues: undefined,
@@ -185,12 +257,11 @@ describe("Delete Command", () => {
     })
 
     it("expose key and values to condition expression and generates attribute names and values", async () => {
-        await SessionsTable.delete({session_id: "SESSION ID"}, {
-                values: {lockValue: "ABC"},
-                condition: ({key: {session_id}, attr: {lock, name, age}, ref}) =>
-                    `${lock} = ${ref('lockValue')} AND ${session_id} = ${ref('session_id')} AND ${name}='A' AND ${age}=10`,
-            }
-        )
+        await SessionsTable.delete({
+            key: {session_id: "SESSION ID"},
+            condition: ({key: {session_id}, attr: {lock, name, age}, ref}) =>
+                `${lock} = ${ref('lockValue')} AND ${session_id} = ${ref('session_id')} AND ${name}='A' AND ${age}=10`,
+        }, {lockValue: "ABC"})
         expect(deleteItem).toHaveBeenCalledWith(expect.objectContaining({
             ConditionExpression: '#lock = :lockValue AND #session_id = :session_id AND #name=\'A\' AND #age=10',
             ExpressionAttributeValues: {
@@ -207,19 +278,48 @@ describe("Delete Command", () => {
     })
 
     it("expose all other delete item command properties", async () => {
-        await SessionsTable.delete({session_id: "SESSION ID"}, {
-                return: "ALL_NEW",
-                returnItemsCollectionMetrics: "SIZE",
+        await SessionsTable.delete({
+                key: {session_id: "SESSION ID"},
+                return: "NONE",
+                returnItemCollectionMetrics: "SIZE",
                 returnOnConditionFailure: "ALL_OLD",
                 returnConsumedCapacity: "TOTAL"
             }
         )
         expect(deleteItem).toHaveBeenCalledWith(expect.objectContaining({
-            ReturnValues: "ALL_NEW",
+            ReturnValues: "NONE",
             ReturnValuesOnConditionCheckFailure: "ALL_OLD",
             ReturnItemCollectionMetrics: "SIZE",
             ReturnConsumedCapacity: "TOTAL",
         }))
+    })
+
+    it("unmarshall attributes", async () => {
+        deleteItem.mockResolvedValueOnce({
+            Attributes: {
+                session_id: {S: "SESSION ID"},
+            }
+        })
+        const x = await SessionsTable.delete({key: {session_id: "SESSION ID"}})
+        expect(x.ConditionCheckFailed).toBeFalse()
+        expect(x.Attributes).toEqual({session_id: "SESSION ID"})
+    })
+
+    it("handles condition failures", async () => {
+        deleteItem.mockRejectedValue(new ddb.ConditionalCheckFailedException({
+            $metadata: {},
+            Item: {session_id: {S: "SESSION ID"}},
+            message: "Ooops"
+        }))
+        const x: any = await SessionsTable.delete({
+            key: {session_id: "SESSION ID"},
+            condition() {
+                return ""
+            },
+            returnOnConditionFailure: "ALL_OLD"
+        })
+        expect(x.ConditionCheckFailed).toBeTrue()
+        expect(x.FailedAttributes).toEqual({session_id: "SESSION ID"})
     })
 })
 
@@ -232,7 +332,7 @@ describe("Get Command", () => {
     })
 
     it("requires key", async () => {
-        await SessionsTable.get({session_id: "SESSION ID"})
+        await SessionsTable.get({key: {session_id: "SESSION ID"}})
         expect(getItem).toHaveBeenCalledWith(expect.objectContaining({
             TableName: SessionsTable.name,
             Key: {session_id: {S: 'SESSION ID'}},
@@ -242,7 +342,8 @@ describe("Get Command", () => {
     })
 
     it("expose table attributes to projection expression and generates attribute names", async () => {
-        await SessionsTable.get({session_id: "SESSION ID"}, {
+        await SessionsTable.get({
+                key: {session_id: "SESSION ID"},
                 projection: ({key: {session_id}, attr: {name, age}}) =>
                     [`${session_id}`, `${name}`, `${age}`],
             }
@@ -258,15 +359,25 @@ describe("Get Command", () => {
     })
 
     it("expose all other get item command properties", async () => {
-        await SessionsTable.get({session_id: "SESSION ID"}, {
-                consistentRead: true,
-                returnConsumedCapacity: "TOTAL"
-            }
-        )
+        await SessionsTable.get({
+            key: {session_id: "SESSION ID"},
+            consistentRead: true,
+            returnConsumedCapacity: "TOTAL"
+        })
         expect(getItem).toHaveBeenCalledWith(expect.objectContaining({
             ConsistentRead: true,
             ReturnConsumedCapacity: "TOTAL",
         }))
+    })
+
+    it("unmarshall attributes", async () => {
+        getItem.mockResolvedValueOnce({
+            Item: {
+                session_id: {S: "SESSION ID"},
+            }
+        })
+        const x = await SessionsTable.get({key: {session_id: "SESSION ID"}})
+        expect(x.Item).toEqual({session_id: "SESSION ID"})
     })
 })
 
@@ -278,22 +389,24 @@ describe("Batch Get Command", () => {
     })
 
     it("builds batch get command", async () => {
-        const T1 = DynamoDB.table({
-            name: "Table1", key: {id: Type.Number}, attributes: {}
+        const Table1 = DynamoDB.table("Table1", {
+            key: DDB.Key({id: DDB.Number}), item: DDB.Item({})
         })
-        const T3 = DynamoDB.table({
-            name: "Table2", key: {session_id: Type.String} as const, attributes: {} as const
+        const Table2 = DynamoDB.table("Table2", {
+            key: DDB.Key({session_id: DDB.String}), item: DDB.Item({})
         })
         const batch = DynamoDB.batchGet()
-        SessionsTable.with(batch).get([{session_id: "SESSION 1"}, {session_id: "SESSION 2"}], {
+        SessionsTable.with(batch).get({
+            keys: [{session_id: "SESSION 1"}, {session_id: "SESSION 2"}],
             projection: ({key, attr}) => [`${key.session_id}`, `${attr.name}`, `${attr.age}`],
             consistentRead: false
         })
-        T1.with(batch).get([{id: 1}], {
+        Table1.with(batch).get({
+            keys: [{id: 1}],
             projection: ({key}) => [`${key.id}`],
             consistentRead: true
         })
-        T3.with(batch).get([{session_id: "1"}, {session_id: "2"}])
+        Table2.with(batch).get({keys: [{session_id: "1"}, {session_id: "2"}]})
         await batch.returnConsumedCapacity("INDEXES").exec()
         expect(batchGetItem).toHaveBeenCalledWith(expect.objectContaining({
             ReturnConsumedCapacity: "INDEXES",
@@ -308,7 +421,7 @@ describe("Batch Get Command", () => {
                     },
                     ConsistentRead: false,
                 },
-                [T1.name]: {
+                [Table1.name]: {
                     Keys: [{id: {N: "1"}}],
                     ProjectionExpression: "#id",
                     ExpressionAttributeNames: {
@@ -316,7 +429,7 @@ describe("Batch Get Command", () => {
                     },
                     ConsistentRead: true,
                 },
-                [T3.name]: {
+                [Table2.name]: {
                     Keys: [{session_id: {S: "1"}}, {session_id: {S: "2"}}],
                     ExpressionAttributeNames: undefined,
                     ConsistentRead: undefined,
@@ -326,13 +439,14 @@ describe("Batch Get Command", () => {
     })
 
     it("overwrites items coming from the same table", async () => {
-
         const batch = DynamoDB.batchGet()
-        SessionsTable.with(batch).get([{session_id: "SESSION 1"}], {
+        SessionsTable.with(batch).get({
+            keys: [{session_id: "SESSION 1"}],
             projection: ({key}) => [`${key.session_id}`],
             consistentRead: false
         })
-        SessionsTable.with(batch).get([{session_id: "SESSION 2"}], {
+        SessionsTable.with(batch).get({
+            keys: [{session_id: "SESSION 2"}],
             projection: ({attr}) => [`${attr.name}`, `${attr.age}`],
             consistentRead: true
         })
@@ -351,6 +465,32 @@ describe("Batch Get Command", () => {
             },
         }))
     })
+
+    it("unmarshall attributes", async () => {
+        batchGetItem.mockResolvedValueOnce({
+            Responses: {
+                [SessionsTable.name]: [{session_id: {S: "SESSION 1"}}]
+            },
+            UnprocessedKeys: {
+                [SessionsTable.name]: {
+                    Keys: [{session_id: {S: "SESSION 2"}}]
+                }
+            }
+        })
+        const batch = DynamoDB.batchGet()
+        SessionsTable.with(batch).get({
+            keys: [{session_id: "SESSION 1"}],
+        })
+        const x = await batch.exec()
+        expect(x.Responses).toEqual({
+            [SessionsTable.name]: [{session_id: "SESSION 1"}]
+        })
+        expect(x.UnprocessedKeys).toEqual({
+            [SessionsTable.name]: {
+                Keys: [{session_id: "SESSION 2"}]
+            }
+        })
+    })
 })
 
 type TransactGetItemsFn = (args: ddb.TransactGetItemsCommandInput) => Promise<ddb.TransactGetItemsOutput>
@@ -360,18 +500,20 @@ describe("Transact Get Command", () => {
     beforeEach(function () {
         transactGetItems.mockResolvedValue({Responses: []})
     })
+    const Another = DynamoDB.table("Another", {key: DDB.Key({id: DDB.Number}), item: DDB.Item({})})
 
     it("builds transact get command", async () => {
-        const Another = DynamoDB.table({name: "Another", key: {id: Type.Number}, attributes: {}})
 
         const tx = DynamoDB.transactGet()
-        SessionsTable.with(tx).get({session_id: "SESSION 1"}, {
+        SessionsTable.with(tx).get({
+            key: {session_id: "SESSION 1"},
             projection: ({key, attr}) => [`${key.session_id}`, `${attr.name}`, `${attr.age}`],
         })
-        Another.with(tx).get({id: 1}, {
+        Another.with(tx).get({
+            key: {id: 1},
             projection: ({key}) => [`${key.id}`],
         })
-        SessionsTable.with(tx).get({session_id: "SESSION 2"})
+        SessionsTable.with(tx).get({key: {session_id: "SESSION 2"}})
         await tx.returnConsumedCapacity("INDEXES").exec()
         expect(transactGetItems).toHaveBeenCalledWith(expect.objectContaining({
             ReturnConsumedCapacity: "INDEXES",
@@ -407,6 +549,73 @@ describe("Transact Get Command", () => {
             ]
         }))
     })
+
+    it("unmarshall attributes", async () => {
+        transactGetItems.mockResolvedValueOnce({
+            Responses: [{
+                Item: {session_id: {S: "SESSION 1"}}
+            }],
+        })
+        const tx = DynamoDB.transactGet()
+        SessionsTable.with(tx).get({key: {session_id: "SESSION 1"}})
+        const x = await tx.exec()
+        expect(x.Responses).toEqual([{session_id: "SESSION 1"}])
+    })
+
+    it("unmarshall attributes of failed transaction", async () => {
+        transactGetItems.mockRejectedValue(new ddb.TransactionCanceledException({
+            message: "",
+            $metadata: {},
+            CancellationReasons: [{
+                Code: "TransactionConflict",
+                Message: "TransactionConflict",
+                Item: {session_id: {S: "SESSION 1"}}
+            }, {
+                Code: "None",
+                Message: "None"
+            }, {
+                Code: "None",
+                Message: "None"
+            }],
+            Message: "Oops"
+        }))
+        const tx = DynamoDB.transactGet()
+        const getSessions = SessionsTable.with(tx)
+            .get({key: {session_id: "SESSION 1"}})
+            .get({key: {session_id: "SESSION 1"}})
+        Another.with(tx).get({
+            key: {id: 1},
+            projection: ({key}) => [`${key.id}`],
+        })
+        const task = tx.exec();
+        await expect(task).rejects.toMatchObject({
+            Outcomes: [{
+                Code: "TransactionConflict",
+                Message: "TransactionConflict",
+                Item: {session_id: "SESSION 1"}
+            }, {
+                Code: "None",
+                Message: "None"
+            }, {
+                Code: "None",
+                Message: "None"
+            }],
+            Message: "Oops"
+        })
+        const error = await task.catch(x => x)
+        if (DDB.isTransactionCancelled(error)) {
+            expect(error.Outcomes).toHaveLength(3)
+            expect(DDB.isTransactionConflict(error.Outcomes[0])).toBeTrue()
+            expect(DDB.isTransactionConflict(error.Outcomes[1])).toBeFalse()
+            expect(Array.from(getSessions.failures(error))).toEqual([{
+                Code: "TransactionConflict",
+                Message: "TransactionConflict",
+                Item: {session_id: "SESSION 1"}
+            }])
+        } else {
+            fail("Error: DDB.isTransactionCancelled")
+        }
+    })
 })
 
 type BatchWriteItemFn = (args: ddb.BatchWriteItemCommandInput) => Promise<ddb.BatchWriteItemOutput>
@@ -418,10 +627,12 @@ describe("Batch Write Command", () => {
     })
 
     it("builds batch write command", async () => {
-        const Another = DynamoDB.table({name: "Another", key: {id: Type.Number}, attributes: {}})
+        const Another = DynamoDB.table("Another", {key: DDB.Key({id: DDB.Number}), item: DDB.Item({})})
         const tx = DynamoDB.batchWrite()
-        SessionsTable.with(tx).put({session_id: "SESSION 1"}, {}).delete({session_id: "SESSION 2"})
-        Another.with(tx).add([{action: "put", key: {id: 1}, item: {}}])
+        SessionsTable.with(tx)
+            .put({session_id: "SESSION 1", name: "", age: 1})
+            .delete({session_id: "SESSION 2"})
+        Another.with(tx).add([{action: "put", item: {id: 1}}])
         await tx.returnConsumedCapacity("INDEXES")
             .returnItemCollectionMetrics("SIZE")
             .exec()
@@ -430,13 +641,46 @@ describe("Batch Write Command", () => {
             ReturnItemCollectionMetrics: "SIZE",
             RequestItems: {
                 [SessionsTable.name]: [
-                    {PutRequest: {Item: {"session_id": {S: "SESSION 1"}}}},
+                    {PutRequest: {Item: {"session_id": {S: "SESSION 1"}, "age": {"N": "1"}, "name": {"S": ""},}}},
                     {DeleteRequest: {Key: {"session_id": {S: "SESSION 2"}}}}],
                 [Another.name]: [
                     {PutRequest: {Item: {"id": {N: "1"}}}}
                 ]
             }
         }))
+    })
+
+    it("unmarshall unprocessed items", async () => {
+        batchWriteItem.mockResolvedValueOnce({
+            UnprocessedItems: {
+                [SessionsTable.name]: [
+                    {
+                        PutRequest: {
+                            Item: {session_id: {S: "SESSION 1"}, name: {S: "Peter"}, age: {N: "10"}}
+                        }
+                    },
+                    {
+                        DeleteRequest: {
+                            Key: {session_id: {S: "SESSION 1"}}
+                        }
+                    }
+                ]
+            }
+        })
+        const batch = DynamoDB.batchWrite()
+        SessionsTable.with(batch)
+            .put({session_id: "SESSION 1", name: "Peter", age: 10})
+            .add([{
+                action: "delete",
+                key: {session_id: "SESSION 1"}
+            }])
+        const x = await batch.exec()
+        expect(x.UnprocessedItems).toEqual({
+            [SessionsTable.name]: [
+                {action: "put", item: {session_id: "SESSION 1", name: "Peter", age: 10}},
+                {action: "delete", key: {session_id: "SESSION 1"}},
+            ]
+        })
     })
 })
 
@@ -447,33 +691,31 @@ describe("Transact Write Command", () => {
     beforeEach(function () {
         transactWriteItems.mockResolvedValue({})
     })
-
+    const Another = DynamoDB.table("Another", {key: DDB.Key({id: DDB.Number}), item: DDB.Item({})})
     it("builds transact write command", async () => {
-        const Another = DynamoDB.table({name: "Another", key: {id: Type.Number}, attributes: {}})
         const tx = DynamoDB.transactWrite()
-        SessionsTable.with(tx).put({session_id: "SESSION 1"}, {
-            item: {age: 10, name: "Andrey"},
-            values: {lockValue: "1"},
+        SessionsTable.with(tx).put({
+            item: {session_id: "SESSION 1", age: 10, name: "Andrey"},
             condition: ({key, attr, ref}) => `${key.session_id}=1 AND ${attr.lock} = ${ref('lockValue')}`,
             returnOnConditionFailure: "ALL_OLD",
-        }).update({session_id: "SESSION 1"}, {
-            values: {age: 10, name: "Andrey", lockValue: "1"},
+        }, {lockValue: "1"}).update({
+            key: {session_id: "SESSION 1"},
             expression: ({attr, ref}) => `SET ${attr.name} = ${ref('name')}, ${attr.age} = ${ref('age')}`,
             condition: ({attr, ref}) => `${attr.lock} = ${ref('lockValue')}`,
             returnOnConditionFailure: "ALL_OLD",
-        })
-        Another.with(tx).exec({id: 1}, {
+        }, {age: 10, name: "Andrey", lockValue: "1"})
+        Another.with(tx).add({
             action: "delete",
-            values: {lock: "1"},
+            key: {id: 1},
             condition: ({ref}) => `${ref('lock')} = 2`,
             returnOnConditionFailure: "ALL_OLD",
-        })
-        SessionsTable.with(tx).exec({session_id: "SESSION 2"}, {
+        }, {lock: "1"})
+        SessionsTable.with(tx).add({
             action: "check",
-            values: {lock: "1"},
+            key: {session_id: "SESSION 2"},
             condition: ({attr, ref}) => `${attr.lock} = ${ref('lock')}`,
             returnOnConditionFailure: "ALL_OLD",
-        })
+        }, {lock: "1"})
         await tx.returnConsumedCapacity("INDEXES")
             .returnItemCollectionMetrics("SIZE")
             .clientRequestToken("Idempotency token")
@@ -551,6 +793,65 @@ describe("Transact Write Command", () => {
             }
         ))
     })
+
+    it("unmarshall attributes of failed transaction", async () => {
+        transactWriteItems.mockRejectedValue(new ddb.TransactionCanceledException({
+            message: "",
+            $metadata: {},
+            CancellationReasons: [{
+                Code: "TransactionConflict",
+                Message: "TransactionConflict",
+                Item: {session_id: {S: "SESSION 1"}}
+            }, {
+                Code: "None",
+                Message: "None"
+            }, {
+                Code: "None",
+                Message: "None"
+            }],
+            Message: "Oops"
+        }))
+        const tx = DynamoDB.transactWrite()
+        const updateSessions = SessionsTable.with(tx)
+            .update({
+                key: {session_id: "SESSION 1"},
+                expression() {
+                    return ''
+                }
+            })
+            .delete({key: {session_id: "SESSION 1"}})
+        Another.with(tx).put({
+            item: {id: 1}
+        })
+        const task = tx.exec();
+        await expect(task).rejects.toMatchObject({
+            Outcomes: [{
+                Code: "TransactionConflict",
+                Message: "TransactionConflict",
+                Item: {session_id: "SESSION 1"}
+            }, {
+                Code: "None",
+                Message: "None"
+            }, {
+                Code: "None",
+                Message: "None"
+            }],
+            Message: "Oops"
+        })
+        const error = await task.catch(x => x)
+        if (DDB.isTransactionCancelled(error)) {
+            expect(error.Outcomes).toHaveLength(3)
+            expect(DDB.isTransactionConflict(error.Outcomes[0])).toBeTrue()
+            expect(DDB.isTransactionConflict(error.Outcomes[1])).toBeFalse()
+            expect(Array.from(updateSessions.failures(error))).toEqual([{
+                Code: "TransactionConflict",
+                Message: "TransactionConflict",
+                Item: {session_id: "SESSION 1"}
+            }])
+        } else {
+            fail("Error: DDB.isTransactionCancelled")
+        }
+    })
 })
 
 type QueryFn = (args: ddb.QueryCommandInput) => Promise<ddb.QueryOutput>
@@ -558,17 +859,16 @@ const query = jest.spyOn(ddb.DynamoDB.prototype, 'query') as unknown as jest.Moc
 describe("Query Command", () => {
 
     beforeEach(function () {
-        query.mockResolvedValue({Items:[]})
+        query.mockResolvedValue({Items: []})
     })
 
     it("expose attributes to expressions", async () => {
         await SessionsTable.query({
-            values: {session_id: "ABC", sid: "XYZ", name: "Andrey"},
             keyCondition: ({key, ref}) => `${key.session_id} >= ${ref('sid')}`,
             filter: ({attr, ref}) => `${attr.name} = ${ref('name')}`,
             projection: ({key: {session_id}, attr: {name, age}}) =>
                 [session_id, name, age],
-        })
+        }, {session_id: "ABC", sid: "XYZ", name: "Andrey"})
         expect(query).toHaveBeenCalledWith(expect.objectContaining({
             KeyConditionExpression: "#session_id >= :sid",
             FilterExpression: "#name = :name",
@@ -586,29 +886,46 @@ describe("Query Command", () => {
     })
 
     it("expose all other get item command properties", async () => {
-        const Index = DynamoDB.table({
-            name: Sessions.name,
-            key: Sessions.key,
-            attributes: Sessions.attributes,
-            index: "Index"
-        })
+        const Index = DynamoDB.table("sessions", {
+            key: DDB.Key({
+                "session_id": DDB.TemplateLiteral([DDB.Literal("SESSION "), DDB.String])
+            }),
+            item: DDB.Item({
+                name: DDB.String,
+                age: DDB.Number,
+                lock: DDB.Optional(DDB.String)
+            })
+        }, "Index")
         await Index.query({
-                select: "ALL_PROJECTED_ATTRIBUTES",
-                limit: 10,
-                scanIndexForward: true,
-                consistentRead: true,
-                returnConsumedCapacity: "TOTAL"
+            keyCondition() {
+                return ""
             },
-            {session_id: "Session"})
+            select: "ALL_PROJECTED_ATTRIBUTES",
+            limit: 10,
+            scanIndexForward: true,
+            consistentRead: true,
+            returnConsumedCapacity: "TOTAL",
+            startKey: {session_id: "SESSION 1"}
+        })
         expect(query).toHaveBeenCalledWith(expect.objectContaining({
             Select: "ALL_PROJECTED_ATTRIBUTES",
             Limit: 10,
             ScanIndexForward: true,
             IndexName: "Index",
-            ExclusiveStartKey: {"session_id": {S: "Session"}},
+            ExclusiveStartKey: {"session_id": {S: "SESSION 1"}},
             ConsistentRead: true,
             ReturnConsumedCapacity: "TOTAL",
         }))
+    })
+
+    it("unmarshall attributes", async () => {
+        query.mockResolvedValueOnce({
+            Items: [{session_id: {S: "SESSION 1"}}],
+        })
+        const x = await SessionsTable.query({
+            keyCondition: () => ``,
+        })
+        expect(x.Items).toEqual([{session_id: "SESSION 1"}])
     })
 })
 
@@ -616,17 +933,15 @@ type ScanFn = (args: ddb.ScanCommandInput) => Promise<ddb.ScanOutput>
 const scan = jest.spyOn(ddb.DynamoDB.prototype, 'scan') as unknown as jest.MockedFunction<ScanFn>
 describe("Scan Command", () => {
     beforeEach(function () {
-        scan.mockResolvedValue({Items:[]})
+        scan.mockResolvedValue({Items: []})
     })
 
     it("expose attributes to expressions", async () => {
         await SessionsTable.scan({
-                values: {session_id: "ABC", sid: "XYZ", name: "Andrey"},
-                filter: ({attr, ref}) => `${attr.name} = ${ref('name')}`,
-                projection: ({key: {session_id}, attr: {name, age}}) =>
-                    [session_id, name, age],
-            }
-        )
+            filter: ({attr, ref}) => `${attr.name} = ${ref('name')}`,
+            projection: ({key: {session_id}, attr: {name, age}}) =>
+                [session_id, name, age],
+        }, {session_id: "ABC", sid: "XYZ", name: "Andrey"})
         expect(scan).toHaveBeenCalledWith(expect.objectContaining({
             FilterExpression: "#name = :name",
             ProjectionExpression: '#session_id, #name, #age',
@@ -642,31 +957,42 @@ describe("Scan Command", () => {
     })
 
     it("expose all other get item command properties", async () => {
-        const Index = DynamoDB.table({
-            name: SessionsTable.name,
-            key: SessionsTable.schema.key,
-            attributes: SessionsTable.schema.attributes,
-            index: "Secondary"
-        })
+        const Index = DynamoDB.table("sessions", {
+            key: DDB.Key({
+                "session_id": DDB.TemplateLiteral([DDB.Literal("SESSION "), DDB.String])
+            }),
+            item: DDB.Item({
+                name: DDB.String,
+                age: DDB.Number,
+                lock: DDB.Optional(DDB.String)
+            })
+        }, "Secondary")
         await Index.scan({
-                select: "ALL_PROJECTED_ATTRIBUTES",
-                limit: 10,
-                segment: 1,
-                totalSegments: 10,
-                consistentRead: true,
-                returnConsumedCapacity: "TOTAL",
-            },
-            {session_id: "Session"}
-        )
+            select: "ALL_PROJECTED_ATTRIBUTES",
+            limit: 10,
+            segment: 1,
+            totalSegments: 10,
+            consistentRead: true,
+            returnConsumedCapacity: "TOTAL",
+            startKey: {session_id: "SESSION 1"}
+        })
         expect(scan).toHaveBeenCalledWith(expect.objectContaining({
             IndexName: "Secondary",
             Select: "ALL_PROJECTED_ATTRIBUTES",
             Limit: 10,
             Segment: 1,
             TotalSegments: 10,
-            ExclusiveStartKey: {"session_id": {S: "Session"}},
+            ExclusiveStartKey: {"session_id": {S: "SESSION 1"}},
             ConsistentRead: true,
             ReturnConsumedCapacity: "TOTAL",
         }))
+    })
+
+    it("unmarshall attributes", async () => {
+        scan.mockResolvedValueOnce({
+            Items: [{session_id: {S: "SESSION 1"}}],
+        })
+        const x = await SessionsTable.scan({})
+        expect(x.Items).toEqual([{session_id: "SESSION 1"}])
     })
 })

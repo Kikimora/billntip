@@ -5,7 +5,7 @@ import billFixture, {locations} from "./bill.fixture"
 const fixture = prepare('Once', {
     async before() {
         const {tipUsers} = await __init()
-        const {org: {pk, title}, store, normalUser, adminUser, businessAdminUser, userSession} = billFixture()
+        const {org: {id, title}, store, normalUser, adminUser, businessAdminUser, userSession} = billFixture()
         //START - This should be done using registration endpoint
         const user = tipUsers.newUser(normalUser)
         await user.fetchOrCreate()
@@ -13,7 +13,7 @@ const fixture = prepare('Once', {
 
         //END - This should be done using registration endpoint
         const location = await locations.create({
-            path: {orgId: pk},
+            path: {orgId: id},
             body: {
                 title: "My Location",
                 image_url: "https://static.billntip.com/locations/abc.jpeg"
@@ -23,7 +23,7 @@ const fixture = prepare('Once', {
         await store.inviteToOrg({
             invited_by: adminUser,
             org: {
-                id: pk,
+                id: id,
                 title: title
             },
             role: "admin",
@@ -32,7 +32,7 @@ const fixture = prepare('Once', {
         //END - This should be done using invite endpoint
 
         //START - This should be done using accept invite endpoint in tip
-        await user.acceptInvite(pk)
+        await user.acceptInvite(id)
         //END - This should be done using accept invite endpoint in tip
         return {tipUsers, user, location, billStore: store, normalUser, adminUser, businessAdminUser, userSession}
     },

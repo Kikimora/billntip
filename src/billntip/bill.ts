@@ -1,7 +1,5 @@
 import _ from "lodash";
-import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
 import {Context} from "aws-lambda";
-import {SES} from "@aws-sdk/client-ses";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {Static, Type} from "@sinclair/typebox";
 import {
@@ -16,20 +14,20 @@ import {
     registerDefaultFormats,
     TracedEvent
 } from '@app/lambda'
-import diagnostics, {errorWithContext, TraceAttributes, TracingOptions} from "@app/diagnostics";
+import diagnostics, {TraceAttributes, TracingOptions} from "@app/diagnostics";
 import {SessionContext, SessionContextSchema} from "@src/authorizer/types";
 import {TemplateRepo} from "@src/templates";
-import UserRepo, {UserAttribute} from "@src/users/user";
-import {generatePassword} from "@src/users/cognito";
-import {keyToToken, tokenToKey, toLocation, toMembership} from "./util";
+import ProfileRepo from "@src/users/user";
+import {toLocation, toMembership} from "./util";
 import Routes from "./bill-paths";
-import Store, {InviteRequest, MembershipItem, Org} from "./store";
-import {uploadBuilder} from "@src/object-store";
+import * as schemas from "./schemas";
+import Store, {MemberItem, Org} from "./store";
+import {S3Object, uploadBuilder} from "@src/object-store";
+import {uuid} from "@app/util";
+import * as members from "./members"
 
 registerDefaultFormats()
-const cognito = new CognitoIdentityProvider()
 const dynamo = new DynamoDB()
-const ses = new SES()
 
 const Module = bootstrap()
     .parameters({
@@ -48,26 +46,33 @@ const Module = bootstrap()
         'bill-diagnostics': Type.Object({}, {relaxed: true, default: {triggers: {request: true}}})
     })
     .buildModule(async function ({dynamodb, oidc, s3, 'bill-diagnostics': diag}) {
-        const userRepo = new UserRepo({
+        const profileRepoOptions = {
             db: dynamo,
             table: dynamodb.users,
             locks: dynamodb.locks
-        })
+        };
+        const profileRepo = new ProfileRepo(profileRepoOptions)
 
-        const templates = new TemplateRepo({
+        const templateRepoOptions = {
             bucket: s3.bucket,
             cache: process.env.ENV === 'prod'
-        })
+        };
+        const templates = new TemplateRepo(templateRepoOptions)
 
         const store = new Store({table: dynamodb.data})
+
+        const repo = new members.Repo(dynamodb.data, profileRepo)
 
         diagnostics(diag as TracingOptions)
 
         return {
             userPoolId: oidc.userPoolId,
             templates,
-            userRepo,
+            profileRepo,
+            profileRepoOptions,
+            templateRepoOptions,
             store,
+            repo,
             s3
         }
     })
@@ -87,6 +92,10 @@ function principalGroups(s: SessionContext) {
     return {isBusiness, isAdmin, groups}
 }
 
+function error(tag: string, ctx: TraceAttributes) {
+    return internalError("Unexpected error").withContext(tag, ctx)
+}
+
 export const handler = pipeline()
     .handleErrors()
     .traceRequest()
@@ -102,129 +111,82 @@ export const handler = pipeline()
         throw accessDeniedError()
     })
     .done(async function (req) {
-        const {store, userRepo, userPoolId, templates, s3} = await __init()
-
+        const context = await __init()
+        const {repo, store, profileRepo, s3} = context
+        const username = req.principal.id_token_json['cognito:username']
         switch (req.routeKey) {
 
             case 'GET /admin/organizations': {
                 await assertAdmin(req.principal)
                 const {query: {from}} = req.parse()
-                const {organizations, lastKey} = await store.organizations(tokenToKey(from))
-                return {
-                    organizations: organizations.map(function (org) {
-                        return {
-                            id: org.pk,
-                            title: org.title ?? ""
-                        }
-                    }),
-                    next: keyToToken(lastKey)
-                } satisfies Static<typeof req.route.success>
+                return await repo.organizations({cursor: from}) satisfies Static<typeof req.route.success>
             }
-
+            case 'GET /bill/organizations': {
+                const {isAdmin} = await assertAdminOrBusiness(req.principal)
+                const {query: {from}} = req.parse();
+                const response = await repo.organizations({cursor: from, username: isAdmin ? undefined : username});
+                return response satisfies Static<typeof req.route.success>
+            }
             case 'GET /bill/{orgId}/members': {
-                const {query: {from, location}, path: {orgId}} = req.parse()
+                const {query, path: {orgId}} = req.parse()
                 const org = await assertOrgAdmin(req.principal, orgId)
-                let memberItems: MembershipItem[]
-                let next: string | undefined
-                if (location !== undefined) {
-                    const memberIds = await store.locationMembers(orgId, location)
-                    memberItems = await store.batchGetMembers(memberIds)
-                } else {
-                    const orgMembers = await store.orgMembers(orgId, tokenToKey(from))
-                    memberItems = orgMembers.members
-                    next = keyToToken(orgMembers.lastKey)
-                }
-                const members = await membersWithRelatedUsers(org, memberItems);
-                return {
-                    members,
-                    next
-                } satisfies Static<typeof req.route.success>
+                const organization = repo.organization(org)
+                return await organization.members(query) satisfies Static<typeof req.route.success>
             }
             case 'POST /bill/{orgId}/members': {
                 const {body, path: {orgId}} = req.parse()
-                const inviterUsername = req.principal.id_token_json['cognito:username']
-                const inviteeEmail = body.email;
-
                 const org = await assertOrgAdmin(req.principal, orgId)
-                const inviter = await userRepo.fetch(inviterUsername)
-                const invitedBy = {
-                    username: inviter.username,
-                    email: inviter.attr('email', true) ?? '',
-                    first_name: inviter.attr('first_name') ?? '',
-                    last_name: inviter.attr('last_name') ?? '',
-                }
-                const invitedTo = {
-                    id: orgId,
-                    title: org.title ?? "NoName"
-                }
-                const inviteeUsername = await inviteUser(inviteeEmail, {
-                    ..._.mapKeys(invitedBy, (_1, key) => `invited_by_${key}`),
-                    ..._.mapKeys(invitedTo, (_1, key) => `org_${key}`),
-                    env: process.env.ENV ?? "dev"
-                });
-                if (inviteeUsername === undefined) {
-                    throw internalError("Cannot create nor find user with a given email.")
-                        .withContext('inviteUser', {inviteeEmail})
-                }
-
-                const invite = {
-                    role: 'member',
-                    invited_by: invitedBy.username,
-                    org: invitedTo,
-                    username: inviteeUsername
-                };
-
-                const member = await createMember(invite)
-                if (member === undefined)
-                    throw internalError("Create member failed with unexpected error").withContext('createInvite', {
-                        invite
-                    })
-
-                return toMembership(member, org, {
-                    pk: inviteeUsername,
-                    attributes: {'email': inviteeEmail}
-                }, {
-                    pk: inviter.username,
-                    attributes: inviter.attributeMap
-                }) satisfies Static<typeof req.route.success>
+                const organization = repo.organization(org)
+                const inviter = organization.newMember(username)
+                await inviter.fetchProfile(true)
+                const service = new members.Service({
+                    profileRepo: context.profileRepoOptions,
+                    templates: context.templateRepoOptions,
+                    userPoolId: context.userPoolId
+                })
+                const newMember = await service.inviteMember(inviter, body.email)
+                return members.Response.buildFromMember(newMember, inviter.profile) satisfies Static<typeof req.route.success>
             }
             case 'GET /bill/{orgId}/members/{id}': {
                 const {path: {orgId, id}} = req.parse()
                 const org = await assertOrgAdmin(req.principal, orgId)
-                const member = await fetchMembership(orgId, id)
-                if (member === undefined) throw notFoundError()
-                const locations = await batchGetLocations(orgId, member.locations)
+                const organization = repo.organization(org)
+                const member = await organization.fetchMember(id)
+                const locations = await member.locations()
+                await member.fetchRelatedProfiles()
                 return {
-                    member: await memberWithRelatedUsers(member, org, id),
+                    member: members.Response.buildFromMember(member),
                     locations: locations.map(toLocation)
                 } satisfies Static<typeof req.route.success>;
             }
             case 'DELETE /bill/{orgId}/members/{id}': {
                 const {path: {orgId, id}} = req.parse()
                 const org = await assertOrgAdmin(req.principal, orgId)
-                const member = await removeMembership(orgId, id)
-                if (member === undefined) throw notFoundError()
-                return await memberWithRelatedUsers(member, org, id) satisfies Static<typeof req.route.success>;
+                const organization = repo.organization(org)
+                const member = organization.newMember(id)
+                await member.fetchRelatedProfiles()
+                if (!await member.delete()) {
+                    throw notFoundError()
+                }
+                return members.Response.buildFromMember(member) satisfies Static<typeof req.route.success>;
             }
             case "PUT /bill/{orgId}/members/{id}": {
                 const {path: {orgId, id}, body} = req.parse()
                 const org = await assertOrgAdmin(req.principal, orgId)
-                const member = await updateMembership(orgId, id, body)
-                return await memberWithRelatedUsers(member, org, id) satisfies Static<typeof req.route.success>;
+                const organization = repo.organization(org)
+                const member = organization.newMember(id)
+                await Promise.all([
+                    member.update(body),
+                    member.fetchRelatedProfiles()
+                ])
+                return members.Response.buildFromMember(member) satisfies Static<typeof req.route.success>
             }
 
             case "GET /bill/{orgId}/locations": {
                 const {path: {orgId}, query} = req.parse()
-                await assertOrgAdmin(req.principal, orgId)
-                const {data, lastKey} = await store.locations(orgId, {
-                    title: query.title,
-                    archived: query.archived ?? false,
-                    startKey: tokenToKey(query.start_key)
-                })
-                return {
-                    lastKey: keyToToken(lastKey),
-                    data: data.map(toLocation)
-                } satisfies Static<typeof req.route.success>
+                const org = await assertOrgAdmin(req.principal, orgId)
+                const organization = repo.organization(org)
+                return await organization.locations(query) satisfies Static<typeof req.route.success>
             }
             case "GET /bill/{orgId}/locations/{id}": {
                 const {path: {orgId, id}} = req.parse()
@@ -240,20 +202,28 @@ export const handler = pipeline()
             case "POST /bill/{orgId}/locations": {
                 const {path: {orgId}, body} = req.parse()
                 await assertOrgAdmin(req.principal, orgId)
-                const location = await store.updateLocation(orgId, body)
-                if (location === undefined) throw notFoundError()
-                return toLocation(location) satisfies Static<typeof req.route.success>
+                const locId = uuid.generate()
+                const image = await prepareUpload(orgId, locId, 'image', body)
+                const newLocation = await store.updateLocation(orgId, body, locId, "create")
+                if (newLocation === undefined) throw internalError()
+                if (image !== undefined && body.image !== undefined) {
+                    await image.upload.move(body.image.id)
+                }
+                return toLocation(newLocation) satisfies Static<typeof req.route.success>
             }
             case "POST /bill/{orgId}/locations/image": {
                 const {path: {orgId}} = req.parse()
                 await assertOrgAdmin(req.principal, orgId)
-                //how to make sure people won't spam images?
-                //how to clear old images, when image url changes in a model?
-                //
-                const upload = uploadBuilder(`${orgId}/${req.principal.id}`, {bucket: s3.bucket, prefix: s3.tmpPrefix})
+                const upload = uploadBuilder(`${orgId}/${req.principal.id}.png`, {
+                    bucket: s3.bucket,
+                    prefix: s3.tmpPrefix
+                })
                     .condition(["content-length-range", 1024, 5 * 1024 * 1024])
                     .condition(["starts-with", "$Content-Type", "image/"])
                     .properties({
+                        'type': 'location_image',
+                        'owner': req.principal.id,
+                        'org': orgId,
                         //'destination': `${orgId}/${}`,
                         'transform': 'resize',
                         'target-width': '100',
@@ -265,11 +235,12 @@ export const handler = pipeline()
             case "PUT /bill/{orgId}/locations/{id}": {
                 const {path: {orgId, id}, body} = req.parse()
                 await assertOrgAdmin(req.principal, orgId)
-                const location = await store.updateLocation(orgId, body, id)
+                const image = await prepareUpload(orgId, id, 'image', body)
+                const location = await store.updateLocation(orgId, body, id, "update")
                 if (location === undefined) throw notFoundError()
-                //const {before, after} = update
-                // if (before.image_url !== after.image_url && before.image_url !== undefined) {
-                // }
+                if (image !== undefined && body.image !== undefined) {
+                    await image.upload.move(body.image.id)
+                }
                 return toLocation(location) satisfies Static<typeof req.route.success>
             }
             case "PATCH /bill/{orgId}/locations/{id}": {
@@ -314,26 +285,15 @@ export const handler = pipeline()
             }
         }
 
-        async function memberWithRelatedUsers(member: MembershipItem, org: Org, id: string) {
-            try {
-                const [user, invitee] = await userRepo.batchFetch(_.compact([member.pk, member?.invited_by]))
-                return toMembership(member, org, user, invitee) satisfies Static<typeof req.route.success>
-            } catch (e: any) {
-                throw internalError("Unexpected error").withContext("fetchRelatedUsers", {
-                    org: org, id, cause: e
-                })
-            }
-        }
-
-        async function membersWithRelatedUsers(org: Org, memberItems: MembershipItem[]) {
+        async function membersWithRelatedUsers(org: Org, memberItems: MemberItem[]) {
             try {
                 const [users, invitees] = await Promise.all([
-                    await userRepo.batchFetch(_(memberItems).map('pk').uniq().valueOf()).then(x => _.keyBy(x, 'pk')),
-                    await userRepo.batchFetch(_(memberItems).map('invited_by').compact().uniq().valueOf()).then(x => _.keyBy(x, 'pk'))
+                    await profileRepo.batchFetch(_(memberItems).map('id').uniq().valueOf()).then(x => _.keyBy(x, 'id')),
+                    await profileRepo.batchFetch(_(memberItems).map('invited_by').compact().uniq().valueOf()).then(x => _.keyBy(x, 'id'))
                 ])
                 return memberItems.map(function (member) {
                     const inviter = member.invited_by !== undefined ? invitees[member.invited_by] : undefined
-                    return toMembership(member, org, users[member.pk], inviter)
+                    return toMembership(member, org, users[member.id], inviter)
                 });
             } catch (e: any) {
                 throw error("membersWithRelatedUsers", {org, memberItems})
@@ -367,10 +327,14 @@ export const handler = pipeline()
             }
         }
 
-
-        function error(tag: string, ctx: TraceAttributes) {
-            return internalError("Unexpected error").withContext(tag, ctx)
+        async function assertAdminOrBusiness(sessions: SessionContext) {
+            const {isAdmin, isBusiness} = principalGroups(sessions)
+            if (!isAdmin && !isBusiness) {
+                throw accessDeniedError()
+            }
+            return {isAdmin, isBusiness}
         }
+
 
         async function fetchMembership(orgId: string, uid: string) {
             try {
@@ -384,7 +348,7 @@ export const handler = pipeline()
             if (members === undefined) return []
             if (members.size === 0) return []
             try {
-                return await store.batchGetMembers(Array.from(members))
+                return await store.queryOrgMembers(orgId, Array.from(members))
             } catch (e: any) {
                 throw error("batchGetMembers", {orgId, locations: members, cause: e})
             }
@@ -396,18 +360,6 @@ export const handler = pipeline()
                 return await store.location(orgId, id)
             } catch (e: any) {
                 throw error("location", {orgId, id, cause: e})
-            }
-        }
-
-        async function batchGetLocations(orgId: string, locations?: Set<string>) {
-            if (locations === undefined) return []
-            if (locations.size === 0) return []
-            try {
-                return await store.batchGetLocations(Array.from(locations, function (locationId) {
-                    return {orgId, locationId}
-                }))
-            } catch (e: any) {
-                throw error("fetchLocations", {orgId, locations, cause: e})
             }
         }
 
@@ -425,139 +377,18 @@ export const handler = pipeline()
             }
         }
 
-        async function createMember(invite: InviteRequest) {
-            try {
-                return await store.inviteToOrg(invite)
-            } catch (e: any) {
-                switch (e.name) {
-                    case 'ConditionalCheckFailedException': {
-                        throw badRequestError('Member already exists').withContext('createInvite', {invite})
-                    }
-                    default:
-                        throw error('createInvite', {invite, cause: e})
-                }
+        async function prepareUpload<K extends string, T extends Partial<Record<K, schemas.Image | undefined>>>(orgId: string, locId: string, key: K, body: T) {
+            const image = body[key]
+            if (image === undefined) return undefined
+            const upload = new S3Object(s3.bucket, image.id)
+            const metadata = await upload.head().returnNothingIfNotFound()
+            if (metadata === undefined || metadata.props.type !== 'location_image' || metadata.props.org !== orgId) {
+                throw badRequestError("Invalid image key", {
+                    path: (`/${key}`)
+                })
             }
-        }
-
-        async function removeMembership(orgId: string, uid: string) {
-            try {
-                return await store.removeMembership(uid, orgId)
-            } catch (e: any) {
-                throw error('removeMembership', {orgId, uid, cause: e})
-            }
-        }
-
-        async function updateMembership(orgId: string, uid: string, body: { role: "admin" | "member" }) {
-            try {
-                return await store.updateMembership(uid, orgId, body)
-            } catch (e: any) {
-                if (e.name === 'ConditionalCheckFailedException') {
-                    throw notFoundError()
-                }
-                throw error('updateMembership', {orgId, uid, body, cause: e})
-            }
-        }
-
-        /**
-         * If user with a given email does not exist then send invite
-         */
-        async function inviteUser(email: string, metadata: Record<string, string>) {
-            const user = await fetchUser(email)
-            const attributes = userRepo.normalAttributes(user?.attributes ?? [])
-            const context = {
-                username: user?.username,
-                email,
-                attributes,
-                metadata
-            }
-            try {
-                const resend = user !== undefined
-                const username = await adminCreateUser(email, resend, attributes, metadata)
-                if (user === undefined) {
-                    await userRepo.create(username, "trusted", [{name: "email", value: email, verified: true}])
-                }
-                return username
-            } catch (createUserError: any) {
-                const userConfirmed = user !== undefined && createUserError.name === 'UnsupportedUserStateException';
-                if (!userConfirmed)
-                    throw errorWithContext(createUserError, 'adminCreateUser', context)
-
-                try {
-                    await sendInviteMessage(user.username, email, attributes, metadata)
-                    return user.username
-                } catch (sendInviteError: any) {
-                    throw errorWithContext(sendInviteError, 'sendInviteMessage', {
-                        ...context,
-                        adminCreateUser: createUserError.toString(),
-                    })
-                }
-            }
-        }
-
-        async function fetchUser(email: string) {
-            try {
-                return await userRepo.fetch(email, {allowUnverifiedAlias: true})
-            } catch (e: any) {
-                if (e.name === 'UserNotFoundException') {
-                    return undefined
-                }
-                throw e
-            }
-        }
-
-        async function adminCreateUser(email: string, resend: boolean, attributes: UserAttribute[], metadata: Record<string, string>) {
-            const password = await generatePassword(userPoolId)
-            const response = await cognito.adminCreateUser({
-                UserPoolId: userPoolId,
-                Username: email,
-                MessageAction: resend ? "RESEND" : undefined,
-                UserAttributes: [{
-                    Name: 'email',
-                    Value: email
-                }, {
-                    Name: 'email_verified',
-                    Value: 'true'
-                }],
-                TemporaryPassword: password,
-                ClientMetadata: {
-                    ...metadata,
-                    _attributes: JSON.stringify(attributes),
-                    password
-                }
-            })
-            if (response.User?.Username === undefined) throw internalError("adminCreateUser didn't return username.")
-            return response.User.Username
-        }
-
-        async function sendInviteMessage(username: string, email: string, attributes: UserAttribute[], metadata: Record<string, string>) {
-            //User with this username exists and confirmed
-            const template = await templates.fetchTemplate("admin-create-user-email.html")
-            await ses.sendEmail({
-                Source: "no-reply@billntip.com",
-                Destination: {ToAddresses: [email]},
-                Message: {
-                    Body: {
-                        Html: {
-                            Charset: "utf8",
-                            Data: template({
-                                attributes: _(attributes)
-                                    .filter(x => x.verified || x.verified === undefined)
-                                    .keyBy('name')
-                                    .mapValues('value')
-                                    .value(),
-                                metadata,
-                                username: username,
-                                code: "",
-                                link: "",
-                                type: "invite"
-                            })
-                        }
-                    },
-                    Subject: {
-                        Charset: "utf-8",
-                        Data: `${metadata['invited_by_first_name']} invited you to join the ${metadata['org_title']} team on Bill&Tip`
-                    }
-                }
-            })
+            image.version = Date.now()
+            image.id = `/images/${orgId}/locations/${locId}.${upload.keyExt}`
+            return {upload, image}
         }
     })
