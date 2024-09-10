@@ -1,6 +1,24 @@
 import {Static, TObject, Type as T, Type} from "@sinclair/typebox";
 import {TaggedUnion} from "@app/lambda/tagged_union";
 
+export const OrgId = Type.String({
+    description: "Organisation id",
+    minLength: 20,
+    maxLength: 36
+})
+
+export const UserId = Type.String({
+    maxLength: 36,
+    minLength: 20,
+    description: "User id"
+})
+
+export const LocationId = Type.String({
+    description: "Location id",
+    minLength: 20,
+    maxLength: 36
+});
+
 const ShortUserInfo = Type.Object({
     id: Type.String({description: "Unique user identifier"}),
     email: Type.Optional(Type.String({description: "User email"})),
@@ -9,12 +27,8 @@ const ShortUserInfo = Type.Object({
     last_name: Type.Optional(Type.String({description: "User last name"})),
 });
 
-export const OrgId = {
-    id: T.String({description: "Organisation identifier", minLength: 1})
-}
-
 export const PublicOrgInfo = Type.Object({
-        ...OrgId,
+        id: OrgId,
         title: Type.String({description: "Organisation name"})
     }, {
         $id: "Organisation",
@@ -385,7 +399,6 @@ export const CreateBankAccountRequest = Type.Object({
 })
 export type CreateBankAccountRequest = Static<typeof CreateBankAccountRequest>
 
-
 const CCPayinSchema = Type.Object({
     type: Type.Literal("cc_payin"),
     card: Type.String()
@@ -402,7 +415,8 @@ const WirePayinSchema = Type.Object({
     type: Type.Literal("wire_payin"),
 })
 export const CreateTransactionRequest = Type.Object({
-    amount: AmountSchema,
+    amount: Amount,
+    currency: Currency,
     details: TaggedUnion([WirePayinSchema, CCPayinSchema, WirePayoutSchema], {tag: "type"})
 })
 export type CreateTransactionRequest = Static<typeof CreateTransactionRequest>
@@ -560,3 +574,60 @@ export const UpdateCardRequest = Type.Object({
     token: Type.String(),
 }, {$id: "UpdateCardRequest"})
 export type UpdateCardRequest = Static<typeof UpdateCardRequest>
+
+export const TipRecipient = TaggedUnion([
+    Type.Object({
+        type: Type.Literal("person"),
+        id: Type.String(),
+        first_name: Type.String(),
+        last_name: Type.String(),
+        image: Image,
+        goal: Type.String()
+    }),
+    Type.Object({type: Type.Literal("team"), id: Type.String(), name: Type.String(), logo: Image}),
+    Type.Object({type: Type.Literal("location"), id: Type.String(), name: Type.String(), logo: Image}),
+], {
+    tag: "type",
+    $id: "TipRecipient",
+    description: "Describes a tip recipient."
+})
+
+export const TipSettings = Type.Object({
+    organization: Type.String({description: "Organization identifier"}),
+    location: Type.String({description: "Location identifier withing organization"}),
+    recipients: Type.Array(TipRecipient, {description: "List of possible tip recipients"}),
+    currency: Currency,
+    tips: Type.Array(Amount, {description: "Array of suggested tip amounts"}),
+    feedback: Type.Object({
+        questions: Type.Array(Type.String()),
+        comment: Type.Boolean()
+    }, {description: "Describes feedback options"}),
+    payment_methods: Type.Array(CardType)
+}, {
+    $id: "TipSettings"
+})
+export type TipSettings = Static<typeof TipSettings>
+
+export const TipRequest = Type.Object({
+    payer: Type.String({maxLength: 40}),
+    organization: OrgId,
+    location: LocationId,
+    recipient: Type.Object({
+        type: Type.Union(TipRecipient.anyOf.map(x => x.properties.type), {description: "Tip recipient type"}),
+        id: Type.String({description: "Tip recipient id"})
+    }),
+    feedback: Type.Object({
+        answers: Type.Array(Type.Object({
+            id: Type.String(),
+            rating: Type.Number({description: "Rating from 1 to 5"})
+        })),
+        comment: Type.String({description: "Freeform comment to the staff", maxLength: 1000})
+    }),
+    amount: Amount,
+    payment_method: Type.String({description: "Identifier of selected payment method"}),
+    commission: Type.Union([Type.Literal("our"), Type.Literal("recipient")], {description: "Commission setting, defines who pays commission."}),
+    tos: Type.Boolean({description: "Indicates whenever payee accepted Terms of Service"}),
+}, {$id: "TipRequest"})
+export type TipRequest = Static<typeof TipRequest>
+
+export const TipResponse = Type.Object({})

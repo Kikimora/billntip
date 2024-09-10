@@ -8,26 +8,14 @@ export const authenticatedEndpoint: SecurityRequirementObject[] = [{"Cookie": ["
 export const adminEndpoint: SecurityRequirementObject[] = [{"Cookie": ["admin"]}]
 
 const OrgId = {
-    orgId: Type.String({
-        description: "Organisation id",
-        minLength: 20,
-        maxLength: 36
-    })
+    orgId: schemas.OrgId
 } as const;
 const UserId = {
-    id: Type.String({
-        maxLength: 36,
-        minLength: 20,
-        description: "User id"
-    })
+    id: schemas.UserId
 } as const;
 const LocationId = {
-    id: Type.String({
-        description: "Location id",
-        minLength: 20,
-        maxLength: 36
-    })
-} as const;
+    id: schemas.LocationId
+}
 export default {
 
     "GET /admin/organizations": {

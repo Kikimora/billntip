@@ -1,7 +1,7 @@
 import {makeTestHandler, prepare} from "@app/test";
 import {SES} from "@aws-sdk/client-ses";
 import {TemplateRepo} from "@src/templates";
-import {MangopayAPI} from "./mangopay-user";
+import {MangopayAPI} from "./mangopay-api";
 import {KYCProcess} from "./schemas";
 import {__init, handler} from "./mangopay-hooks";
 import _ from "lodash";

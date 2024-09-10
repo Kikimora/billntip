@@ -2,7 +2,7 @@ import {SES} from "@aws-sdk/client-ses";
 import {Type} from "@sinclair/typebox";
 import {internalError, bootstrap, pipeline} from "@app/lambda";
 import diagnostics from "@app/diagnostics";
-import {MangopayAPI, MangopayOptions} from "./mangopay-user";
+import {MangopayAPI, MangopayOptions} from "./mangopay-api";
 import Paths from "./mangopay-hooks-paths";
 import {TemplateRepo} from "@src/templates";
 import UserRepo from "@src/users/user";

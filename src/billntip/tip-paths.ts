@@ -24,21 +24,21 @@ export default {
     },
     "GET /tip/organisations/{id}": {
         operationId: "GET /tip/organisations",
-        path: schemas.OrgId,
+        path: {id:schemas.OrgId},
         success: schemas.MemberSchema,
         responses: [401, 403, 404],
         tags: ['Tip']
     },
     "PUT /tip/organisations/{id}": {
         operationId: "PUT /tip/organisations",
-        path: schemas.OrgId,
+        path: {id:schemas.OrgId},
         success: schemas.MemberSchema,
         responses: [401, 403, 404],
         tags: ['Tip']
     },
     "DELETE /tip/organisations/{id}": {
         operationId: "DELETE /tip/organisations",
-        path: schemas.OrgId,
+        path: {id:schemas.OrgId},
         success: Type.Optional(schemas.MemberSchema),
         responses: [401, 403, 404],
         tags: ['Tip']
@@ -140,23 +140,5 @@ export default {
         success: Type.Array(schemas.Location),
         responses: [401, 403],
         tags: ['Tip']
-    },
-    "POST /pay/card": {
-        operationId: "POST /pay/card",
-        body: schemas.NewEmptyCardRequest,
-        success: schemas.EmptyCard,
-        responses: [401, 403],
-        tags: ['Pay']
-    },
-    "PUT /pay/card": {
-        operationId: "PUT /pay/card",
-        body: Type.Object({
-            id: Type.String({maxLength: 40}),
-            cardholder_name: Type.String({maxLength: 120}),
-            token: Type.String(),
-        }),
-        success: schemas.Card,
-        responses: [400, 401, 403],
-        tags: ['Pay']
     }
 } as const satisfies RouteMap

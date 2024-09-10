@@ -3,7 +3,8 @@ import {badRequestError, internalError, notFoundError} from "@app/lambda";
 import {UserAttribute} from "@src/users/attributes";
 import ProfileRepo from "@src/users/user";
 import Store, * as store from "./store";
-import MangopayUser, {MangopayAPI, MangopayOptions} from "./mangopay-user";
+import {MangoPayUser} from "./mangopay-user";
+import {MangopayAPI, MangopayOptions} from "./mangopay-api";
 import {toMembership} from "@src/billntip/util";
 
 export interface StoreOptions {
@@ -99,6 +100,12 @@ export class User {
 
     get profiles() {
         return this.repo.profiles
+    }
+
+    get data() {
+        const {mangopayUid, walletId} = this.requireUser()
+        if (mangopayUid === undefined || walletId === undefined) throw internalError()
+        return {mangopayUid, walletId}
     }
 
     async fetchOrCreate(force: boolean = false) {
@@ -268,7 +275,7 @@ export class User {
     }
 
     /**
-     * Refresh member information.
+     * Refresh member information. Returned user always has default wallet.
      */
     async refreshMangopayUser(userAttributes: UserAttribute[]) {
         const member = this.requireUser()
@@ -283,22 +290,26 @@ export class User {
         member.mangopayUid = mangopayUid
         let walletId = member.walletId
         if (walletId === undefined) {
-            walletId = await service.createWallet(mangopayUid)
+            walletId = await service.createWallet(mangopayUid, "Recipient")
         }
         member.walletId = walletId
-        return new MangopayUser(this.mangopayOptions, this.username, {
+        return new MangoPayUser(service, {
             mangopayUid: mangopayUid,
-            walletId: walletId,
+            wallet: walletId,
         })
     }
 
+    /**
+     * Return MangoPay user associated with this user. Returned user always has default wallet.
+     */
     get mangopayUser() {
         const {mangopayUid, walletId} = this.requireUser()
         if (mangopayUid === undefined) throw internalError("User not registered.")
         if (walletId === undefined) throw internalError("User does not have a wallet.")
-        return new MangopayUser(this.mangopayOptions, this.username, {
+        const service = new MangopayAPI(this.mangopayOptions)
+        return new MangoPayUser(service, {
             mangopayUid: mangopayUid,
-            walletId: walletId,
+            wallet: walletId
         })
     }
 

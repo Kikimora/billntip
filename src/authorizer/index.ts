@@ -158,21 +158,8 @@ export const code = pipeline()
     })
 
 export const tokens = pipeline()
-    .do(async function (e, context) {
-        try {
-            return await this.next(e, context)
-        } catch (e) {
-            const ctx = findErrorContext(e, "requireLambdaAuth")
-            if (ctx !== undefined) {
-                return {
-                    statusCode: 401,
-                    body: ""
-                }
-            }
-            throw e
-        }
-    })
     .traceRequest({tracer: AuthTracer, tag: "tokens"})
+    .handleErrors()
     .requireLambdaAuth(SessionContextSchema)
     .done(async function (event): Promise<APIGatewayProxyStructuredResultV2> {
             const authContext = event.requestContext.authorizer.lambda

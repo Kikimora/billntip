@@ -8,6 +8,7 @@ import {callbackRoute, tokensRoute} from "./auth";
 import bill from "./bill";
 import images from "./images";
 import * as tip from "./tip";
+import pay from "./pay";
 import users from "./users";
 import {configFolder} from "@aws/config";
 import * as pulumi from "@pulumi/pulumi";
@@ -33,6 +34,7 @@ const routes = [
     ...tip.api.routes,
     ...tip.hooks.routes,
     ...bill.routes,
+    ...pay.routes,
     ...users.routes,
     ...images.routes,
 ];

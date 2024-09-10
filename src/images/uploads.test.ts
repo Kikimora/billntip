@@ -29,7 +29,7 @@ describe("Uploads", () => {
             expect(response).toMatchObject({
                 content_type: 'image/png',
                 key: 'test',
-                id: url
+                url: url
             })
             const imageRequest = await fetch(url)
             expect(imageRequest.status).toBe(200)

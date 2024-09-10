@@ -1,13 +1,13 @@
 import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {Static, Type} from "@sinclair/typebox";
-import {accessDeniedError, bootstrap, pipeline, registerDefaultFormats} from '@app/lambda'
+import {accessDeniedError, bootstrap, pipeline, registerDefaultFormats, requireLambdaAuth} from '@app/lambda'
 import {SessionContextSchema} from "@src/authorizer/types";
 import UserRepo from "@src/users/user";
 import Paths from "./tip-paths";
 import TipUserRepo from "./user";
 import diagnostics from "@app/diagnostics";
-import {MangopayOptions} from "./mangopay-user";
+import {MangopayOptions} from "./mangopay-api";
 
 registerDefaultFormats()
 const dynamo = new DynamoDB()
@@ -43,6 +43,7 @@ export function __init() {
     return config.exports
 }
 
+
 export const handler = pipeline()
     .handleErrors()
     .traceRequest()
@@ -55,8 +56,6 @@ export const handler = pipeline()
 
         switch (req.routeKey) {
             case 'POST /tip/registration':
-            case 'POST /pay/card':
-            case 'PUT /pay/card':
                 break
             default:
                 assertRecipient()
@@ -111,7 +110,7 @@ export const handler = pipeline()
                 const [userInfo, status, wallet, verification] = await Promise.all([
                     mangopayUser.fetchUserInfo(),
                     mangopayUser.fetchRegulatoryStatus(),
-                    mangopayUser.fetchWallet(),
+                    mangopayUser.defaultWallet.fetch(),
                     mangopayUser.fetchVerificationDetails(),
                 ])
                 return {
@@ -141,7 +140,7 @@ export const handler = pipeline()
                 const mangopayUser = user.mangopayUser
                 const [transactions, wallet] = await Promise.all([
                     mangopayUser.transactions(query),
-                    mangopayUser.fetchWallet(),
+                    mangopayUser.defaultWallet.fetch(),
                 ])
                 return {
                     transactions,
@@ -161,7 +160,7 @@ export const handler = pipeline()
                 const mangopayUser = user.mangopayUser
                 const [transaction, wallet] = await Promise.all([
                     mangopayUser.fetchTransaction(id),
-                    mangopayUser.fetchWallet(),
+                    mangopayUser.defaultWallet.fetch(),
                 ])
                 return {
                     transaction,
@@ -177,9 +176,9 @@ export const handler = pipeline()
                 const username = req.principal.id_token_json['cognito:username']
                 const user = await tipUsers.fetch(username)
                 const mangopayUser = user.mangopayUser
-                const transaction = await mangopayUser.createTransaction(body)
+                const transaction = await mangopayUser.defaultWallet.createTransaction(body, user.username)
                 //Fetch wallet after transaction to let it update
-                const wallet = await mangopayUser.fetchWallet()
+                const wallet = await mangopayUser.defaultWallet.fetch()
                 return {
                     transaction,
                     wallet: {
@@ -242,20 +241,6 @@ export const handler = pipeline()
                         updated_at: loc.updated_at ?? 0,
                     }
                 }) satisfies Static<typeof req.route.success>
-            }
-            case "POST /pay/card": {
-                const {body} = req.parse()
-                const user = await tipUsers.fetch(username)
-                const mangopayUser = user.mangopayUser
-                const card = await mangopayUser.createEmptyCard(body)
-                return card satisfies Static<typeof req.route.success>
-            }
-            case "PUT /pay/card": {
-                const {body} = req.parse()
-                const user = await tipUsers.fetch(username)
-                const mangopayUser = user.mangopayUser
-                const card = await mangopayUser.updateCard(body)
-                return card satisfies Static<typeof req.route.success>
             }
         }
 

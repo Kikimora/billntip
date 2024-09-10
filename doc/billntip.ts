@@ -1,9 +1,11 @@
 import {OpenAPIBuilder} from "@app/lambda";
 import Bill from "@src/billntip/bill-paths";
 import Tip from "@src/billntip/tip-paths";
+import Pay from "@src/billntip/pay-paths";
+import * as Schemas from "@src/users/schemas";
 
 export default function (api: OpenAPIBuilder) {
-    api.paths({...Bill, ...Tip}).spec = {
+    api.paths({...Bill, ...Tip, ...Pay}).spec = {
         'POST /tip/registration': {
             description: `
 Verify user attributes and add user into receivers group. Being in receivers group allow user to receive tips from other user. 
@@ -24,13 +26,26 @@ id or by adding \`archived\` to the query string. Location is moved back from ar
 \`PUT /bill/{orgId}/locations/{id}\`.
             `
         },
+        'POST /pay/session': {
+            responses: [{
+                '200': {
+                    headers: {
+                        'Set-Cookie': {
+                            summary: "Session Cookie",
+                            description: 'Payment session cookie',
+                            schema: Schemas.Cookie
+                        }
+                    }
+                }
+            }]
+        },
         'POST /pay/card': {
             description: `
 Starts card tokenization process. Entire tokenization process is described in pseudocode below.
 
 \`\`\`js
 async function createEmptyCard() {
-    return await post("/tip/card", {
+    return await post("/pay/card", {
         body:{
             currency: "EUR",
             type: "CB_VISA_MASTERCARD"
@@ -59,7 +74,7 @@ async function tokenizeCard(tokenization: any) {
 }
 
 async function updateCard(cardId: string, token: string) {
-    return await put({
+    return await put("/pay/card", {
         id: registrationId,
         token,
         cardholder_name: "Andrei Verbin"
