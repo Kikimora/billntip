@@ -299,7 +299,10 @@ export const handler = pipeline()
             }
             case 'POST /user/image': {
                 requireLambdaAuth(req, SessionContextCheck)
-                const upload = uploadBuilder(req.principal.id, {bucket: s3.bucket, prefix: s3.tmpPrefix})
+                const upload = uploadBuilder(`images/users/${req.principal.id}.png`, {
+                    bucket: s3.bucket,
+                    prefix: s3.tmpPrefix
+                })
                     .condition(["content-length-range", 1024, 5 * 1024 * 1024])
                     .condition(["starts-with", "$Content-Type", "image/"])
                     .properties({

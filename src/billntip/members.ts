@@ -1,18 +1,21 @@
-import ProfileRepo, {UserAttribute as ProfileAttribute, UserItem as Profile} from "@src/users/user";
-import {TemplateRepo, TemplateRepoOptions} from "@src/templates";
 import _ from "lodash";
-import {errorWithContext} from "@app/diagnostics";
-import {generatePassword} from "@src/users/cognito";
-import {badRequestError, internalError, notFoundError} from "@app/lambda";
-import Store, {MemberAttributes, MemberItem, Org} from "@src/billntip/store";
-import {keyToToken, tokenToKey, toLocation} from "@src/billntip/util";
-import * as schemas from "@src/billntip/schemas";
-import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
 import {SES} from "@aws-sdk/client-ses";
-import {UserStoreOptions} from "@src/users/store";
+import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
+import ProfileRepo, {
+    UserAttribute as ProfileAttribute,
+    UserItem as Profile,
+    UserRepoOptions as ProfileRepoOptions
+} from "@src/users/user";
+import {generatePassword} from "@src/users/cognito";
+import {TemplateRepo, TemplateRepoOptions} from "@src/templates";
+import {errorWithContext} from "@app/diagnostics";
+import {badRequestError, internalError, notFoundError} from "@app/lambda";
+import Store, {MemberAttributes, MemberItem, Org} from "./store";
+import {keyToToken, tokenToKey, toLocation, toUserInfo} from "./util";
+import * as schemas from "./schemas";
 
 interface UserServiceOptions {
-    profileRepo: UserStoreOptions
+    profileRepo: ProfileRepoOptions
     userPoolId: string
     templates: TemplateRepoOptions,
 }
@@ -220,7 +223,9 @@ export class Member {
         return this._attributes!
     }
 
-    get invitedBy() { return this._invitedBy }
+    get invitedBy() {
+        return this._invitedBy
+    }
 
     get store() {
         return this._org.store
@@ -404,7 +409,7 @@ export class Organization {
     }
 
     async locations(query: schemas.LocationsQuery) {
-        const {store, data:org} = this
+        const {store, data: org} = this
         const {data, lastKey} = await store.locations(org.id, {
             title: query.title,
             archived: query.archived ?? false,
@@ -483,27 +488,5 @@ export class Response {
             rejected_at: member.rejected_at,
             role: member.role === "admin" ? "admin" : "member",
         });
-    }
-}
-
-function toUserInfo(u?: Profile) {
-    if (u !== undefined) {
-        if (u.attributes !== undefined) {
-            let {email, first_name, last_name, profile_pic} = u.attributes ?? {}
-            if (email === undefined && u.id.includes("@")) {
-                email = u.id
-            }
-            return {
-                id: u.id,
-                email,
-                first_name,
-                last_name,
-                profile_pic
-            }
-        } else {
-            return {id: u.id}
-        }
-    } else {
-        return undefined
     }
 }

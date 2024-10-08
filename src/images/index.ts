@@ -13,7 +13,7 @@ export const Module = bootstrap()
             bucket: Type.String(),
             cdn: Type.String(),
             tmpPrefix: Type.Optional(Type.String({default:"/tmp"})),
-            publicPrefix: Type.Optional(Type.String({default:"/public/static"})),
+            uploadPrefix: Type.Optional(Type.String({default:"/public/static"})),
             originalsPrefix: Type.Optional(Type.String({default:"/uploads"})),
         })
     })
@@ -95,7 +95,7 @@ export const handler = pipeline()
 
                 //If no transform specified then move image to the destination
                 if (transform === undefined) {
-                    await src.move(`${s3.publicPrefix}/${destination}`, {props})
+                    await src.move(`${s3.uploadPrefix}/${destination}`, {props})
                     return {
                         content_type: metadata.contentType,
                         key: destination,
@@ -135,7 +135,7 @@ export const handler = pipeline()
 
                 //1. Save generated image(s) into prefix accessible by the CDN.
                 //2. Save original image into originals folder if configured.
-                const dst = new S3Object(s3.bucket, `${s3.publicPrefix}/${destination}`)
+                const dst = new S3Object(s3.bucket, `${s3.uploadPrefix}/${destination}`)
                 const saveOriginal = s3.originalsPrefix !== undefined;
                 if (saveOriginal) {
                     props.original = key

@@ -11,14 +11,15 @@ export const Array = Type.Array
 export const Map = function <T extends TDynamoAttribute>(schema: T) {
     return Type.Record(String, schema)
 }
-export const Item = function <T extends Record<string, TDynamoAttribute>>(props: T) {
-    return Type.Object(props)
+export const Item = function <T extends Record<string, TDynamoAttribute>>(props: T, options?: Type.ObjectOptions) {
+    return Type.Object(props, options)
 }
-export const Key = function <T extends Record<string, TDynamoKeyType>>(props: T) {
-    return Type.Object(props)
+export const Key = function <T extends Record<string, TDynamoKeyType>>(props: T, options?: Type.ObjectOptions) {
+    return Type.Object(props, options)
 }
 export const TemplateLiteral = Type.TemplateLiteral
 export const Literal = Type.Literal
+export const Union = Type.Union
 export const StringSet = Type.Unsafe<Set<string>>({type: 'set'})
 export const NumberSet = Type.Unsafe<Set<number>>({type: 'set'})
 export const BinarySet = Type.Unsafe<Set<Uint8Array>>({type: 'set'})
@@ -31,7 +32,7 @@ export const Required = Type.Required
  */
 export type Id<T> = {} & { [P in keyof T]: T[P] }
 
-export const Union = function <const T extends TDynamoItem>(items: T[]) {
+export const Merge = function <const T extends TDynamoItem>(items: T[]) {
     type Intersection = UnionToIntersection<T['properties']>
     type PlainObject = Id<Intersection>
 
@@ -59,6 +60,7 @@ export type TDynamoValue =
     | Type.TNumber
     | Type.TUint8Array
     | Type.TBoolean
+    | Type.TUnion
     | typeof StringSet
     | typeof NumberSet
     | typeof BinarySet

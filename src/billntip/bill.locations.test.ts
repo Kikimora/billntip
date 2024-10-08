@@ -270,7 +270,7 @@ describe("PATCH /bill/{orgId}/locations/{id}", () => {
         },
         async after({orgId, store}) {
             await store.removeMembership("37e17866-a0d9-4f4c-bde6-d5d1310f3f7a", orgId)
-            await store.removeMember("37e17866-a0d9-4f4c-bde6-d5d1310f3f7a")
+            await store.removeUser("37e17866-a0d9-4f4c-bde6-d5d1310f3f7a")
             await locations.cleanupLocations()
         }
     })

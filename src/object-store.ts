@@ -15,38 +15,6 @@ import {die} from "@app/util";
 import {Static, Type} from "@sinclair/typebox";
 
 /**
- * Prepared upload destination URL and upload parameters.
- */
-export interface UploadDestination {
-    /**
-     * Destination key.
-     */
-    key: string
-    /**
-     * Upload destination area.
-     */
-    area: Area,
-    /**
-     * URL where uploaded data will be available after upload process completes.
-     */
-    url: string
-    /**
-     * Upload POST url
-     */
-    uploadUrl: string
-    /**
-     * Upload URL parameters.
-     */
-    uploadFields: Record<string, string>
-    /**
-     * Upload expiration date.
-     */
-    expires: Date
-}
-
-export type Area = "public" | "staging"
-
-/**
  * Object checksum.
  */
 interface S3ObjectChecksum {
@@ -505,6 +473,12 @@ type StartsWithCondition = ["starts-with", string, string];
 type ContentLengthRangeCondition = ["content-length-range", number, number];
 export type UploadCondition = EqualCondition | StartsWithCondition | ContentLengthRangeCondition;
 
+/**
+ * Upload object schema.
+ *
+ * * url - upload URL
+ * * fields - upload fields
+ */
 export const Upload = Type.Object({
     url: Type.String(),
     fields: Type.Record(Type.String(), Type.String())
@@ -518,28 +492,32 @@ export type Upload = Static<typeof Upload>
  */
 type UploadKey = string
 
+/**
+ * Upload options
+ */
 interface UploadBuilderOptions {
+    /**
+     * Target bucket
+     */
     bucket: string
+    /**
+     * Upload prefix
+     */
     prefix: string
+    /**
+     * S3 client
+     */
     s3?: S3
 }
 
-export function uploadBuilder(key: string, options: UploadBuilderOptions) {
+/**
+ * Create new upload builder
+ *
+ * @param key - upload target key
+ * @param options - upload options
+ */
+export function uploadBuilder(key: UploadKey, options: UploadBuilderOptions) {
     return new UploadBuilder(key, options)
-}
-
-export async function uploadBuffer(upload: Upload, content: Buffer) {
-    const formData = new FormData();
-    Object.entries(upload.fields).forEach(([k, v]) => {
-        formData.append(k, v);
-    });
-    formData.append("Content-Type", "image/jpeg");
-    //use blob to upload data, simple call like
-    //formData.append("file", imageBuffer);
-    //does upload but result in a garbage bytes written to the S3 object.
-    const blob = new Blob([content], {type: "image/jpeg"})
-    formData.append("file", blob, 'image.jpeg');
-    return await fetch(upload.url, {method: "POST", body: formData})
 }
 
 export class UploadBuilder {
@@ -551,13 +529,20 @@ export class UploadBuilder {
     private prefix: string
     private s3: S3
 
-    constructor(public readonly key: UploadKey,
-                options: UploadBuilderOptions) {
+    constructor(
+        /**
+         * Upload target key.
+         */
+        public readonly key: UploadKey,
+        options: UploadBuilderOptions) {
         this.bucket = options.bucket
         this.prefix = options.prefix
         this.s3 = options.s3 ?? defaultS3
     }
 
+    /**
+     * Convert upload object into JSON
+     */
     toJSON() {
         return {
             expires: this._expires,
@@ -569,24 +554,41 @@ export class UploadBuilder {
         }
     }
 
-    expires(date: number) {
-        this._expires = date
+    /**
+     * Set upload expiration in seconds.
+     *
+     * @param ttl
+     */
+    expires(ttl: number) {
+        this._expires = ttl
         return this
     }
 
-    properties(f: Record<string, string>) {
-        this._fields = _.merge(this._fields, _.mapKeys(f, function (_v, k) {
+    /**
+     * Add custom S3 metadata.
+     *
+     * @param properties - custom metadata properties
+     */
+    properties(properties: Record<string, string>) {
+        this._fields = _.merge(this._fields, _.mapKeys(properties, function (_v, k) {
             return 'x-amz-meta-' + k
         }))
         return this
     }
 
+    /**
+     * Add upload condition.
+     * @param condition - upload condition
+     */
     condition(condition: UploadCondition) {
         this._conditions = this._conditions ?? []
         this._conditions.push(condition)
         return this
     }
 
+    /**
+     * Build new {@link Upload} object.
+     */
     async build(): Promise<Upload> {
         const {s3, bucket, prefix} = this
         const s3Key = `${prefix}/${this.key}`

@@ -1,7 +1,7 @@
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import _ from "lodash";
 import {uuid} from "short-uuid";
-import {DDB} from "@app/lambda";
+import {DDB, internalError} from "@app/lambda";
 import * as schemas from "./schemas";
 
 // pk               sk              attributes
@@ -49,12 +49,21 @@ const MemberSchema = {
 }
 type MemberTable = DDB.Table<typeof MemberSchema>
 type MemberKey = DDB.KeyType<MemberTable>
+
 export interface MemberItem extends DDB.NonKeyType<MemberTable> {
     id: string
     orgId: string
 }
+
 export type MemberAttributes = Pick<DDB.NonKeyType<MemberTable>, 'invited_by' | 'role' | 'invited_at'>
 
+const TipSetting = DDB.Item({
+    questions: DDB.Optional(DDB.Array(DDB.String)),
+    comment: DDB.Optional(DDB.Boolean),
+    payment_methods: DDB.Optional(DDB.StringSet),
+    tips: DDB.Optional(DDB.NumberSet),
+    type: DDB.Union([DDB.Literal("individual"), DDB.Literal("common")])
+});
 const OrgSchema = {
     key: DDB.Key({
         pk: DDB.TemplateLiteral([DDB.Literal(`O#`), DDB.String]),
@@ -62,7 +71,8 @@ const OrgSchema = {
     }),
     item: DDB.Item({
         title: DDB.String,
-        created_at: DDB.Number
+        created_at: DDB.Number,
+        tip_settings: TipSetting
     })
 }
 type OrgTable = DDB.Table<typeof OrgSchema>
@@ -93,6 +103,11 @@ const LocationSchema = {
         deleted: DDB.Boolean,
         users: DDB.StringSet,
         title: DDB.String,
+        tip_settings: TipSetting,
+        email: DDB.Optional(DDB.String),
+        phone: DDB.Optional(DDB.String),
+        address: DDB.Optional(DDB.String),
+        goal: DDB.Optional(schemas.Goal)
     })
 }
 type LocationTable = DDB.Table<typeof LocationSchema>
@@ -108,7 +123,7 @@ const Key = DDB.Key({
 })
 const Data = {
     key: Key,
-    item: DDB.Union([UserSchema.item, MemberSchema.item, OrgSchema.item, LocationSchema.item] as const)
+    item: DDB.Merge([UserSchema.item, MemberSchema.item, OrgSchema.item, LocationSchema.item] as const)
 }
 type DataTable = DDB.Table<typeof Data>
 
@@ -330,14 +345,14 @@ export default class Store {
     }
 
     /**
-     * Create new non-persistent Member item.
-     * @param username - member username
+     * Create new non-persistent User item.
+     * @param username - recipient user name
      */
-    createMember(username: string): UserItem {
+    createUser(username: string): UserItem {
         return {pk: username}
     }
 
-    async updateMember({pk, ...member}: UserItem): Promise<UserItem | undefined> {
+    async updateUser({pk, ...member}: UserItem): Promise<UserItem | undefined> {
         const User = this.data.narrow(UserSchema)
         const response = await User.update({
             key: {pk: `U#${pk}`, sk: 'U'},
@@ -362,7 +377,7 @@ export default class Store {
         }
     }
 
-    async removeMember(username: string): Promise<UserItem | undefined> {
+    async removeUser(username: string): Promise<UserItem | undefined> {
         const User = this.data.narrow(UserSchema)
         const {Attributes: item} = await User.delete({
             key: {pk: `U#${username}`, sk: `U`},
@@ -459,7 +474,10 @@ export default class Store {
             sk: `O`,
             title: request.title,
             created_at: Date.now() / 1000,
-        } as const;
+            tip_settings: {
+                type: "individual",
+            },
+        } satisfies DDB.ItemType<OrgTable>;
         await Org.put({item})
         return {
             ...item,
@@ -568,20 +586,28 @@ export default class Store {
             ...request,
             lowercase_title: request.title?.toLocaleLowerCase(),
             updated_at: Date.now() / 1000,
-            deleted: false,
+            deleted: false
         } as const;
         const response = await Location.update({
             key,
-            expression: ({attr, ref}) => ({
-                set: {
-                    [attr.title]: ref('title'),
-                    [attr.lowercase_title]: ref('lowercase_title'),
-                    [`${attr.image}`]: ref('image'),
-                    [attr.created_at]: `if_not_exists(${attr.created_at}, ${ref('updated_at')})`,
-                    [attr.updated_at]: ref('updated_at'),
-                    [attr.deleted]: ref('deleted'),
-                }
-            }),
+            expression({attr, ref}) {
+                const exp = {
+                    set: {
+                        [attr.title]: ref('title'),
+                        [attr.email]: ref('email'),
+                        [attr.phone]: ref('phone'),
+                        [attr.address]: ref('address'),
+                        [attr.goal.toString()]: ref('goal'),
+                        [attr.lowercase_title]: ref('lowercase_title'),
+                        [`${attr.image}`]: ref('image'),
+                        [attr.created_at]: `if_not_exists(${attr.created_at}, ${ref('updated_at')})`,
+                        [attr.updated_at]: ref('updated_at'),
+                        [attr.deleted]: ref('deleted'),
+                    }
+                };
+                if (mode === 'create') exp.set[`${attr.tip_settings}`] = ref.val({})
+                return exp
+            },
             condition: function ({key}) {
                 return mode === "update" ? `attribute_exists(${key.pk}) AND attribute_exists(${key.sk})` : undefined
             },
@@ -683,6 +709,46 @@ export default class Store {
         return {
             pk: userId,
             sk: locationId
+        }
+    }
+
+    async fetchTipSettings(query: schemas.TipSettingsQuery): Promise<{
+        org: Org | undefined,
+        location: LocationItem | undefined,
+        recipient: UserItem | undefined
+    }> {
+        const batch = this.db.batchGet()
+        const keys: DDB.KeyType<DataTable>[] = [
+            {pk: `O#${query.org}`, sk: `O`} satisfies DDB.KeyType<OrgTable>,
+            {pk: `O#${query.org}`, sk: `L#${query.location}`} satisfies DDB.KeyType<LocationTable>
+        ]
+        if (query.recipient !== undefined) {
+            keys.push({pk: `U#${query.recipient}`, sk: `U`} satisfies DDB.KeyType<UsersTable>)
+        }
+        this.data.with(batch).get({keys: keys})
+        const response = await batch.exec()
+        if (response.UnprocessedKeys !== undefined) throw internalError().withContext("fetchTipSettings", {
+            query,
+            response
+        })
+        const [org, location, recipient] = response.Responses[this.data.name] as [DDB.ItemType<OrgTable>?, DDB.ItemType<LocationTable>?, DDB.ItemType<UsersTable>?]
+
+        console.log(batch.build(), org, location, recipient)
+
+        return {
+            org: org !== undefined ? {
+                ...org,
+                id: query.org
+            } : undefined,
+            location: location !== undefined ? {
+                ...location,
+                pk: query.org,
+                sk: query.location,
+            } : undefined,
+            recipient: query.recipient !== undefined && recipient !== undefined ? {
+                ...recipient,
+                pk: query.recipient
+            } : undefined
         }
     }
 }

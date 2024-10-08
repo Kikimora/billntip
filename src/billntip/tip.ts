@@ -1,9 +1,9 @@
 import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
 import {DynamoDB} from "@aws-sdk/client-dynamodb";
 import {Static, Type} from "@sinclair/typebox";
-import {accessDeniedError, bootstrap, pipeline, registerDefaultFormats, requireLambdaAuth} from '@app/lambda'
+import {accessDeniedError, bootstrap, pipeline, registerDefaultFormats} from '@app/lambda'
 import {SessionContextSchema} from "@src/authorizer/types";
-import UserRepo from "@src/users/user";
+import {UserStore as ProfileStore} from "@src/users/user";
 import Paths from "./tip-paths";
 import TipUserRepo from "./user";
 import diagnostics from "@app/diagnostics";
@@ -17,7 +17,6 @@ const GroupName = 'recipient';
 const config = bootstrap()
     .parameters({
         dynamodb: Type.Object({
-            locks: Type.String(),
             users: Type.String(),
             data: Type.String()
         }),
@@ -29,11 +28,9 @@ const config = bootstrap()
     })
     .buildModule(({dynamodb, oidc, mangopay, 'tip-diagnostics': diagnostiocsConfig}) => {
         diagnostics(diagnostiocsConfig)
-
-        const users = new UserRepo({
+        const users = new ProfileStore({
             db: dynamo,
-            table: dynamodb.users,
-            locks: dynamodb.locks
+            table: dynamodb.users
         })
         const tipUsers = new TipUserRepo({table: dynamodb.data}, mangopay, users)
         return {users, tipUsers, userPoolId: oidc.userPoolId}
@@ -72,7 +69,7 @@ export const handler = pipeline()
                     tipUser.save(),
                     cognito.adminAddUserToGroup({
                         GroupName,
-                        Username: user.username,
+                        Username: username,
                         UserPoolId: userPoolId
                     }),
                     tipUser.memberships({accepted: false, rejected: false})

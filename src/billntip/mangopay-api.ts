@@ -2,9 +2,9 @@ import _ from "lodash";
 import {intervalToDuration} from "date-fns";
 import {Static, Type} from "@sinclair/typebox";
 import {Value} from "@sinclair/typebox/value";
-import mangopay, {bankAccount, base, cardRegistration, kycDocument, payIn, payOut} from "mangopay2-nodejs-sdk";
+import mangopay, {bankAccount, base, cardRegistration, kycDocument, payIn} from "mangopay2-nodejs-sdk";
 import {badRequestError, internalError, map, Mapping, notFoundError, notImplementedError} from "@app/lambda";
-import {UserAttribute} from "@src/users/attributes";
+import {UserAttributeItem as ProfileAttribute} from "@src/users/user";
 import * as schemas from "./schemas";
 import {TraceAttributes} from "@app/diagnostics";
 import * as util from "@app/util";
@@ -24,7 +24,7 @@ export class MangopayAPI {
         this.api = new mangopay(options)
     }
 
-    async createUser(username: string, userAttributes: UserAttribute[]) {
+    async createUser(username: string, userAttributes: ProfileAttribute[]) {
         const {api} = this
         const mangoPayUser = this.createUserRequest(userAttributes, username);
         const response = await api.Users.create(mangoPayUser).catch(function (e) {
@@ -33,7 +33,7 @@ export class MangopayAPI {
         return response.Id
     }
 
-    async updateUser(mangopayUid: string, username: string, userAttributes: UserAttribute[]) {
+    async updateUser(mangopayUid: string, username: string, userAttributes: ProfileAttribute[]) {
         const {api} = this
         const mangoPayUser = this.createUserRequest(userAttributes, username);
         const request = {...mangoPayUser, Id: mangopayUid};
@@ -43,7 +43,7 @@ export class MangopayAPI {
         return response.Id
     }
 
-    private createUserRequest(userAttributes: UserAttribute[], username: string) {
+    private createUserRequest(userAttributes: ProfileAttribute[], username: string) {
         const attributes = _(userAttributes).keyBy('name').mapValues('value').value()
         const {
             email,
@@ -57,7 +57,7 @@ export class MangopayAPI {
         } = attributes
         const address = JSON.parse(addressJSON ?? "{}")
         const tos = JSON.parse(tosJSON ?? "{}")
-        const birthdate = Date.parse(birthdateStr) / 1000
+        const birthdate = Date.parse(birthdateStr ?? "") / 1000
         const interval = intervalToDuration({
             start: birthdate,
             end: new Date(),
@@ -231,6 +231,13 @@ export class MangopayAPI {
         })
     }
 
+    async fetchCard(id: string) {
+        const {api} = this
+        return await api.Cards.get(id).catch(function (e) {
+            throw mangopayError(e, "fetchCard", {id})
+        })
+    }
+
     async fetchUser(id: string) {
         const {api} = this
         return await api.Users.get(id).catch(function (e) {
@@ -375,7 +382,7 @@ function mangopayError(e: any, name: string, attributes: TraceAttributes, mappin
         ...attributes,
         message: e.Message ?? "Unexpected error.",
         errors: e.errors ?? {},
-        type: e.TDynamoAttribute ?? "",
+        type: e.Type ?? "",
         id: e.Id
     }
 

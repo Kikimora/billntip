@@ -95,7 +95,7 @@ export class MangoPayUser {
         return this.member.mangopayUid
     }
 
-    async createEmptyCard(request: schemas.NewEmptyCardRequest, tag?: string): Promise<schemas.EmptyCard> {
+    async createEmptyCard(request: schemas.NewEmptyCardRequest, tag?: string): Promise<schemas.CardRegistration> {
         const {member, api} = this
         const card = await api.createEmptyCard({
             UserId: this.member.mangopayUid,
@@ -119,7 +119,7 @@ export class MangoPayUser {
             currency: card.Currency,
             tokenization: {
                 access_key: card.AccessKey,
-                data: card.RegistrationData,
+                data: card.PreregistrationData,
                 id: card.CardRegistrationURL
             }
         }
@@ -127,24 +127,34 @@ export class MangoPayUser {
 
     async updateCard(request: schemas.UpdateCardRequest): Promise<schemas.Card> {
         const {member, api} = this
-        const card = await api.updateCard({
+        const registration = await api.updateCard({
             Id: request.id,
             RegistrationData: request.token,
             CardHolderName: request.cardholder_name
         }).catch(function (e) {
             throw errorWithContext(e, "updateCard", {member})
         })
-        if (card.Status !== 'VALIDATED') {
+        if (registration.Status !== 'VALIDATED') {
             throw internalError("Unexpected error creating card").withContext("updateCard", {
                 request,
                 member,
-                card
+                card: registration
             })
         }
+        const card = await api.fetchCard(registration.CardId).catch(function (e) {
+            throw errorWithContext(e, "fetchCard", {member, registration})
+        })
         return {
             id: card.Id,
-            currency: card.Currency,
-            type: card.CardType
+            alias: card.Alias,
+            provider: card.CardProvider,
+            bank_code: card.BankCode,
+            country: card.Country,
+            fingerprint: card.Fingerprint,
+            exp: card.ExpirationDate,
+            createdAt: card.CreationDate,
+            currency: registration.Currency,
+            type: registration.CardType
         }
     }
 

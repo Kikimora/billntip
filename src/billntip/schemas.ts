@@ -1,5 +1,6 @@
 import {Static, TObject, Type as T, Type} from "@sinclair/typebox";
 import {TaggedUnion} from "@app/lambda/tagged_union";
+import {DDB} from "@app/lambda";
 
 export const OrgId = Type.String({
     description: "Organisation id",
@@ -486,10 +487,31 @@ export const Image = Type.Object({
     version: Type.Optional(Type.Number())
 }, {$id: "Image"})
 export type Image = Static<typeof Image>
+export const Goal = DDB.Item({
+    target: Type.Number({
+        minimum: 0,
+        description: "Target amount",
+        examples: [500]
+    }),
+    description: Type.String({
+        maxLength: 1000,
+        description: "Goal description",
+        examples: ["Red Ferrari"]
+    }),
+    total: Type.Number({
+        minimum: 0,
+        description: "Amount collected so far",
+        examples: [10]
+    })
+}, {$id: "Location or individual goal"})
 export const LocationRequest = Type.Object({
-    title: Type.String({minLength: 1}),
+    title: Type.String({maxLength: 200}),
+    email: Type.Optional(Type.String({maxLength: 100})),
+    phone: Type.Optional(Type.String({maxLength: 16})),
+    address: Type.Optional(Type.String({maxLength: 1000})),
+    goal: Type.Optional(Type.Omit(Goal, ['total'])),
     image: Type.Optional(Image),
-})
+}, {$id: "LocationRequest"})
 export type LocationRequest = Static<typeof LocationRequest>
 
 export const Location = Type.Object({
@@ -503,6 +525,19 @@ export const Location = Type.Object({
         description: "Location title",
         examples: ["KFC at Baker's Street"]
     }),
+    email: Type.Optional(Type.String({
+        description: "Location email",
+        examples: ["restaurant@example.com"]
+    })),
+    address: Type.Optional(Type.String({
+        description: "Location address",
+        examples: ["Rus dos Alamos, 100, 2drt, 2705-346, Lisbon, Portugal"]
+    })),
+    goal: Type.Optional(Goal),
+    phone: Type.Optional(Type.String({
+        description: "Location phone",
+        examples: ["+351 123 456 789"]
+    })),
     created_at: Type.Number({
         description: "The date and time at which the object was created",
         examples: [1716814592]
@@ -522,8 +557,10 @@ export const Location = Type.Object({
         description: "Indicates whenever location is archived or not",
         default: false
     }))
-})
+}, {$id: "Location"})
 export type Location = Static<typeof Location>
+export const LocationInfo = Type.Pick(Location, ['id', 'title', 'image', 'address', 'email', 'phone', 'goal'], {$id: "LocationInfo"})
+export type LocationInfo = Static<typeof LocationInfo>
 export const LocationsQuery = {
     start_key: Type.Optional(Type.String({
         description: "Start searching locations from this key"
@@ -536,8 +573,7 @@ export const LocationsQuery = {
         description: "Filter location by title"
     }))
 }
-const TLocationsQuery = Type.Object(LocationsQuery)
-export type LocationsQuery = Static<typeof TLocationsQuery>
+export type LocationsQuery = Static<TObject<typeof LocationsQuery>>
 
 export const CardType = Type.Union([
     Type.Literal("CB_VISA_MASTERCARD"),
@@ -554,18 +590,26 @@ export const Card = Type.Object({
     id: Type.String({maxLength: 40}),
     type: CardType,
     currency: Type.String({maxLength: 3}),
+    alias: Type.String(),
+    provider: Type.String(),
+    bank_code: Type.String(),
+    country: Type.String(),
+    fingerprint: Type.String(),
+    exp: Type.String(),
+    createdAt: Type.Number(),
 }, {$id: "Card"})
 export type Card = Static<typeof Card>
-export const EmptyCard = Type.Intersect([
-    Card,
-    Type.Object({
-        tokenization: Type.Object({
-            id: Type.String(),
-            access_key: Type.String(),
-            data: Type.String()
-        })
-    })], {$id: "EmptyCard"})
-export type EmptyCard = Static<typeof EmptyCard>
+export const CardRegistration =     Type.Object({
+    id: Type.String({maxLength: 40}),
+    type: CardType,
+    currency: Type.String({maxLength: 3}),
+    tokenization: Type.Object({
+        id: Type.String(),
+        access_key: Type.String(),
+        data: Type.String()
+    })
+}, {$id: "CardRegistration"})
+export type CardRegistration = Static<typeof CardRegistration>
 export const NewEmptyCardRequest = Type.Omit(Card, ['id'])
 export type NewEmptyCardRequest = Static<typeof NewEmptyCardRequest>
 export const UpdateCardRequest = Type.Object({
@@ -582,7 +626,7 @@ export const TipRecipient = TaggedUnion([
         first_name: Type.String(),
         last_name: Type.String(),
         image: Image,
-        goal: Type.String()
+        goal: Type.Optional(Goal)
     }),
     Type.Object({type: Type.Literal("team"), id: Type.String(), name: Type.String(), logo: Image}),
     Type.Object({type: Type.Literal("location"), id: Type.String(), name: Type.String(), logo: Image}),
@@ -592,20 +636,50 @@ export const TipRecipient = TaggedUnion([
     description: "Describes a tip recipient."
 })
 
+//target: { [key in "me" | "my team" | string]: number }
+//allocation: "equal", "hourly"
+//schedule: "string", used only if allocation is 'equal'
+
+//target: { me: number, my_team: number, teams: {}, individuals: {} }
+
+//1.1 target: {"my_team":100}, allocation: "equal", schedule: "2 weeks"
+//1.2 target: {"my_team":100}, allocation: "hourly"
+//1.3 target: {teams: {"waiters": 60, "kitchen":30, cleaning: 10 }}, allocation: "equal" , schedule: "2 weeks"
+//1.4 target: {teams: {"waiters": 60, "kitchen":30, cleaning: 10 }}, allocation: "hourly"
+//2.1 target: {"me": 100}, allocation: "equal", schedule: "2 weeks"
+//2.2 target: {"me": 60, teams: {"kitchen":30}, individuals: {"mike owner": 10} }, allocation:"equal", schedule: "2 weeks"
+
+const TipDistribution = TaggedUnion([
+    Type.Object({
+        type: Type.Literal("common"),
+    }),
+    Type.Object({
+        type: Type.Literal("individual"),
+        allocation: Type.Array(Type.Object({
+            type: Type.Union([Type.Literal("team"), Type.Literal("individual")]),
+            id: Type.Union([Type.Literal("recipient"), Type.String()]),
+            value: Type.Number({maximum: 1, minimum: 0}),
+        }))
+    })
+], {tag: "type"})
+
+const TipType = Type.Union([Type.Literal("common"), Type.Literal("individual")]);
 export const TipSettings = Type.Object({
-    organization: Type.String({description: "Organization identifier"}),
-    location: Type.String({description: "Location identifier withing organization"}),
-    recipients: Type.Array(TipRecipient, {description: "List of possible tip recipients"}),
+    organization: PublicOrgInfo,
+    location: LocationInfo,
+    recipient: TipRecipient,
     currency: Currency,
     tips: Type.Array(Amount, {description: "Array of suggested tip amounts"}),
     feedback: Type.Object({
         questions: Type.Array(Type.String()),
         comment: Type.Boolean()
     }, {description: "Describes feedback options"}),
-    payment_methods: Type.Array(CardType)
+    payment_methods: Type.Array(CardType),
+    type: TipType
 }, {
     $id: "TipSettings"
 })
+export type TipType = Static<typeof TipType>
 export type TipSettings = Static<typeof TipSettings>
 
 export const TipRequest = Type.Object({
@@ -631,3 +705,10 @@ export const TipRequest = Type.Object({
 export type TipRequest = Static<typeof TipRequest>
 
 export const TipResponse = Type.Object({})
+
+export const TipSettingsQuery = {
+    org: Type.String(),
+    location: Type.String(),
+    recipient: Type.Optional(Type.String())
+}
+export type TipSettingsQuery = Static<TObject<typeof TipSettingsQuery>>

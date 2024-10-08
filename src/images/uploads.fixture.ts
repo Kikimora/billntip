@@ -1,6 +1,21 @@
 import {clearMock, makeContextualFixture} from "@app/test";
-import {S3Object, type Upload, uploadBuffer, uploadBuilder} from "@src/object-store";
+import {S3Object, type Upload, uploadBuilder} from "@src/object-store";
 import {generateImage} from "js-image-generator";
+
+export async function uploadBuffer(upload: Upload, content: Buffer) {
+    const formData = new FormData();
+    Object.entries(upload.fields).forEach(([k, v]) => {
+        formData.append(k, v);
+    });
+    formData.append("Content-Type", "image/jpeg");
+    //use blob to upload data, simple call like
+    //formData.append("file", imageBuffer);
+    //does upload but result in a garbage bytes written to the S3 object.
+    const blob = new Blob([content], {type: "image/jpeg"})
+    formData.append("file", blob, 'image.jpeg');
+    return await fetch(upload.url, {method: "POST", body: formData})
+}
+
 
 export default makeContextualFixture({
     async before({s3}: { s3: { bucket: string, tmpPrefix?: string } }) {

@@ -20,7 +20,7 @@ export default {
                 payer: Type.String({maxLength: 40})
             })
         ]),
-        success: schemas.EmptyCard,
+        success: schemas.CardRegistration,
         responses: [401, 403],
         tags: ['Pay']
     },

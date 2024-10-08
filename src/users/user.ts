@@ -22,8 +22,14 @@ export interface FetchOptions {
     fetchDeleted?: boolean
 }
 
-export {UserItem} from "./store"
+export {default as UserStore, UserItem, UserAttributeItem} from "./store"
 
+export interface UserRepoOptions extends UserStoreOptions {
+    /**
+     * Locks table name
+     */
+    locks: string
+}
 
 /**
  * User data repository provides methods to load users from the storage.
@@ -36,7 +42,7 @@ class UserRepo {
         return this.store.db
     }
 
-    constructor(options: UserStoreOptions) {
+    constructor(options: UserRepoOptions) {
         this.store = new UserStore(options)
         this.lockStore = DDBLocks.makeStore(options.locks, {dynamoDb: options.db})
     }
@@ -117,7 +123,7 @@ class UserRepo {
     }
 
     /**
-     * Create user with attributes, see {@link User.updateAttributes} for more details.
+     * Create user with attributes.
      * @param username - username provided by the user, must be globally unique.
      * @param source - attributes source
      * @param attributes - user attributes
@@ -196,15 +202,12 @@ class UserRepo {
      */
     async batchFetch(users: string[], options?: BatchFetchOptions): Promise<UserItem[]> {
         if (users.length === 0) return []
-        const context = {
-            name: "batchFetch",
-            value: {users, options}
-        }
-        if (users.length > 50) throw internalError("Too many users in a batch").withContext(context)
+        if (users.length > 50)
+            throw internalError("Too many users in a batch").withContext("batchFetch", {users, options})
         try {
             return await this.store.batchFetch(users, options)
         } catch (e: any) {
-            throw errorWithContext(e, context)
+            throw internalError().withContext("batchFetch", {cause:e, users, options})
         }
     }
 

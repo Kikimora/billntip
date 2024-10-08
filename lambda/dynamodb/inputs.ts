@@ -544,7 +544,7 @@ export interface BatchGetItemOptions<Key, NonKey> extends HasProjection<Key, Non
 }
 
 export interface BatchGetBuilder {
-    set(name: string, kv: ddb.KeysAndAttributes): void
+    set(table: string, kv: ddb.KeysAndAttributes): void
 }
 
 export class TableBatchGet<Key, NonKey> {
@@ -761,7 +761,7 @@ export interface TransactUpdateItem<Key, NonKey, Values> {
      */
     key: Key,
     /**
-     * Function generating {@link ddb.Update.UpdateExpression}
+     * Function generating {@link UpdateExpression}
      */
     expression: UpdateGenerator<Key, NonKey, Key & Values>
     /**

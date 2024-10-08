@@ -2,7 +2,7 @@ import {MemberItem, Org, LocationItem} from "./store";
 import {Static} from "@sinclair/typebox";
 import {MemberSchema} from "@src/billntip/schemas";
 import * as schemas from "@src/billntip/schemas";
-import {UserItem} from "@src/users/user";
+import {UserItem as Profile} from "@src/users/user";
 
 export function keyToToken(key?: { pk: string, sk: string }) {
     if (key === undefined) return undefined
@@ -14,30 +14,12 @@ export function tokenToKey(token?: string) {
     return JSON.parse(Buffer.from(token, 'base64url').toString())
 }
 
-export function toMembership(x: MemberItem, org: Org, user?: UserItem, invitedBy?: UserItem): Static<typeof MemberSchema> {
+interface MemberOrg {
+    id: string
+    title?: string
+}
 
-    function toUserInfo(u?: UserItem) {
-        if (u !== undefined) {
-            if (u.attributes !== undefined) {
-                let {email, first_name, last_name, profile_pic} = u.attributes ?? {}
-                if (email === undefined && u.id.includes("@")) {
-                    email = u.id
-                }
-                return {
-                    id: u.id,
-                    email,
-                    first_name,
-                    last_name,
-                    profile_pic
-                }
-            } else {
-                return {id: u.id}
-            }
-        } else {
-            return undefined
-        }
-    }
-
+export function toMembership(x: MemberItem, org: MemberOrg, user?: Profile, invitedBy?: Profile): Static<typeof MemberSchema> {
     return ({
         id: x.id,
         accepted_at: x.accepted_at,
@@ -61,10 +43,38 @@ export function toLocation(loc: LocationItem): schemas.Location {
         title: loc.title ?? "Untitled Location",
         updated_at: loc.updated_at ?? 0,
         image_url: loc.image?.id,
-        image: {
-            id: loc.image?.id ?? "",
-            version: loc.image?.version
-        },
+        image: loc.image !== undefined
+            ? {
+                id: loc.image.id,
+                version: loc.image.version
+            }
+            : undefined,
         archived: loc.deleted,
+        address: loc.address,
+        email: loc.email,
+        goal: loc.goal,
+        phone: loc.phone
+    }
+}
+
+export function toUserInfo(u?: Profile) {
+    if (u !== undefined) {
+        if (u.attributes !== undefined) {
+            let {email, first_name, last_name, profile_pic} = u.attributes ?? {}
+            if (email === undefined && u.id.includes("@")) {
+                email = u.id
+            }
+            return {
+                id: u.id,
+                email,
+                first_name,
+                last_name,
+                profile_pic
+            }
+        } else {
+            return {id: u.id}
+        }
+    } else {
+        return undefined
     }
 }

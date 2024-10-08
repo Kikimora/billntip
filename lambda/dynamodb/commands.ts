@@ -87,15 +87,17 @@ class BatchGetBuilder implements input.BatchGetBuilder {
                     return unmarshall(vv, unmarshallOptions)
                 })
             }),
-            UnprocessedKeys: _.mapValues(response.UnprocessedKeys, function (v) {
-                const keys = v.Keys?.map(function (vv) {
-                    return unmarshall(vv, unmarshallOptions)
-                });
-                return {
-                    ...v,
-                    Keys: keys ?? []
-                }
-            })
+            UnprocessedKeys: _.isEmpty(response.UnprocessedKeys)
+                ? undefined
+                : _.mapValues(response.UnprocessedKeys, function (v) {
+                    const keys = v.Keys?.map(function (vv) {
+                        return unmarshall(vv, unmarshallOptions)
+                    });
+                    return {
+                        ...v,
+                        Keys: keys ?? []
+                    }
+                })
         }
     }
 }
@@ -182,8 +184,8 @@ class BatchWriteBuilder implements input.BatchWriteBuilder {
         })
         const response = output as BatchWriteResponse
         const unprocessedItems = output.UnprocessedItems;
-        response.UnprocessedItems = {}
-        if (unprocessedItems !== undefined) {
+        if (!_.isEmpty(unprocessedItems)) {
+            response.UnprocessedItems = {}
             for (const [table, items] of Object.entries(unprocessedItems)) {
                 response.UnprocessedItems[table] = items
                     .map(function (item): input.BatchWriteItem<unknown, unknown> | undefined {
@@ -214,6 +216,8 @@ class BatchWriteBuilder implements input.BatchWriteBuilder {
                         return x !== undefined
                     })
             }
+        } else {
+            response.UnprocessedItems = undefined
         }
         return response
     }
@@ -710,7 +714,7 @@ class DDBTable<Key, NonKey> {
         const responses = response.Responses?.[name] as (DDB.Id<Key & NonKey>)[]
         if (responses === undefined)
             throw unexpectedError()
-        const unprocessedKeys = response.UnprocessedKeys?.[name] as KeysAndAttributes<Key>
+        const unprocessedKeys = response.UnprocessedKeys?.[name] as KeysAndAttributes<Key> | undefined
         return {
             ...response,
             Responses: responses,
@@ -840,7 +844,7 @@ interface Item<Key, NonKey, O extends HasProjection> {
 interface BatchResponses<Key, NonKey, O extends HasProjection> {
     //<!-- @formatter:off -->
     Responses: O['projection'] extends Function ? Partial<(DDB.Id<Key & NonKey>)>[] : (DDB.Id<Key & NonKey>)[]
-    UnprocessedKeys: (Key)[]
+    UnprocessedKeys?: (Key)[]
     //<!-- @formatter:on -->
 }
 

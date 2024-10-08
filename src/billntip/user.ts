@@ -1,11 +1,10 @@
 import _ from "lodash";
 import {badRequestError, internalError, notFoundError} from "@app/lambda";
-import {UserAttribute} from "@src/users/attributes";
-import ProfileRepo from "@src/users/user";
+import {UserStore as ProfileStore, UserAttributeItem as ProfileAttribute} from "@src/users/user";
 import Store, * as store from "./store";
 import {MangoPayUser} from "./mangopay-user";
 import {MangopayAPI, MangopayOptions} from "./mangopay-api";
-import {toMembership} from "@src/billntip/util";
+import {toMembership} from "./util";
 
 export interface StoreOptions {
     table: string
@@ -16,7 +15,7 @@ export default class UserRepo {
 
     constructor(options: StoreOptions,
                 public readonly mangopayOptions: MangopayOptions,
-                public readonly profiles: ProfileRepo) {
+                public readonly profiles: ProfileStore) {
         this.store = new Store(options)
     }
 
@@ -112,7 +111,7 @@ export class User {
         if (this.userItem !== undefined && !force) return this.userItem
         let user = await this.store.fetchUser(this.username)
         if (user === undefined)
-            user = this.store.createMember(this.username)
+            user = this.store.createUser(this.username)
         return this.userItem = user
     }
 
@@ -155,7 +154,7 @@ export class User {
                 const org = orgs[member.orgId]
                 return toMembership(member, org, users[member.id], inviter)
             })
-        } catch (e:any) {
+        } catch (e: any) {
             throw internalError("Unexpected error loading user memberships.")
                 .withContext("memberships", {filters, username, cause: e})
         }
@@ -213,7 +212,7 @@ export class User {
                 return _.keyBy(x, 'id')
             }),
         ])
-        return toMembership(membership, org ?? {id: membership.orgId, title: "", created_at: 0},
+        return toMembership(membership, org ?? {id: membership.orgId},
             users[username],
             membership.invited_by !== undefined ? users[membership.invited_by] : undefined)
     }
@@ -241,7 +240,7 @@ export class User {
         const {username, store} = this
         const member = this.requireUser()
         try {
-            await store.updateMember(member)
+            await store.updateUser(member)
         } catch (e: any) {
             throw internalError("Cannot save member").withContext("save", {username, cause: e})
         }
@@ -254,7 +253,7 @@ export class User {
     async delete() {
         const {username, store} = this
         try {
-            return await store.removeMember(username)
+            return await store.removeUser(username)
         } catch (e: any) {
             throw internalError("Cannot remove member").withContext("remove", {username, cause: e})
         }
@@ -277,7 +276,7 @@ export class User {
     /**
      * Refresh member information. Returned user always has default wallet.
      */
-    async refreshMangopayUser(userAttributes: UserAttribute[]) {
+    async refreshMangopayUser(userAttributes: ProfileAttribute[]) {
         const member = this.requireUser()
 
         const service = new MangopayAPI(this.mangopayOptions)

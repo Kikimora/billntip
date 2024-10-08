@@ -206,7 +206,7 @@ const init = prepare('Once', chainFixtures(env, {
         })
         const deleteUser = async function ({value: user}: MockResult<User>) {
             if (user !== undefined) {
-                await store.removeMember(user.username)
+                await store.removeUser(user.username)
                 await user.delete(true)
             }
         };

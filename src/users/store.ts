@@ -102,6 +102,10 @@ const User = DDB.Item({
      */
     attributes: DDB.Map(DDB.String),
     /**
+     * User version.
+     */
+    version: DDB.Number,
+    /**
      * Soft delete flag (valid for sk = 'U').
      */
     deleted: DDB.Boolean
@@ -130,7 +134,7 @@ type AttributeIndexValue = DDB.ItemType<AttributesTable>
 
 const Schema = {
     key: DDB.Key({pk: DDB.String, sk: DDB.String}),
-    item: DDB.Union([User, Attribute, AliasAttribute])
+    item: DDB.Merge([User, Attribute, AliasAttribute])
 }
 type UsersData = DDB.Table<typeof Schema>
 
@@ -169,10 +173,6 @@ export interface UserStoreOptions {
      * User table name
      */
     table: string
-    /**
-     * Locks table name
-     */
-    locks: string
 }
 
 class UserStore {
@@ -430,6 +430,7 @@ function updateUser(tx: DDB.TransactWrite<UsersTable>, username: string, deleted
             }
             return ({
                 set: update,
+                add: `${attr.version} ${ref.val(1)}`
             })
         },
         condition: ({key}) => `attribute_exists(${key.pk}) AND attribute_exists(${key.sk})`
