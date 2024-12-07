@@ -5,9 +5,9 @@ import TipUserRepo from "./user";
 import Paths from "./pay-paths";
 import {MangoPayUser} from "./mangopay-user";
 import {MangopayAPI, MangopayOptions} from "./mangopay-api";
-import {UserStore as ProfileStore} from "@src/users/user";
+import {UserAttributeItem, UserStore as ProfileStore} from "@src/users/user";
 import * as schemas from "./schemas";
-import Store, {Org} from "./store";
+import Store, {Org, UserItem} from "./store";
 import _ from "lodash";
 import {toLocation} from "@src/billntip/util";
 
@@ -34,7 +34,7 @@ const DefaultTipSettings = {
     comment: true,
     payment_methods: new Set(schemas.CardType.anyOf.map(x => x.const)),
     questions: ["1", "2", "3"],
-    tips: new Set([5, 10, 15]),
+    tips: new Set([500, 1000, 1500]),
     type: "individual"
 } as const satisfies Org['tip_settings']
 
@@ -78,9 +78,29 @@ export const handler = pipeline()
                     throw badRequestError("Recipient is required").withContext("validate", {tipSettings})
                 }
 
-                // const profiles = createProfileStore()
-                // profiles.batchFetch([recipient?.pk])
+                async function recipientAttributes(recipient: UserItem | undefined) {
+                    if (recipient !== undefined) {
+                        const profiles = createProfileStore()
+                        const {attributes} = await profiles.fetch(recipient.pk)
+                        const isValidAttribute = function (x: UserAttributeItem): x is { name: string, value: string } {
+                            return x.value !== undefined
+                        }
+                        return _(attributes)
+                            .filter(isValidAttribute)
+                            .keyBy('name')
+                            .mapValues('value')
+                            .value()
+                    } else {
+                        return {}
+                    }
+                }
 
+                //TODO: profile picture and pictures in general
+                //TODO: need_review: true | false
+                //TODO: individual vs non-individual tips.
+
+                const attrs = await recipientAttributes(recipient)
+                req.tracer.info("User", {attrs: attrs, rec: recipient})
                 return {
                     type: tipSettings.type,
                     currency: "EUR",
@@ -96,16 +116,16 @@ export const handler = pipeline()
                     payment_methods: Array.from(tipSettings.payment_methods) as schemas.TipSettings['payment_methods'],
                     recipient: {
                         type: "person",
-                        id: "f6ae4220-1071-702d-f6ba-8c99280cb67b",
+                        id: recipient?.pk ?? "f6ae4220-1071-702d-f6ba-8c99280cb67b",
                         image: {
-                            id: "images/users/0fb5578a-8062-4ca8-8403-b548286f2ced.png",
+                            id: recipient?.pk ? `images/users/${recipient?.pk}.png` : "images/users/0fb5578a-8062-4ca8-8403-b548286f2ced.png",
                             version: 1
                         },
-                        first_name: "A Waiter",
-                        last_name: "A Waiter",
+                        first_name: attrs['first_name'],
+                        last_name: attrs['last_name'],
                         goal: {
-                            description: "To buy a car",
-                            target: 5000,
+                            description: attrs['wish'],
+                            target: Number(attrs['money_goal']),
                             total: 200
                         }
                     },
@@ -125,12 +145,39 @@ export const handler = pipeline()
                     currency: "EUR",
                     details: {
                         type: 'cc_payin',
-                        card: body.payment_method
-                    }
-                }, "")
+                        card: body.payment_method,
+                        auth_return_url: body.payment_auth_return_url,
+                        browser_info: {
+                            ...body.browser_info,
+                            accept_header: req.headers['Accept'] ?? "application/json"
+                        },
+                        ip_address: req.requestContext.http.sourceIp
+                    },
+                }, JSON.stringify({
+                    loc: body.location,
+                    org: body.organization
+                }))
                 return {
-                    statusCode: 501
-                }
+                    banner: {
+                        image: {id: "images/users/0fb5578a-8062-4ca8-8403-b548286f2ced.png", version: 1},
+                        description: "This is a test description",
+                        title: "Test Title",
+                        href: "https://unitycoffee.pt/"
+                    },
+                    review_link: {
+                        type: "google_map",
+                        href: "https://maps.app.goo.gl/kjCTUCz8evUe7fsU8"
+                    },
+                    need_review: true,
+                    tx: response
+                } satisfies Static<typeof req.route.success>
+            }
+
+            case "GET /pay/tx": {
+                const {query: {payer, id}} = req.parse()
+                const user = new MangoPayUser(api, {mangopayUid: payer})
+                const tx = await user.fetchTransaction(id)
+                return tx satisfies Static<typeof req.route.success>
             }
         }
 

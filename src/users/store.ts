@@ -101,10 +101,10 @@ const User = DDB.Item({
      * Map of all verified attributes.
      */
     attributes: DDB.Map(DDB.String),
-    /**
-     * User version.
-     */
-    version: DDB.Number,
+    // /**
+    //  * User version.
+    //  */
+    // version: DDB.Number,
     /**
      * Soft delete flag (valid for sk = 'U').
      */
@@ -430,7 +430,7 @@ function updateUser(tx: DDB.TransactWrite<UsersTable>, username: string, deleted
             }
             return ({
                 set: update,
-                add: `${attr.version} ${ref.val(1)}`
+                //add: `${attr.version} ${ref.val(1)}`
             })
         },
         condition: ({key}) => `attribute_exists(${key.pk}) AND attribute_exists(${key.sk})`

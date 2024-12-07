@@ -6,6 +6,7 @@ import cognito from "@aws/cognito";
 import Paths from "@src/users/paths";
 import ddb, {allowCrud} from "@aws/dynamodb";
 import {bucket} from "@aws/s3";
+import * as pulumi from "@pulumi/pulumi";
 
 const users = authorizer.newAuthLambda(Lambdas["users.handler"])
     .args({
@@ -21,7 +22,10 @@ const users = authorizer.newAuthLambda(Lambdas["users.handler"])
     .inlinePolicy(
         newPolicy()
             .allow(
-                ..._.map(Paths, 'operationId').map(x => `cognito-idp:${x}`)
+                ...Object.values(Paths)
+                    .map(x => 'cognitoOperationId' in x ? x.cognitoOperationId : undefined)
+                    .filter(x => x !== undefined)
+                    .map(x => `cognito-idp:${x}`)
                     .concat([
                         "cognito-idp:AdminGetUser",
                         "cognito-idp:DescribeUserPool",
@@ -29,7 +33,11 @@ const users = authorizer.newAuthLambda(Lambdas["users.handler"])
             )
             .on(cognito.userPool)
             .buildRoleInlinePolicy('UserPoolAccess'),
-        allowCrud().on(ddb.usersTable).buildRoleInlinePolicy("UsersTableAccess"))
+        allowCrud().on(ddb.usersTable).buildRoleInlinePolicy("UsersTableAccess"),
+        newPolicy()
+            .allow("s3:PutObject")
+            .on(pulumi.interpolate`${bucket.arn}/tmp/*`)
+            .buildRoleInlinePolicy('S3Access'))
     .build()
 const publicRoutes = _.pickBy(Paths, function (value) {
     return value.security?.length === 0;

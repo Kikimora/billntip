@@ -38,7 +38,7 @@ export class MangopayWallet {
 
         const [response, pendingPayouts] = await Promise.all([
             api.fetchWallet(walletId),
-            api.getTransactions(walletId, {
+            api.walletTransactions(walletId, {
                 parameters: {
                     Status: "CREATED",
                     Type: "PAYOUT"
@@ -63,14 +63,14 @@ export class MangopayWallet {
 
     async transactions(query: schemas.TransactionsQuery) {
         const {walletId, ownerId, api} = this
-        if (walletId === undefined) throw internalError().withContext("fetch", {ownerId})
+        if (walletId === undefined) throw internalError().withContext("transactions", {ownerId})
         const request = {parameters: toQuery(query),};
-        return await api.getTransactions(walletId, request)
+        return await api.walletTransactions(walletId, request)
     }
 
     async fetchTransaction(id: string) {
         const {walletId, ownerId, api} = this
-        if (walletId === undefined) throw internalError().withContext("fetch", {ownerId})
+        if (walletId === undefined) throw internalError().withContext("fetchTransaction", {ownerId})
         return await api.fetchTransaction(id, ownerId).catch(function (e) {
             throw errorWithContext(e, "fetchTransaction", {walletId})
         })
@@ -152,7 +152,7 @@ export class MangoPayUser {
             country: card.Country,
             fingerprint: card.Fingerprint,
             exp: card.ExpirationDate,
-            createdAt: card.CreationDate,
+            created_at: card.CreationDate,
             currency: registration.Currency,
             type: registration.CardType
         }
@@ -184,11 +184,12 @@ export class MangoPayUser {
     }
 
     async transactions(query: schemas.TransactionsQuery) {
-        return this.defaultWallet.transactions(query)
+        const request = {parameters: toQuery(query),};
+        return await this.api.userTransactions(this.member.mangopayUid, request)
     }
 
     async fetchTransaction(id: string) {
-        return this.defaultWallet.fetchTransaction(id)
+        return this.api.fetchTransaction(id, this.member.mangopayUid)
     }
 
     async createTransaction(walletId: string, request: schemas.CreateTransactionRequest, tag: string): Promise<schemas.Transaction> {

@@ -90,6 +90,24 @@ try {
 }         
 \`\`\`        
 `
+        },
+        "POST /pay/tip": {
+            description: `
+Initiates tip payment. The request needs browser_info, which can be constructed in the browser like this
+
+\`\`\`
+const browserInfo = {
+  java: navigator.javaEnabled(),
+  language: navigator.language,
+  color_depth: window.screen.colorDepth,
+  screen_height: window.screen.height,
+  screen_width: window.screen.width,
+  tz: new Date().getTimezoneOffset(),
+  user_agent: navigator.userAgent,
+  js: true
+}
+\`\`\`
+`
         }
     }
 }

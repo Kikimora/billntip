@@ -52,7 +52,7 @@
     "lru-cache": "^10.2.0",
     "mangopay2-nodejs-sdk": "^1.45.4",
     "openapi3-ts": "^4.2.2",
-    "sharp": "^0.33.3",
+    "sharp": "^0.33.5",
     "short-uuid": "^4.2.2",
     "upath": "^2.0.1",
     "uuid": "^9.0.1",
@@ -65,7 +65,8 @@
     "test": "npx jest",
     "deploy": "pulumi up",
     "deploy-lambda": "npx ts-node aws/build.ts -- -b -p ",
-    "build-lambda": "npx ts-node aws/build.ts -- -b "
+    "build-lambda": "npx ts-node aws/build.ts -- -b ",
+    "postinstall": "npm i sharp --cpu arm64 --os linux"
   },
   "overrides": {
     "@pulumi/pulumi": {

@@ -21,6 +21,8 @@ export const region = awsConfig.require('region')
 export const profile = awsConfig.require('profile')
 export const configFolder = `${pulumi.getOrganization()}/${pulumi.getProject()}/${pulumi.getStack()}`
 
+export const apps = ['tip', 'bill', 'pay', 'admin']
+
 export const tags = {
     'env': stack,
     'project': 'Bill And Tip'

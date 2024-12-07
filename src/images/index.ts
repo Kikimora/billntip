@@ -81,7 +81,7 @@ export const handler = pipeline()
                 const src = new S3Object(s3.bucket, key)
                 let {body, metadata} = await src.read()
                 let {transform, destination, ...props} = metadata.props
-
+                //TODO - check that owner of the image is the same as req.principal.id
                 if (destination === undefined) {
                     if (s3.tmpPrefix !== undefined && key.startsWith(s3.tmpPrefix)) {
                         destination = key.substring(s3.tmpPrefix.length + 1)
@@ -141,13 +141,18 @@ export const handler = pipeline()
                     props.original = key
                 }
 
+                const dstProps = {
+                    ...props,
+                    "width": String(image.width),
+                    "height": String(image.height),
+                };
+                req.tracer.info("Image details", {
+                    ...dstProps,
+                    size: image.buffer.length
+                })
                 await dst.put(image.buffer, {
                     contentType: image.contentType,
-                    props: {
-                        ...props,
-                        "width": String(image.width),
-                        "height": String(image.height),
-                    }
+                    props: dstProps
                 })
 
                 if (saveOriginal) {
@@ -159,7 +164,7 @@ export const handler = pipeline()
                 return {
                     content_type: image.contentType,
                     key: destination,
-                    url: `https://${s3.cdn}/${destination}`,
+                    url: `https://${s3.cdn}/${destination}?v=${props.v ?? Date.now()}`,
                     image: {
                         height: image.height,
                         width: image.width

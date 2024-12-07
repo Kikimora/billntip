@@ -309,7 +309,8 @@ export const handler = pipeline()
                         'transform': 'resize',
                         'target-width': '100',
                         'target-height': '100',
-                        'target-format': 'png'
+                        'target-format': 'png',
+                        'v': String(Date.now())
                     })
                 return await upload.build() satisfies Static<typeof req.route.success>
             }

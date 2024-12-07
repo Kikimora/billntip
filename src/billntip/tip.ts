@@ -135,10 +135,8 @@ export const handler = pipeline()
                 const username = req.principal.id_token_json['cognito:username']
                 const user = await tipUsers.fetch(username)
                 const mangopayUser = user.mangopayUser
-                const [transactions, wallet] = await Promise.all([
-                    mangopayUser.transactions(query),
-                    mangopayUser.defaultWallet.fetch(),
-                ])
+                const wallet = await mangopayUser.defaultWallet.fetch()
+                const transactions = await mangopayUser.defaultWallet.transactions(query)
                 return {
                     transactions,
                     page: query.page ?? 1,

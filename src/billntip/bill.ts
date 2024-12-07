@@ -191,13 +191,14 @@ export const handler = pipeline()
             case "GET /bill/{orgId}/locations/{id}": {
                 const {path: {orgId, id}} = req.parse()
                 const org = await assertOrgAdmin(req.principal, orgId)
-                const location = await store.location(orgId, id)
+                const organization = repo.organization(org)
+
+                const [location, {members}] = await Promise.all([
+                    organization.fetchLocation(id),
+                    organization.members({location: id})
+                ])
                 if (location === undefined) throw notFoundError()
-                const members = await batchGetMembers(orgId, location.users)
-                return {
-                    location: toLocation(location),
-                    members: await membersWithRelatedUsers(org, members)
-                } satisfies Static<typeof req.route.success>
+                return {location, members} satisfies Static<typeof req.route.success>
             }
             case "POST /bill/{orgId}/locations": {
                 const {path: {orgId}, body} = req.parse()
@@ -343,17 +344,6 @@ export const handler = pipeline()
                 throw error("fetchMembership", {orgId, uid, cause: e})
             }
         }
-
-        async function batchGetMembers(orgId: string, members?: Set<string>) {
-            if (members === undefined) return []
-            if (members.size === 0) return []
-            try {
-                return await store.queryOrgMembers(orgId, Array.from(members))
-            } catch (e: any) {
-                throw error("batchGetMembers", {orgId, locations: members, cause: e})
-            }
-        }
-
 
         async function location(orgId: string, id: string) {
             try {

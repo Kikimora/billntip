@@ -1,11 +1,12 @@
 import * as schemas from "@src/billntip/schemas";
 import {Type} from "@sinclair/typebox";
 import {RouteMap} from "@app/lambda";
+import {Transaction} from "@src/billntip/schemas";
 
 export default {
     "POST /pay/session": {
         operationId: "POST /pay/session",
-        body: schemas.NewEmptyCardRequest,
+        description: "Initate new payeer session",
         success: Type.Object({
             uid: Type.String()
         }),
@@ -14,8 +15,9 @@ export default {
     },
     "POST /pay/card": {
         operationId: "POST /pay/card",
+        description: "Create new empty payment card, endpoint returns card tokenization parameters.",
         body: Type.Intersect([
-            Type.Omit(schemas.Card, ['id']),
+            schemas.NewEmptyCardRequest,
             Type.Object({
                 payer: Type.String({maxLength: 40})
             })
@@ -26,9 +28,10 @@ export default {
     },
     "PUT /pay/card": {
         operationId: "PUT /pay/card",
+        description: "Fill empty payment card with details.",
         body: Type.Object({
-            id: Type.String({maxLength: 40}),
-            payer: Type.String({maxLength: 40}),
+            id: Type.String({maxLength: 128}),
+            payer: Type.String({maxLength: 128}),
             cardholder_name: Type.String({maxLength: 120}),
             token: Type.String(),
         }),
@@ -54,6 +57,17 @@ export default {
         body: schemas.TipRequest,
         success: schemas.TipResponse,
         responses: [400],
+        tags: ['Pay']
+    },
+    "GET /pay/tx": {
+        operationId: "GET /pay/tx",
+        description: "Get a transaction details",
+        query: {
+            payer: Type.String({maxLength: 40}),
+            id: Type.String({maxLength: 40})
+        },
+        success: schemas.Transaction,
+        responses: [400, 404],
         tags: ['Pay']
     }
 } satisfies RouteMap

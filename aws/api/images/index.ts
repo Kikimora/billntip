@@ -18,11 +18,13 @@ const images = authorizer.newAuthLambda(Lambdas['images.handler'])
             "s3:PutObject",
             "s3:GetObject",
             "s3:DeleteObject",
-            "s3:ListObjects"
+            "s3:ListBucket"
         )
         .on(
+            pulumi.interpolate`${bucket.arn}`,
             pulumi.interpolate`${bucket.arn}/public/*`,
             pulumi.interpolate`${bucket.arn}/uploads/*`,
+            pulumi.interpolate`${bucket.arn}/tmp/*`,
         )
         .buildRoleInlinePolicy('S3Access'))
     .build()

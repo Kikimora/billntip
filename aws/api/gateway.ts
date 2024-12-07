@@ -1,6 +1,6 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import {configFolder, domain, region, stack, tags} from "@aws/config";
+import {configFolder, domain, region, stack, tags, apps} from "@aws/config";
 import {newLambda, newPolicy} from "@aws/util";
 import {LambdaSource} from "@app/lambda/builder";
 
@@ -13,7 +13,9 @@ const apiGw = new aws.apigatewayv2.Api('api', {
     corsConfiguration: {
         allowCredentials: true,
         allowHeaders: ['content-type'],
-        allowOrigins: [`https://tip.${domain}`, `https://bill.${domain}`, `https://tip.dev.billntip.com`, `https://bill.dev.billntip.com`],
+        allowOrigins: apps.flatMap(function (app) {
+            return [`https://${app}.${domain}`, `https://${app}.dev.billntip.com`]
+        }),
         allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
         exposeHeaders: ['*'],
         maxAge: 3600

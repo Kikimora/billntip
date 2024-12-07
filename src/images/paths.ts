@@ -39,7 +39,8 @@ export default {
         body: Type.Object({
             key: Type.String({description: "Upload key"})
         }),
-        success: Upload2
+        success: Upload2,
+        tags: ['Images']
     },
 
     'GET /uploads': {
@@ -51,7 +52,8 @@ export default {
             lastKey: Type.Optional(Type.String()),
             files: Type.Array(Type.String())
         }),
-        responses: [400, 401, 403]
+        responses: [400, 401, 403],
+        tags: ['Images']
     },
     'GET /upload/{id}': {
         operationId: "ListUploads",
@@ -59,7 +61,8 @@ export default {
             id: Type.String({maxLength: 1024})
         },
         success: Upload,
-        responses: [400, 401, 403]
+        responses: [400, 401, 403],
+        tags: ['Images']
     },
     'POST /uploads': {
         operationId: "CreateUpload",
@@ -67,7 +70,8 @@ export default {
             type: UploadType
         }),
         success: CreateEmptyImageResponse,
-        responses: [400, 401, 403]
+        responses: [400, 401, 403],
+        tags: ['Images']
     },
     'POST /upload/{id}': {
         operationId: "FinishUpload",
@@ -75,14 +79,16 @@ export default {
             id: Type.String({maxLength: 1024})
         },
         success: Upload,
-        responses: [400, 401, 403, 404]
+        responses: [400, 401, 403, 404],
+        tags: ['Images']
     },
     'DELETE /upload/{id}': {
         operationId: "DeleteUpload",
         path: {
             id: Type.String({maxLength: 1024})
         },
-        responses: [400, 401, 403, 404]
+        responses: [400, 401, 403, 404],
+        tags: ['Images']
     }
 
 } satisfies RouteMap

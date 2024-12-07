@@ -5,7 +5,7 @@ import {newPolicy} from "@aws/util";
 import makeOpenAPISpec from "../doc/main";
 import fs from "fs";
 import {usEast1Certificate} from "./certificate"
-import {configFolder, domain, tags} from "./config"
+import {apps, configFolder, domain, tags} from "./config"
 
 const tmpPrefix = "tmp"
 const publicPrefix = "public"
@@ -21,6 +21,17 @@ const s3Bucket = new aws.s3.Bucket("bucket", {
         },
         abortIncompleteMultipartUploadDays: 1
     }],
+    corsRules: [
+        {
+            "allowedHeaders": ["*"],
+            "allowedMethods": ["POST"],
+            "allowedOrigins": apps.flatMap(function (app) {
+                return [`https://${app}.${domain}`, `https://${app}.dev.billntip.com`]
+            }),
+            "exposeHeaders": ["ETag"],
+            "maxAgeSeconds": 3000
+        }
+    ],
     tags
 }, {retainOnDelete: true});
 
@@ -67,9 +78,11 @@ function handler(event) {
     const response = event.response
     const host = request.headers['host'].value.split('.')    
     const prefix = host[0]
-    const isRoot = request.uri === "/"
-    request.uri = \`/\${prefix}\${request.uri}\`
-    if (isRoot) request.uri += "index.html"
+    if (prefix === 'static') {
+        request.uri = \`/\${prefix}\${request.uri}\`
+    } else {
+        request.uri = \`/\${prefix}/index.html\`
+    } 
     return request
 }
 `,

@@ -1,10 +1,11 @@
 import {Static, TObject, Type as T, Type} from "@sinclair/typebox";
 import {TaggedUnion} from "@app/lambda/tagged_union";
-import {DDB} from "@app/lambda";
+import {DDB, registerDefaultFormats} from "@app/lambda";
 
+registerDefaultFormats()
 export const OrgId = Type.String({
     description: "Organisation id",
-    minLength: 20,
+    minLength: 3,
     maxLength: 36
 })
 
@@ -150,6 +151,11 @@ export const Transaction = Type.Object({
         examples: [1716814592]
     })),
     type: TxType,
+    auth: Type.Optional(Type.Object({
+        redirect_url: Type.Optional(Type.String({format: "uri"})),
+        return_url: Type.Optional(Type.String({format: "uri"})),
+    })),
+    details: Type.Record(Type.String(), Type.String())
 }, {
     $id: "TransactionSchema",
     description: "A transfer is a request to relocate funds from one wallet to another."
@@ -400,9 +406,26 @@ export const CreateBankAccountRequest = Type.Object({
 })
 export type CreateBankAccountRequest = Static<typeof CreateBankAccountRequest>
 
+const BrowserInfo = Type.Object({
+    accept_header: Type.String(),
+    java: Type.Boolean(),
+    language: Type.String(),
+    color_depth: Type.Number(),
+    screen_height: Type.Number(),
+    screen_width: Type.Number(),
+    tz: Type.Number(),
+    user_agent: Type.String(),
+    js: Type.Boolean()
+});
+const PayInOptions = {
+    auth_return_url: Type.String({format: "uri"}),
+    browser_info: BrowserInfo,
+    ip_address: Type.String()
+}
 const CCPayinSchema = Type.Object({
     type: Type.Literal("cc_payin"),
-    card: Type.String()
+    card: Type.String(),
+    ...PayInOptions
 })
 const WirePayoutSchema = Type.Object({
     type: Type.Literal("wire_payout"),
@@ -415,10 +438,17 @@ const WirePayoutSchema = Type.Object({
 const WirePayinSchema = Type.Object({
     type: Type.Literal("wire_payin"),
 })
+const GooglePayinSchema = Type.Object({
+    type: Type.Literal("google_payin"),
+    data: Type.String({maxLength: 4096}),
+    ...PayInOptions
+})
+
 export const CreateTransactionRequest = Type.Object({
     amount: Amount,
     currency: Currency,
-    details: TaggedUnion([WirePayinSchema, CCPayinSchema, WirePayoutSchema], {tag: "type"})
+    details: TaggedUnion([WirePayinSchema, CCPayinSchema, WirePayoutSchema, GooglePayinSchema], {tag: "type"}),
+
 })
 export type CreateTransactionRequest = Static<typeof CreateTransactionRequest>
 
@@ -596,10 +626,10 @@ export const Card = Type.Object({
     country: Type.String(),
     fingerprint: Type.String(),
     exp: Type.String(),
-    createdAt: Type.Number(),
+    created_at: Type.Number(),
 }, {$id: "Card"})
 export type Card = Static<typeof Card>
-export const CardRegistration =     Type.Object({
+export const CardRegistration = Type.Object({
     id: Type.String({maxLength: 40}),
     type: CardType,
     currency: Type.String({maxLength: 3}),
@@ -610,7 +640,7 @@ export const CardRegistration =     Type.Object({
     })
 }, {$id: "CardRegistration"})
 export type CardRegistration = Static<typeof CardRegistration>
-export const NewEmptyCardRequest = Type.Omit(Card, ['id'])
+export const NewEmptyCardRequest = Type.Omit(CardRegistration, ['id', 'tokenization'])
 export type NewEmptyCardRequest = Static<typeof NewEmptyCardRequest>
 export const UpdateCardRequest = Type.Object({
     id: Type.String({maxLength: 40}),
@@ -701,10 +731,26 @@ export const TipRequest = Type.Object({
     payment_method: Type.String({description: "Identifier of selected payment method"}),
     commission: Type.Union([Type.Literal("our"), Type.Literal("recipient")], {description: "Commission setting, defines who pays commission."}),
     tos: Type.Boolean({description: "Indicates whenever payee accepted Terms of Service"}),
+    payment_auth_return_url: Type.String({format: "uri"}),
+    browser_info: Type.Omit(BrowserInfo, ['accept_header']),
 }, {$id: "TipRequest"})
 export type TipRequest = Static<typeof TipRequest>
 
-export const TipResponse = Type.Object({})
+export const TipResponse = Type.Object({
+    banner: Type.Object({
+        image: Image,
+        description: Type.String(),
+        title: Type.String(),
+        href: Type.String({format: "uri"})
+    }),
+    review_link: Type.Optional(Type.Object({
+        type: Type.Union([Type.Literal("google_map"), Type.Literal("trip_advisor"), Type.Literal("link")]),
+        href: Type.String({format: "uri"})
+    })),
+    need_review: Type.Boolean(),
+    tx: Transaction
+})
+export type TipResponse = Static<typeof TipResponse>
 
 export const TipSettingsQuery = {
     org: Type.String(),

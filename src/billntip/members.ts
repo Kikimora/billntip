@@ -363,17 +363,16 @@ export class Organization {
         const {store, data} = this
         let memberItems: MemberItem[]
         let next: string | undefined
+        let memberIds: string[] | undefined
         if (location !== undefined) {
-            const memberIds = await store.locationMembers(data.id, location)
+            memberIds = await store.locationMembers(data.id, location)
             if (memberIds === undefined) {
                 throw notFoundError()
             }
-            memberItems = await store.queryOrgMembers(data.id, memberIds)
-        } else {
-            const orgMembers = await store.orgMembers(data.id, tokenToKey(from))
-            memberItems = orgMembers.members
-            next = keyToToken(orgMembers.lastKey)
         }
+        const orgMembers = await store.orgMembers(data.id, tokenToKey(from), memberIds)
+        memberItems = orgMembers.members
+        next = keyToToken(orgMembers.lastKey)
         const members = await this.membersWithRelatedUsers(data, memberItems);
         return {
             members,
@@ -419,6 +418,15 @@ export class Organization {
             lastKey: keyToToken(lastKey),
             data: data.map(toLocation)
         }
+    }
+
+    async fetchLocation(id: string) {
+        const {store, data: org} = this
+        const location = await store.location(org.id, id).catch(function (e) {
+            throw internalError().withContext("fetchLocation", {org: org.id, id, cause: e})
+        })
+        if (location === undefined) throw notFoundError().withContext("fetchLocation", {org: org.id, id})
+        return toLocation(location)
     }
 }
 

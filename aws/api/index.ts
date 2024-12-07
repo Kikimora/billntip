@@ -51,6 +51,13 @@ const stage = new aws.apigatewayv2.Stage("api-stage", {
     apiId: gateway.id,
     name: "$default",
     autoDeploy: true,
+    defaultRouteSettings: {
+        dataTraceEnabled: false,
+        detailedMetricsEnabled: false,
+        loggingLevel: "ERROR",
+        throttlingBurstLimit: 500,
+        throttlingRateLimit: 1000
+    }
 })
 new aws.apigatewayv2.ApiMapping("api-domain-mapping", {
     apiId: gateway.id,

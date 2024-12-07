@@ -450,16 +450,19 @@ export default class Store {
     /**
      * Fetch organisation members.
      */
-    async orgMembers(orgId: string, startKey?: MemberKey): Promise<{
+    async orgMembers(orgId: string, startKey?: MemberKey, ids?: string[]): Promise<{
         lastKey?: MemberKey,
         members: MemberItem[]
     }> {
         const orgPk = `O#${orgId}`;
-        const Org = this.inverse.narrow(MemberSchema)
-        const {Items: members, LastEvaluatedKey: lastKey} = await Org.query({
+        const Members = this.inverse.narrow(MemberSchema)
+        let {Items: members, LastEvaluatedKey: lastKey} = await Members.query({
             startKey,
             keyCondition: ({key, ref}) => `${key.sk} = ${ref('orgPk')} AND begins_with(${key.pk}, ${ref('prefix')})`
         }, {orgPk, prefix: 'U#'})
+        if (ids !== undefined) {
+            members = members.filter(x => _.includes(ids, x.pk.substring(2)))
+        }
         return {
             lastKey: lastKey,
             members: members.map(x => makeMembershipItem(x))
@@ -511,13 +514,13 @@ export default class Store {
 
     async queryOrgMembers(orgId: string, ids: string[]) {
         if (ids.length === 0) return []
-        const User = this.data.narrow(MemberSchema)
+        const User = this.inverse.narrow(MemberSchema)
         const {Items: members} = await User.query({
             keyCondition({key, ref}) {
-                return `${key.pk} = ${ref('orgId')} AND begins_with(${key.sk}, ${ref('prefix')})`
+                return `${key.sk} = ${ref('orgId')} AND begins_with(${key.pk}, ${ref('prefix')})`
             },
             filter({key, ref}) {
-                return `contains(${ref('ids')}, ${key.sk})`
+                return `contains(${ref('ids')}, ${key.pk})`
             }
         }, {orgId, prefix: 'U#', ids})
         return members.map(x => makeMembershipItem(x))
@@ -732,8 +735,6 @@ export default class Store {
             response
         })
         const [org, location, recipient] = response.Responses[this.data.name] as [DDB.ItemType<OrgTable>?, DDB.ItemType<LocationTable>?, DDB.ItemType<UsersTable>?]
-
-        console.log(batch.build(), org, location, recipient)
 
         return {
             org: org !== undefined ? {

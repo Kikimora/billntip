@@ -12,7 +12,8 @@ import * as util from "@app/util";
 export const MangopayOptions = Type.Object({
     clientId: Type.String(),
     clientApiKey: Type.String(),
-    baseUrl: Type.String()
+    baseUrl: Type.String(),
+    redirectUrls: Type.Array(Type.String(), {default: []})
 })
 
 export type MangopayOptions = Static<typeof MangopayOptions>
@@ -133,10 +134,18 @@ export class MangopayAPI {
         })
     }
 
-    async getTransactions(walletId: string, options: base.MethodOptionWithoutResponse) {
+    async walletTransactions(walletId: string, options: base.MethodOptionWithoutResponse) {
         const {api} = this
         const response = await api.Wallets.getTransactions(walletId, options).catch(function (e) {
-            throw mangopayError(e, "getTransactions", {walletId, options})
+            throw mangopayError(e, "walletTransactions", {walletId, options})
+        })
+        return response.map(fromTransaction)
+    }
+
+    async userTransactions(userId: string, options: base.MethodOptionWithoutResponse) {
+        const {api} = this
+        const response = await api.Users.getTransactions(userId, options).catch(function (e) {
+            throw mangopayError(e, "userTransactions", {walletId: userId, options})
         })
         return response.map(fromTransaction)
     }
@@ -160,15 +169,18 @@ export class MangopayAPI {
             throw mangopayError(e, "fetchTransaction", {id})
         })
 
-        if (response.AuthorId !== ownerId && response.CreditedUserId !== ownerId)
+        if (ownerId !== undefined && response.AuthorId !== ownerId && response.CreditedUserId !== ownerId)
             throw notFoundError()
 
         return fromTransaction(response)
     }
 
     async createTransaction(id: string, walletId: string, request: schemas.CreateTransactionRequest, tag?: string) {
-        const {api} = this
-        switch (request.details.type) {
+        const {api, options} = this
+        const commission = 0.064
+        const commissionFix = 25
+        const details = request.details;
+        switch (details.type) {
             case 'wire_payout': {
                 const mangoPayRequest = {
                     ...payoutMapper.mapInverse(request),
@@ -188,17 +200,38 @@ export class MangopayAPI {
                 return fromTransaction(response)
             }
             case 'cc_payin': {
+                if (options.redirectUrls.find(x => details.auth_return_url.startsWith(x)) === undefined) {
+                    throw badRequestError("Invalid redirect url.")
+                }
+                const createCardDirectPayIn = cardPayinMapper.mapInverse(request);
                 const mangoPayRequest = {
-                    ...cardPayinMapper.mapInverse(request),
+                    ...createCardDirectPayIn,
                     ExecutionType: "DIRECT",
                     PaymentType: "CARD",
                     AuthorId: id,
                     CreditedWalletId: walletId,
-                    DebitedFunds: {Amount: 10, Currency: "EUR"},
-                    Fees: {Amount: 10, Currency: "EUR"},
-                    SecureModeReturnURL: "",
+                    Fees: {Amount: request.amount * commission + commissionFix, Currency: request.currency as any},
                     Tag: tag
                 } as mangopay.payIn.CreateCardDirectPayIn
+                const response = await api.PayIns.create(mangoPayRequest).catch(function (e) {
+                    throw mangopayError(e, "createPayout", {mangoPayRequest}, cardPayinMapper.mapping)
+                })
+                return fromTransaction(response)
+            }
+            case 'google_payin': {
+                if (options.redirectUrls.find(x => details.auth_return_url.startsWith(x)) === undefined) {
+                    throw badRequestError("Invalid redirect url.")
+                }
+                const mangoPayRequest = {
+                    ...cardPayinMapper.mapInverse(request),
+                    ExecutionType: "DIRECT",
+                    PaymentType: "GOOGLE_PAY",
+                    AuthorId: id,
+                    CreditedWalletId: walletId,
+                    Fees: {Amount: request.amount * commission + commissionFix, Currency: request.currency as any},
+                    PaymentData: details.data,
+                    Tag: tag
+                } as  mangopay.payIn.CreateGooglePayDirectPayIn
                 const response = await api.PayIns.create(mangoPayRequest).catch(function (e) {
                     throw mangopayError(e, "createPayout", {mangoPayRequest}, cardPayinMapper.mapping)
                 })
@@ -476,7 +509,36 @@ const cardPayinMapping: Mapping<PayIn, schemas.CreateTransactionRequest> = [
     [['DebitedFunds', 'Amount'], ['amount']],
     [['DebitedFunds', 'Currency'], ['currency']],
     [['CardId'], ['details', 'card']],
+    [['BrowserInfo', 'Language'], ['details', 'browser_info', 'language']],
+    [['BrowserInfo', 'AcceptHeader'], ['details', 'browser_info', 'accept_header']],
+    [['BrowserInfo', 'ColorDepth'], ['details', 'browser_info', 'color_depth']],
+    [['BrowserInfo', 'JavaEnabled'], ['details', 'browser_info', 'java']],
+    [['BrowserInfo', 'JavascriptEnabled'], ['details', 'browser_info', 'js']],
+    [['BrowserInfo', 'ScreenHeight'], ['details', 'browser_info', 'screen_height']],
+    [['BrowserInfo', 'ScreenWidth'], ['details', 'browser_info', 'screen_width']],
+    [['BrowserInfo', 'TimeZoneOffset'], ['details', 'browser_info', 'tz'], map(x => Number.parseInt(x), y => y.toString())],
+    [['BrowserInfo', 'UserAgent'], ['details', 'browser_info', 'user_agent']],
+    [['IpAddress'], ['details', 'ip_address']],
+    [['SecureModeReturnURL'], ['details', 'auth_return_url']]
 ]
+//
+// const xx = map.mapping([
+//         [['DebitedFunds', 'Amount'], ['amount']],
+//         [['DebitedFunds', 'Currency'], ['currency']],
+//         [['CardId'], ['details', 'card']],
+//         [['BrowserInfo', 'Language'], ['browser_info', 'language']],
+//         [['BrowserInfo', 'AcceptHeader'], ['browser_info', 'accept_header']],
+//         [['BrowserInfo', 'ColorDepth'], ['browser_info', 'color_depth']],
+//         [['BrowserInfo', 'JavaEnabled'], ['browser_info', 'java']],
+//         [['BrowserInfo', 'JavascriptEnabled'], ['browser_info', 'js']],
+//         [['BrowserInfo', 'ScreenHeight'], ['browser_info', 'screen_height']],
+//         [['BrowserInfo', 'ScreenWidth'], ['browser_info', 'screen_width']],
+//         [['BrowserInfo', 'TimeZoneOffset'], ['browser_info', 'tz'], map(x => Number.parseInt(x), y => y.toString())],
+//         [['BrowserInfo', 'UserAgent'], ['browser_info', 'user_agent']],
+//         [['IpAddress'], ['ip_address']],
+//         [['SecureModeReturnURL'], ['auth_return_url']]
+//     ])
+
 const cardPayinMapper = map.object(cardPayinMapping)
 
 function toKycProcess(doc: kycDocument.KycDocumentData): schemas.KYCProcess {
@@ -509,20 +571,24 @@ function fromDocumentType(docType: kycDocument.KycDocumentType): schemas.KYCDocu
     }
 }
 
-function fromTransaction(tx: mangopay.transaction.TransactionData) {
+function fromTransaction(tx: mangopay.transaction.TransactionData | payIn.CardDirectPayInData) {
     const info = parseTag(tx.Tag)
     return {
         id: tx.Id,
         credit: {amount: tx.CreditedFunds.Amount, currency: tx.CreditedFunds.Currency},
         debit: {amount: tx.DebitedFunds.Amount, currency: tx.DebitedFunds.Currency},
-        ...info,
         type: tx.Type,
         execution_date: tx.ExecutionDate,
         created_at: tx.CreationDate,
         fee: {amount: tx.Fees.Amount, currency: tx.Fees.Currency},
         result_code: tx.ResultCode,
         result_message: tx.ResultMessage,
-        status: tx.Status
+        status: tx.Status,
+        details: info,
+        auth: 'SecureModeNeeded' in tx && tx.SecureModeNeeded ? {
+            redirect_url: tx.SecureModeRedirectURL,
+            return_url: tx.SecureModeReturnURL
+        } : undefined
     }
 }
 

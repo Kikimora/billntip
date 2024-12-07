@@ -1,10 +1,25 @@
 import {CognitoIdentityProvider} from "@aws-sdk/client-cognito-identity-provider";
 import {makeTestHandler, cognito, mangopay, prepare, merge, makeFixture} from "@app/test";
 import {__init, handler} from "./tip"
+import ProfileRepo, {UserStore as ProfileStore} from "../users/user"
+import {bootstrap} from "@app/lambda";
+import {Type} from "@sinclair/typebox";
+
+const config = bootstrap()
+    .parameters({
+        dynamodb: Type.Object({
+            users: Type.String(),
+            data: Type.String(),
+            locks: Type.String(),
+        })
+    })
+    .buildModule((parameters) => {
+        return parameters
+    })
 
 const init = prepare('Once', async function () {
-    const [module, group] = await Promise.all([__init(), cognito.TestGroup.fetch()])
-    return {tipUsers: module.tipUsers, users: module.users, group}
+    const [module, group, parameters] = await Promise.all([__init(), cognito.TestGroup.fetch(), config.exports])
+    return {tipUsers: module.tipUsers, users: module.users, group, parameters}
 })
 
 const logins = prepare('Once', {
@@ -28,14 +43,18 @@ const data = prepare('Once', {
     async before() {
         const adminAddUserToGroup = jest.spyOn(CognitoIdentityProvider.prototype, 'adminAddUserToGroup')
         const {businessLogin, waiterLogin} = logins()
-        const {users, tipUsers} = init()
+        const {tipUsers, parameters} = init()
+        const profiles = new ProfileRepo({
+            table: parameters.dynamodb.users,
+            locks: parameters.dynamodb.locks
+        })
         const [org, admin, waiter] = await Promise.all([
             tipUsers.createOrg({title: "Test"}),
-            users.create(businessLogin.username, "trusted", [
+            profiles.create(businessLogin.username, "trusted", [
                 {name: "first_name", value: "Business"},
                 {name: "last_name", value: "User"}
             ]),
-            users.create(waiterLogin.username, "trusted", [
+            profiles.create(waiterLogin.username, "trusted", [
                 {name: "first_name", value: "Waiter"},
                 {name: "last_name", value: "User"},
                 {name: "phone", value: "+351111222333"},
